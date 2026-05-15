@@ -1,0 +1,53 @@
+.timeline {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.timeline__item {
+  display: grid;
+  grid-template-columns: 20px 1fr auto;
+  gap: var(--s-3);
+  align-items: center;
+  font-size: var(--fs-sm);
+  padding: var(--s-1) 0;
+}
+
+.timeline__glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  color: var(--c-fg-subtle);
+  font-size: var(--fs-md);
+}
+
+.timeline__item.is-running .timeline__glyph { color: var(--c-info); }
+.timeline__item.is-succeeded .timeline__glyph { color: var(--c-success); }
+.timeline__item.is-failed .timeline__glyph { color: var(--c-danger); }
+.timeline__item.is-canceled .timeline__glyph { color: var(--c-fg-subtle); }
+
+.timeline__name {
+  font-weight: var(--fw-medium);
+}
+
+.timeline__item.is-pending .timeline__name {
+  color: var(--c-fg-subtle);
+}
+
+.timeline__dur {
+  font-size: var(--fs-xs);
+}
+
+.timeline__children {
+  grid-column: 1 / -1;
+  list-style: none;
+  margin: 0;
+  padding-left: var(--s-3);
+  border-left: 1px dashed var(--c-border);
+  margin-left: 10px;
+  margin-top: var(--s-1);
+}

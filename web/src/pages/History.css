@@ -1,0 +1,71 @@
+.history {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  max-width: var(--layout-content-max);
+}
+
+.history__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.history__header h1 {
+  font-size: var(--fs-2xl);
+  font-weight: var(--fw-semibold);
+}
+
+.history__intro {
+  font-size: var(--fs-sm);
+  margin-top: -8px;
+}
+
+.history__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  align-items: center;
+}
+
+.history__select {
+  width: auto;
+  max-width: 200px;
+}
+
+.history__search {
+  width: auto;
+  max-width: 240px;
+  flex: 1;
+}
+
+.history__source {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-sm);
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+  font-weight: var(--fw-bold);
+}
+
+.history__source--cli {
+  background: var(--c-surface-3);
+  color: var(--c-fg);
+}
+.history__source--ui_action {
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+}
+
+.history__cmd {
+  font-size: var(--fs-sm);
+}
+
+.history__actions {
+  display: flex;
+  gap: var(--s-1);
+  justify-content: flex-end;
+}

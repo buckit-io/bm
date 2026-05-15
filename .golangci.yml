@@ -1,0 +1,30 @@
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - misspell
+    - revive
+    - staticcheck
+    - unconvert
+    - unused
+
+linters-settings:
+  revive:
+    rules:
+      - name: exported
+      - name: var-naming
+      - name: indent-error-flow
+      - name: error-return
+      - name: error-naming
+      - name: if-return
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports

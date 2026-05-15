@@ -1,0 +1,69 @@
+.welcome {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: var(--s-12) 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-8);
+}
+
+.welcome__header h1 {
+  font-size: var(--fs-3xl);
+  font-weight: var(--fw-semibold);
+  margin-bottom: var(--s-2);
+}
+
+.welcome__choices {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s-4);
+}
+
+.welcome__card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  color: var(--c-fg);
+  transition: border-color 120ms ease, transform 120ms ease;
+}
+.welcome__card:hover {
+  border-color: var(--c-accent);
+  text-decoration: none;
+  transform: translateY(-1px);
+}
+
+.welcome__icon {
+  font-size: 1.5rem;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.welcome__icon--blue { background: var(--c-accent-soft); }
+.welcome__icon--orange { background: var(--c-warning-soft); }
+
+.welcome__card h2 {
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-semibold);
+}
+
+.welcome__cta {
+  margin-top: var(--s-3);
+  color: var(--c-accent);
+  font-weight: var(--fw-medium);
+  font-size: var(--fs-sm);
+}
+
+.welcome__hint {
+  font-size: var(--fs-sm);
+  color: var(--c-fg-subtle);
+  text-align: center;
+}
+
+@media (max-width: 720px) {
+  .welcome__choices {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,0 +1,9 @@
+/bm
+/dist/
+/web/dist/
+/web/node_modules/
+/web/tsconfig.tsbuildinfo
+/.bin/
+*.test
+*.out
+.DS_Store

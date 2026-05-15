@@ -1,0 +1,36 @@
+.taskdetail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  max-width: var(--layout-content-max);
+}
+
+.taskdetail__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s-4);
+}
+
+.taskdetail__header h1 {
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-semibold);
+  margin-bottom: var(--s-1);
+}
+
+.taskdetail__steps {
+  padding: var(--s-4);
+}
+
+.taskdetail__sectionTitle {
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+  color: var(--c-fg-muted);
+  margin-bottom: var(--s-3);
+}
+
+.taskdetail__log {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}

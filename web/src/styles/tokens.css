@@ -1,0 +1,121 @@
+/*
+ * Design tokens. CSS custom properties consumed everywhere.
+ * Light theme is the default; dark theme overrides at the bottom.
+ */
+
+:root {
+  /* color — neutral scale */
+  --c-bg: #fafafa;
+  --c-surface: #ffffff;
+  --c-surface-2: #f4f4f5;
+  --c-surface-3: #e4e4e7;
+  --c-border: #e4e4e7;
+  --c-border-strong: #d4d4d8;
+
+  --c-fg: #18181b;
+  --c-fg-muted: #52525b;
+  --c-fg-subtle: #71717a;
+  --c-fg-inverted: #fafafa;
+
+  /* color — accents */
+  --c-accent: #2563eb;
+  --c-accent-fg: #ffffff;
+  --c-accent-soft: #dbeafe;
+
+  --c-success: #16a34a;
+  --c-success-soft: #dcfce7;
+  --c-warning: #d97706;
+  --c-warning-soft: #fef3c7;
+  --c-danger: #dc2626;
+  --c-danger-soft: #fee2e2;
+  --c-info: #0891b2;
+  --c-info-soft: #cffafe;
+
+  /* type */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  --fs-xs: 0.75rem;
+  --fs-sm: 0.8125rem;
+  --fs-md: 0.875rem;
+  --fs-base: 0.9375rem;
+  --fs-lg: 1.0625rem;
+  --fs-xl: 1.25rem;
+  --fs-2xl: 1.5rem;
+  --fs-3xl: 1.875rem;
+
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+
+  --lh-tight: 1.25;
+  --lh-normal: 1.5;
+
+  /* spacing scale (4px base) */
+  --s-1: 0.25rem;
+  --s-2: 0.5rem;
+  --s-3: 0.75rem;
+  --s-4: 1rem;
+  --s-5: 1.25rem;
+  --s-6: 1.5rem;
+  --s-8: 2rem;
+  --s-10: 2.5rem;
+  --s-12: 3rem;
+  --s-16: 4rem;
+
+  /* radius */
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 10px;
+  --r-pill: 9999px;
+
+  /* shadow */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.03);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.04);
+
+  /* z-index */
+  --z-modal: 1000;
+  --z-toast: 1100;
+
+  /* layout */
+  --layout-sidebar: 220px;
+  --layout-topbar: 56px;
+  --layout-content-max: 1280px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --c-bg: #0a0a0b;
+    --c-surface: #131316;
+    --c-surface-2: #1c1c20;
+    --c-surface-3: #27272a;
+    --c-border: #27272a;
+    --c-border-strong: #3f3f46;
+
+    --c-fg: #fafafa;
+    --c-fg-muted: #a1a1aa;
+    --c-fg-subtle: #71717a;
+    --c-fg-inverted: #18181b;
+
+    --c-accent: #3b82f6;
+    --c-accent-fg: #ffffff;
+    --c-accent-soft: #1e3a8a55;
+
+    --c-success: #22c55e;
+    --c-success-soft: #14532d55;
+    --c-warning: #f59e0b;
+    --c-warning-soft: #78350f55;
+    --c-danger: #ef4444;
+    --c-danger-soft: #7f1d1d55;
+    --c-info: #06b6d4;
+    --c-info-soft: #164e6355;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.3);
+  }
+}
