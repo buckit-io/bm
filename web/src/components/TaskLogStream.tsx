@@ -6,12 +6,16 @@ interface TaskLogStreamProps {
   taskId: string;
   maxLines?: number;
   filter?: string | null;
+  // Hide the pause/resume control. Used on wizard Deploy step where
+  // there's no value in pausing a live deploy log.
+  showPause?: boolean;
 }
 
 export function TaskLogStream({
   taskId,
   maxLines = 200,
   filter,
+  showPause = true,
 }: TaskLogStreamProps) {
   const [lines, setLines] = useState<LogLine[]>([]);
   const [paused, setPaused] = useState(false);
@@ -46,9 +50,11 @@ export function TaskLogStream({
         <span className="muted" style={{ fontSize: "var(--fs-sm)" }}>
           Live log {filter ? `· filtered to ${filter}` : ""}
         </span>
-        <button className="btn btn--sm btn--ghost" onClick={() => setPaused((v) => !v)}>
-          {paused ? "▶ Resume" : "⏸ Pause"}
-        </button>
+        {showPause && (
+          <button className="btn btn--sm btn--ghost" onClick={() => setPaused((v) => !v)}>
+            {paused ? "▶ Resume" : "⏸ Pause"}
+          </button>
+        )}
       </header>
       <div className="logstream__body" ref={scrollRef}>
         {visible.length === 0 ? (

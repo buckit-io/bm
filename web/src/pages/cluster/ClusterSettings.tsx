@@ -41,12 +41,12 @@ export function ClusterSettings() {
           Danger zone
         </h2>
         <p className="subtle" style={{ fontSize: "var(--fs-sm)" }}>
-          Tearing down a cluster stops every node, removes the buckit package,
+          Removing a cluster stops every node, removes the buckit package,
           and detaches the cluster from this manager. Data drives are not
           erased.
         </p>
         <div>
-          <button className="btn btn--danger">Tear down cluster…</button>
+          <button className="btn btn--danger">Remove cluster definition</button>
         </div>
       </div>
     </div>

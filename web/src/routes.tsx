@@ -4,6 +4,7 @@ import { Placeholder } from "./pages/Placeholder";
 import { Login } from "./pages/Login";
 import { Welcome } from "./pages/Welcome";
 import { Clusters } from "./pages/Clusters";
+import { Import } from "./pages/Import";
 import { Settings } from "./pages/Settings";
 import { History } from "./pages/History";
 import { Tasks } from "./pages/Tasks";
@@ -28,6 +29,7 @@ export function AppRoutes() {
       <Route element={<AppShell />}>
         <Route index element={<Navigate to="/clusters" replace />} />
         <Route path="/clusters" element={<Clusters />} />
+        <Route path="/clusters/import" element={<Import />} />
 
         <Route path="/clusters/:clusterId" element={<ClusterDetailLayout />} />
         <Route path="/clusters/:clusterId/nodes/:nodeId" element={<NodeDetail />} />

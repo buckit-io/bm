@@ -2,18 +2,26 @@
 // MinIO-specific snapshot, plan, cutover, verify and finalize substates.
 
 import {
+  DiscoveredDrive,
   DiscoveryResult,
   HostRow,
   PreflightResult,
   SshCreds,
+  SshOverrides,
 } from "../new/state";
 
-export type { DiscoveryResult, HostRow, PreflightResult, SshCreds };
+export type {
+  DiscoveredDrive,
+  DiscoveryResult,
+  HostRow,
+  PreflightResult,
+  SshCreds,
+  SshOverrides,
+};
 
 export interface MigrationDraft {
   name: string;
   description: string;
-  intendedUse: "production" | "staging" | "dev";
   version: string;
 
   importAlias?: string;
@@ -107,11 +115,10 @@ export function emptyMigration(): MigrationDraft {
   return {
     name: "legacy-east",
     description: "",
-    intendedUse: "production",
     version: "v1.0.0",
     hosts: [
-      { id: "m1", hostname: "", port: 22, label: "", probe: "idle" },
-      { id: "m2", hostname: "", port: 22, label: "", probe: "idle" },
+      { id: "m1", hostname: "", port: 22, probe: "idle" },
+      { id: "m2", hostname: "", port: 22, probe: "idle" },
     ],
     ssh: { authMethod: "agent", user: "buckit", sudo: true },
     discovery: {},

@@ -1,10 +1,51 @@
 import { useEffect, useRef, useState } from "react";
-import { NewClusterDraft, DiscoveryResult } from "../state";
+import { DiscoveredDrive, DiscoveryResult, NewClusterDraft } from "../state";
 import { Pill } from "../../../../components/Pill";
+
+const TiB = 1024 ** 4;
+
+// Build a plausible per-host drive list. Default: 1 boot + 12 data
+// drives mounted at /data/disk{1..12}, all 16 TiB XFS. For demo, one
+// data drive on the third host comes up as ext4 so the XFS advisory
+// preflight check has something to flag.
+function mockDrives(hostIndex: number): DiscoveredDrive[] {
+  const drives: DiscoveredDrive[] = [
+    {
+      device: "/dev/nvme0n1",
+      mount: "/",
+      sizeBytes: 256 * 1024 ** 3,
+      fsType: "ext4",
+      isBoot: true,
+    },
+  ];
+  for (let i = 1; i <= 12; i++) {
+    const isExt4 = hostIndex === 2 && i === 5; // mixed-fs demo
+    drives.push({
+      device: `/dev/sd${String.fromCharCode(96 + i)}`,
+      mount: `/data/disk${i}`,
+      sizeBytes: 16 * TiB,
+      fsType: isExt4 ? "ext4" : "xfs",
+    });
+  }
+  return drives;
+}
 
 interface Props {
   draft: NewClusterDraft;
   update: (patch: Partial<NewClusterDraft>) => void;
+}
+
+function disksSummary(r: DiscoveryResult): string {
+  if (!r.drives) return "—";
+  const data = r.drives.filter((d) => !d.isBoot);
+  if (data.length === 0) return "no data drives";
+  const mounted = data.filter((d) => d.mount).length;
+  const unformatted = data.filter((d) => !d.fsType).length;
+  const sample = data[0];
+  const sizeTiB = Math.round(sample.sizeBytes / (1024 ** 4));
+  const parts = [`${mounted} mounted`];
+  if (unformatted > 0) parts.push(`${unformatted} unformatted`);
+  return `${parts.join(", ")} · ${sizeTiB} TiB each`;
 }
 
 function statusPill(s: DiscoveryResult["state"]) {
@@ -41,18 +82,23 @@ export function Discover({ draft, update }: Props) {
       });
       setTimeout(() => {
         // mutate the result inline; React state must be set from latest
+        const idx = i - 1; // i is already advanced
         initial[h.id] =
           i === validHosts.length && validHosts.length >= 8
             ? { state: "failed" }
             : {
                 state: "done",
-                os: "Ubuntu 24.04",
-                kernel: "6.8.0-31-generic",
+                // Mostly Ubuntu, one Rocky 9 to demo the OS-uniformity
+                // advisory.
+                os: idx === 1 ? "Rocky Linux 9.4" : "Ubuntu 24.04",
+                arch: "amd64",
+                kernel:
+                  idx === 1 ? "5.14.0-427.el9.x86_64" : "6.8.0-31-generic",
                 cores: 16,
                 ramGiB: 64,
-                drives: 12,
-                driveSizeTiB: 16,
+                drives: mockDrives(idx),
                 nic: "eno1 / 10 GbE",
+                sudoOk: true,
               };
         update({ discovery: { ...initial } });
         tick();
@@ -117,9 +163,7 @@ export function Discover({ draft, update }: Props) {
                     <td>{r.os ?? "—"}</td>
                     <td>{r.cores ?? "—"}</td>
                     <td>{r.ramGiB ? `${r.ramGiB} GiB` : "—"}</td>
-                    <td>
-                      {r.drives ? `${r.drives} × ${r.driveSizeTiB} TiB` : "—"}
-                    </td>
+                    <td>{disksSummary(r)}</td>
                     <td>{statusPill(r.state)}</td>
                   </tr>
                   {expanded === h.id && r.state === "done" && (

@@ -19,17 +19,13 @@ export function Welcome() {
           <span className="welcome__cta">Get started →</span>
         </Link>
 
-        <Link to="/clusters/migrate" className="card welcome__card">
+        <Link to="/clusters/import" className="card welcome__card">
           <div className="welcome__icon welcome__icon--orange">🟧</div>
-          <h2>
-            Migrate from MinIO{" "}
-            <span className="pill pill--info" style={{ marginLeft: 6 }}>
-              In-place
-            </span>
-          </h2>
+          <h2>Import existing Buckit or MinIO cluster</h2>
           <p className="muted">
-            Replace an existing MinIO deployment with Buckit on the same
-            disks (in-place swap).
+            Register a running deployment to monitor and operate it from
+            here. MinIO Community Edition clusters can be upgraded to the
+            latest Buckit in place — same disks, same data.
           </p>
           <span className="welcome__cta">Get started →</span>
         </Link>

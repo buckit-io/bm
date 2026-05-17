@@ -1,0 +1,97 @@
+.import {
+  max-width: 640px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+}
+
+.import__header h1 {
+  font-size: var(--fs-2xl);
+  font-weight: 600;
+  margin: 0 0 var(--s-2);
+}
+
+.import__card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+.import__hint {
+  font-size: var(--fs-xs);
+  margin-top: var(--s-1);
+}
+
+.import__error {
+  background: var(--c-danger-soft);
+  color: var(--c-danger);
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+}
+
+/* ── modal ─────────────────────────────────────────────────────── */
+
+.import__modal {
+  gap: var(--s-4);
+}
+
+.import__modal-header h2 {
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  margin: 0 0 var(--s-1);
+}
+
+.import__modal-sub {
+  font-size: var(--fs-sm);
+}
+
+.import__log {
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  padding: var(--s-2) var(--s-3);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.import__log-line {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  gap: var(--s-2);
+  color: var(--c-fg-muted);
+}
+.import__log-line--ok {
+  color: var(--c-success);
+}
+.import__log-line--error {
+  color: var(--c-danger);
+}
+.import__log-icon {
+  text-align: center;
+}
+
+/* ── discovery summary grid ────────────────────────────────────── */
+
+.import__summary {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: var(--s-2) var(--s-3);
+  padding: var(--s-3);
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+}
+
+.import__summary-label {
+  color: var(--c-fg-muted);
+}
+
+.import__summary-value {
+  font-weight: var(--fw-medium);
+}

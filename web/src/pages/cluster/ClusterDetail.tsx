@@ -214,17 +214,25 @@ function SortHeader({ active, dir, label, align = "left", onClick, title }: Sort
 
 // ---- the page ----
 
-const CLUSTER_ACTIONS: { label: string; danger?: boolean }[] = [
+type ClusterAction = {
+  label: string;
+  danger?: boolean;
+  kind?: "navigate";
+};
+
+const CLUSTER_ACTIONS: ClusterAction[] = [
   { label: "Rolling restart" },
   { label: "Rolling upgrade…" },
   { label: "Stop all" },
   { label: "Start all" },
   { label: "Rotate root credentials" },
-  { label: "Tear down cluster…", danger: true },
+  { label: "Add new pool…" },
+  { label: "Configure SSH credentials", kind: "navigate" },
+  { label: "Remove cluster definition", danger: true },
 ];
 
 const HOST_ACTIONS = [
-  "Restart buckit.service",
+  "Systemctl restart service",
   "Redeploy software",
   "Reboot host",
   "Shut down host",
@@ -324,6 +332,22 @@ export function ClusterDetailLayout() {
 
   // ---- cluster + host actions ----
   const [actionsOpen, setActionsOpen] = useState(false);
+  const actionsMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!actionsOpen) return;
+    const onMouseDown = (e: MouseEvent) => {
+      const target = e.target as globalThis.Node | null;
+      if (
+        actionsMenuRef.current &&
+        target &&
+        !actionsMenuRef.current.contains(target)
+      ) {
+        setActionsOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", onMouseDown);
+    return () => window.removeEventListener("mousedown", onMouseDown);
+  }, [actionsOpen]);
   const recordAction = (display: string, target: string) => {
     recordHistory({
       kind: "ui_action",
@@ -376,7 +400,7 @@ export function ClusterDetailLayout() {
     !cluster.sshConfigured
       ? "SSH is not configured for this cluster. Set it up in Settings to enable host actions."
       : selected.size === 0
-        ? "Select one or more hosts above to enable actions."
+        ? "Select one or more hosts below to enable actions."
         : null;
 
   return (
@@ -406,18 +430,24 @@ export function ClusterDetailLayout() {
             target="_blank"
             rel="noreferrer"
           >
-            ↗ Open Buckit console
+            ↗ Open {cluster.engine === "minio" ? "MinIO" : "Buckit"} console
           </a>
-          <button
-            className="btn"
-            onClick={() => navigate(`/clusters/${cluster.id}/settings`)}
-          >
-            Settings
-          </button>
-          <div className="cdetail__menu-wrap">
+          {cluster.engine === "minio" && (
             <button
               className="btn btn--primary"
+              onClick={() => navigate(`/clusters/migrate?from=${cluster.id}`)}
+            >
+              Migrate to Buckit
+            </button>
+          )}
+          <div className="cdetail__menu-wrap" ref={actionsMenuRef}>
+            <button
+              className={
+                cluster.engine === "minio" ? "btn" : "btn btn--primary"
+              }
               onClick={() => setActionsOpen((v) => !v)}
+              aria-haspopup="menu"
+              aria-expanded={actionsOpen}
             >
               Actions ▾
             </button>
@@ -429,7 +459,14 @@ export function ClusterDetailLayout() {
                     className={
                       "cdetail__menu-item" + (a.danger ? " is-danger" : "")
                     }
-                    onClick={() => runClusterAction(a.label)}
+                    onClick={() => {
+                      if (a.kind === "navigate") {
+                        setActionsOpen(false);
+                        navigate(`/clusters/${cluster.id}/settings`);
+                      } else {
+                        runClusterAction(a.label);
+                      }
+                    }}
                     role="menuitem"
                   >
                     {a.label}
@@ -548,6 +585,21 @@ export function ClusterDetailLayout() {
               ? `${selected.size} ${selected.size === 1 ? "host" : "hosts"} selected`
               : "Host actions"}
           </span>
+          {selected.size > 0 && (
+            <button
+              className="btn btn--ghost btn--sm"
+              onClick={() => setSelected(new Set())}
+              aria-label="Clear selection"
+            >
+              ✕ Clear
+            </button>
+          )}
+          {selected.size === 0 && hostActionsHint && (
+            <span className="cdetail__bulkbar-hint subtle">
+              {hostActionsHint}
+            </span>
+          )}
+          <div className="grow" />
           <div className="hstack" style={{ flexWrap: "wrap" }}>
             {HOST_ACTIONS.map((a) => (
               <button
@@ -561,22 +613,6 @@ export function ClusterDetailLayout() {
               </button>
             ))}
           </div>
-          <div className="grow" />
-          {selected.size > 0 ? (
-            <button
-              className="btn btn--ghost btn--sm"
-              onClick={() => setSelected(new Set())}
-              aria-label="Clear selection"
-            >
-              ✕ Clear
-            </button>
-          ) : (
-            hostActionsHint && (
-              <span className="cdetail__bulkbar-hint subtle">
-                {hostActionsHint}
-              </span>
-            )
-          )}
         </div>
 
         <div className="card card--table">

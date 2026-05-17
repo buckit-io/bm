@@ -137,10 +137,10 @@ export function Clusters() {
             {menuOpen && (
               <div className="clusters__menu" role="menu">
                 <Link to="/clusters/new" className="clusters__menu-item">
-                  New cluster
+                  Deploy new cluster
                 </Link>
-                <Link to="/clusters/migrate" className="clusters__menu-item">
-                  Migrate from MinIO
+                <Link to="/clusters/import" className="clusters__menu-item">
+                  Import existing cluster
                 </Link>
               </div>
             )}
@@ -188,9 +188,14 @@ export function Clusters() {
                 return (
                   <tr key={c.id}>
                     <td>
-                      <Link to={`/clusters/${c.id}`} className="clusters__name">
-                        {c.name}
-                      </Link>
+                      <div className="hstack" style={{ gap: "var(--s-2)", alignItems: "center" }}>
+                        <Link to={`/clusters/${c.id}`} className="clusters__name">
+                          {c.name}
+                        </Link>
+                        {c.engine === "minio" && (
+                          <Pill tone="warning">MinIO</Pill>
+                        )}
+                      </div>
                       {c.description && (
                         <div className="subtle clusters__desc">{c.description}</div>
                       )}

@@ -64,6 +64,28 @@
   background: var(--c-danger-soft);
 }
 
+.cdetail__menu-group {
+  padding: var(--s-2) var(--s-3) var(--s-1);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--c-fg-muted);
+}
+.cdetail__menu-group:not(:first-child) {
+  border-top: 1px solid var(--c-border);
+  margin-top: var(--s-1);
+}
+
+.cdetail__menu-item[disabled] {
+  color: var(--c-fg-muted);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+.cdetail__menu-item[disabled]:hover {
+  background: transparent;
+}
+
 /* ── summary cards ─────────────────────────────────────────────── */
 
 .cdetail__cards {
@@ -182,7 +204,7 @@
 .cdetail__bulkbar-count {
   font-weight: var(--fw-medium);
   color: var(--c-fg-muted);
-  min-width: 130px;
+  white-space: nowrap;
 }
 
 .cdetail__bulkbar.is-enabled .cdetail__bulkbar-count {

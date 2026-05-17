@@ -12,8 +12,6 @@ interface WizardShellProps {
   onNext?: () => void;
   nextLabel?: string;
   nextDisabled?: boolean;
-  saveDraftLabel?: string;
-  onSaveDraft?: () => void;
   children: ReactNode;
 }
 
@@ -26,8 +24,6 @@ export function WizardShell({
   onNext,
   nextLabel = "Next →",
   nextDisabled,
-  saveDraftLabel = "Save draft",
-  onSaveDraft,
   children,
 }: WizardShellProps) {
   const navigate = useNavigate();
@@ -39,7 +35,7 @@ export function WizardShell({
           className="btn btn--ghost btn--sm"
           onClick={() => navigate("/clusters")}
         >
-          ✕ Save & exit
+          ✕ Exit
         </button>
       </header>
 
@@ -50,19 +46,16 @@ export function WizardShell({
       <main className="wizard__content">{children}</main>
 
       <footer className="wizard__footer">
-        <button
-          className="btn"
-          onClick={onBack}
-          disabled={currentIndex === 0 || !onBack}
-        >
-          ← Back
-        </button>
-        <div className="grow" />
-        {onSaveDraft && (
-          <button className="btn" onClick={onSaveDraft}>
-            {saveDraftLabel}
+        {onBack && (
+          <button
+            className="btn"
+            onClick={onBack}
+            disabled={currentIndex === 0}
+          >
+            ← Back
           </button>
         )}
+        <div className="grow" />
         <button
           className="btn btn--primary"
           onClick={onNext}

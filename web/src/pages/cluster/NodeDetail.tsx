@@ -1,15 +1,84 @@
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
-import { useNode } from "../../api/hooks";
+import { useQueryClient } from "@tanstack/react-query";
+import { useCluster, useNode } from "../../api/hooks";
 import { Pill } from "../../components/Pill";
 import { formatBytes, formatDuration } from "../../mock/data";
+import { recordHistory } from "../../mock/api";
+
+type NodeAction =
+  | { kind: "group"; label: string }
+  | {
+      kind: "item";
+      label: string;
+      requires?: "ssh" | "api";
+    };
+
+const NODE_ACTIONS: NodeAction[] = [
+  { kind: "group", label: "Service" },
+  { kind: "item", label: "Systemctl restart service", requires: "ssh" },
+  { kind: "item", label: "Systemctl stop service", requires: "ssh" },
+  { kind: "item", label: "Systemctl start service", requires: "ssh" },
+  { kind: "group", label: "Software" },
+  { kind: "item", label: "Redeploy software…", requires: "ssh" },
+  { kind: "group", label: "Diagnostics" },
+  { kind: "item", label: "View live logs", requires: "api" },
+  { kind: "item", label: "Run trace", requires: "api" },
+  { kind: "group", label: "Host" },
+  { kind: "item", label: "Reboot host…", requires: "ssh" },
+  { kind: "item", label: "Shut down host…", requires: "ssh" },
+];
 
 export function NodeDetail() {
   const { clusterId, nodeId } = useParams();
+  const qc = useQueryClient();
+  const { data: cluster } = useCluster(clusterId);
   const { data: node, isLoading } = useNode(clusterId, nodeId);
+
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!actionsOpen) return;
+    const onClick = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setActionsOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", onClick);
+    return () => window.removeEventListener("mousedown", onClick);
+  }, [actionsOpen]);
+
   if (isLoading) return <p className="muted">Loading…</p>;
   if (!node) return <p className="muted">Node not found.</p>;
 
   const dataDrives = node.drives.filter((d) => !d.isBoot);
+
+  const sshOk = cluster?.sshConfigured ?? false;
+  const apiOk = node.apiAccessible;
+
+  const isDisabled = (a: Extract<NodeAction, { kind: "item" }>) =>
+    (a.requires === "ssh" && !sshOk) || (a.requires === "api" && !apiOk);
+
+  const disabledHint = (a: Extract<NodeAction, { kind: "item" }>) =>
+    a.requires === "ssh" && !sshOk
+      ? "SSH is not configured for this cluster."
+      : a.requires === "api" && !apiOk
+        ? "S3 API is not reachable on this node."
+        : undefined;
+
+  const runAction = (label: string) => {
+    if (!cluster) return;
+    setActionsOpen(false);
+    recordHistory({
+      kind: "ui_action",
+      display: `${label} on ${node.hostname} (${cluster.name})`,
+      target: cluster.id,
+      status: "succeeded",
+      durationSec: 1,
+    });
+    qc.invalidateQueries({ queryKey: ["history"] });
+  };
 
   return (
     <section className="vstack" style={{ gap: "var(--s-5)" }}>
@@ -28,9 +97,37 @@ export function NodeDetail() {
             · Buckit {node.version} · uptime {formatDuration(node.uptimeSec)}
           </p>
         </div>
-        <div className="hstack">
-          <button className="btn btn--sm">Restart</button>
-          <button className="btn btn--sm">Actions ▾</button>
+        <div className="cdetail__menu-wrap" ref={menuRef}>
+          <button
+            className="btn btn--primary"
+            onClick={() => setActionsOpen((v) => !v)}
+            aria-haspopup="menu"
+            aria-expanded={actionsOpen}
+          >
+            Actions ▾
+          </button>
+          {actionsOpen && (
+            <div className="cdetail__menu" role="menu">
+              {NODE_ACTIONS.map((a, i) =>
+                a.kind === "group" ? (
+                  <div key={`g-${i}`} className="cdetail__menu-group">
+                    {a.label}
+                  </div>
+                ) : (
+                  <button
+                    key={a.label}
+                    className="cdetail__menu-item"
+                    onClick={() => runAction(a.label)}
+                    disabled={isDisabled(a)}
+                    title={disabledHint(a)}
+                    role="menuitem"
+                  >
+                    {a.label}
+                  </button>
+                ),
+              )}
+            </div>
+          )}
         </div>
       </header>
 

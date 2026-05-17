@@ -119,6 +119,12 @@
   vertical-align: top;
 }
 
+/* Opt-in modifier for tables whose cells are single-line controls
+   (toggles, pills, action buttons) rather than stacked content. */
+.table--center tbody td {
+  vertical-align: middle;
+}
+
 .table tbody tr:last-child td {
   border-bottom: 0;
 }

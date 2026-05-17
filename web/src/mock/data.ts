@@ -24,11 +24,19 @@ export interface HealthSummary {
   activeOps: string[];
 }
 
+// Which server software is running on the cluster's nodes.
+//   "buckit" — Buckit (active or draft); the default for clusters bm
+//              deploys or imports from a healthy Buckit endpoint.
+//   "minio"  — MinIO Community Edition; imported clusters that haven't
+//              been migrated yet. Surfaces the "Migrate to Buckit"
+//              button on the cluster detail page.
+export type ClusterEngine = "buckit" | "minio";
+
 export interface Cluster {
   id: string;
   name: string;
   description?: string;
-  intendedUse: "production" | "staging" | "dev";
+  engine: ClusterEngine;
   version: string;
   status: ClusterStatus;
   health: Health;
@@ -195,7 +203,7 @@ function makeDrives(count: number, sizeTiB: number, usedPct = 0.5): Drive[] {
 // per-pool node count; pass `[6, 4]` for 10 nodes across two pools, or
 // `[8]` for a single 8-node pool. A global node index is used for
 // hostnames so node1..nodeN are unique across pools.
-function makeNodes(
+export function makeNodes(
   clusterId: string,
   poolSizes: number[],
   base = "node",
@@ -275,7 +283,7 @@ export const clusters: Cluster[] = [
     id: "prod-east",
     name: "prod-east",
     description: "Customer-facing production",
-    intendedUse: "production",
+    engine: "buckit",
     version: "v1.0.0",
     status: "active",
     health: "unknown", // overwritten by computeAndApplyHealth below
@@ -296,7 +304,7 @@ export const clusters: Cluster[] = [
   {
     id: "staging",
     name: "staging",
-    intendedUse: "staging",
+    engine: "buckit",
     version: "v1.0.0",
     status: "active",
     health: "unknown", // overwritten by computeAndApplyHealth below
@@ -317,7 +325,7 @@ export const clusters: Cluster[] = [
   {
     id: "prod-west-new",
     name: "prod-west-new",
-    intendedUse: "production",
+    engine: "buckit",
     version: "—",
     status: "draft",
     health: "unknown",
@@ -338,7 +346,7 @@ export const clusters: Cluster[] = [
   {
     id: "legacy-migrate",
     name: "legacy-migrate",
-    intendedUse: "production",
+    engine: "buckit",
     version: "v1.0.0",
     status: "migrating",
     health: "unknown", // overwritten by computeAndApplyHealth below
@@ -361,6 +369,28 @@ export const clusters: Cluster[] = [
       finalizedAt: minutesAgo(0),
     },
   },
+  {
+    id: "legacy-east",
+    name: "legacy-east",
+    description: "Imported MinIO cluster, awaiting migration",
+    engine: "minio",
+    version: "RELEASE.2024-10-13T13-34-11Z",
+    status: "active",
+    health: "unknown", // overwritten by computeAndApplyHealth below
+    healthSummary: null,
+    lastFetchedAt: secondsAgo(45),
+    unreachableSince: null,
+    sshConfigured: false,
+    nodeCount: 4,
+    poolCount: 1,
+    driveCount: 16,
+    parity: 4,
+    usableBytes: 192 * TiB,
+    rawBytes: 256 * TiB,
+    usedBytes: 72 * TiB,
+    lastActivityAt: minutesAgo(8),
+    createdAt: daysAgo(1),
+  },
 ];
 
 export const nodesByCluster: Record<string, Node[]> = {
@@ -368,6 +398,7 @@ export const nodesByCluster: Record<string, Node[]> = {
   staging: makeNodes("staging", [4]),
   "prod-west-new": [],
   "legacy-migrate": makeNodes("legacy-migrate", [8], "legacy-node"),
+  "legacy-east": makeNodes("legacy-east", [4], "legacy-east"),
 };
 
 function step(

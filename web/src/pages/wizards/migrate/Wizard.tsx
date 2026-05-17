@@ -61,7 +61,6 @@ export function MigrationWizard() {
             ? "Finalize migration"
             : "Next →"
       }
-      onSaveDraft={index < 6 ? () => navigate("/clusters") : undefined}
     >
       <div className="wizard__inner">{body}</div>
     </WizardShell>

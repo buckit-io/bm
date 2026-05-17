@@ -1,10 +1,42 @@
 import { useEffect, useRef, useState } from "react";
-import { MigrationDraft, DiscoveryResult, MinioNodeInfo } from "../state";
+import { DiscoveredDrive, DiscoveryResult, MigrationDraft, MinioNodeInfo } from "../state";
 import { Pill } from "../../../../components/Pill";
 
 interface Props {
   draft: MigrationDraft;
   update: (patch: Partial<MigrationDraft>) => void;
+}
+
+const TiB = 1024 ** 4;
+
+function mockMinioDrives(): DiscoveredDrive[] {
+  const drives: DiscoveredDrive[] = [
+    {
+      device: "/dev/nvme0n1",
+      mount: "/",
+      sizeBytes: 256 * 1024 ** 3,
+      fsType: "ext4",
+      isBoot: true,
+    },
+  ];
+  for (let i = 1; i <= 12; i++) {
+    drives.push({
+      device: `/dev/sd${String.fromCharCode(96 + i)}`,
+      mount: `/data/disk${i}`,
+      sizeBytes: 16 * TiB,
+      fsType: "xfs",
+    });
+  }
+  return drives;
+}
+
+function disksSummary(r: DiscoveryResult): string {
+  if (!r.drives) return "—";
+  const data = r.drives.filter((d) => !d.isBoot);
+  if (data.length === 0) return "no data drives";
+  const sample = data[0];
+  const sizeTiB = Math.round(sample.sizeBytes / TiB);
+  return `${data.length} × ${sizeTiB} TiB`;
 }
 
 function statePill(s: DiscoveryResult["state"]) {
@@ -42,8 +74,7 @@ export function Discover({ draft, update }: Props) {
           os: "Ubuntu 24.04",
           cores: 16,
           ramGiB: 64,
-          drives: 12,
-          driveSizeTiB: 16,
+          drives: mockMinioDrives(),
           existingService: "minio",
         };
         m[h.id] = {
@@ -100,7 +131,7 @@ export function Discover({ draft, update }: Props) {
                       <span className="subtle">{expanded === h.id ? "▾" : "▸"}</span>
                     </td>
                     <td>{r.os ?? "—"}</td>
-                    <td>{r.drives ? `${r.drives} × ${r.driveSizeTiB} TiB` : "—"}</td>
+                    <td>{disksSummary(r)}</td>
                     <td>
                       {m
                         ? <Pill tone="info">{m.binaryVersion}</Pill>

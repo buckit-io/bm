@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { NewClusterDraft } from "../state";
 
 interface Props { draft: NewClusterDraft; }
@@ -22,25 +21,37 @@ WantedBy=multi-user.target`;
 export function Review({ draft }: Props) {
   const nodes = draft.hosts.filter((h) => h.hostname.trim());
   const t = draft.topology;
-  const totalDrives = nodes.length * t.drivesPerNode;
-  const rawTiB = totalDrives * t.driveSizeTiB;
-  const usableTiB = rawTiB - rawTiB * (t.parity / t.setSize);
-  const envFile = `MINIO_ROOT_USER=…    # auto-generated, shown post-deploy
-MINIO_ROOT_PASSWORD=…
-MINIO_VOLUMES="https://${nodes[0]?.hostname || "node1"}{1...${nodes.length}}/data/disk{1...${t.drivesPerNode}}"
-MINIO_OPTS="--console-address :9001"`;
-  const [ack, setAck] = useState(false);
+  const drivesPerNode = t.selectedMounts.length;
+  const totalDrives = nodes.length * drivesPerNode;
+  // Estimate drive size from the first discovered eligible drive (real
+  // backend uses preflight-validated uniformity).
+  const sampleSize =
+    Object.values(draft.discovery)
+      .flatMap((r) => r.drives ?? [])
+      .find((d) => !d.isBoot && d.sizeBytes > 0)?.sizeBytes ?? 0;
+  const TiB = 1024 ** 4;
+  const rawTiB = (totalDrives * sampleSize) / TiB;
+  const usableTiB = rawTiB - rawTiB * (t.parity / Math.max(t.setSize, 1));
+  const mountExpansion =
+    drivesPerNode > 0
+      ? `/data/disk{1...${drivesPerNode}}`
+      : "/data/disk{1...N}";
+  const hostname = nodes[0]?.hostname || "node1";
+  const serverUrl = draft.serverUrl.trim() || `http://${hostname}:${draft.api.port}`;
+  const envFile = `MINIO_ROOT_USER=${draft.credentials.rootUser}
+MINIO_ROOT_PASSWORD=********    # the password you set in Basics
+MINIO_VOLUMES="http://${hostname}{1...${nodes.length}}${mountExpansion}"
+MINIO_OPTS="--address :${draft.api.port} --console-address :${draft.api.consolePort}"
+MINIO_REGION=${draft.region}
+MINIO_SERVER_URL=${serverUrl}`;
 
   return (
     <div className="vstack" style={{ gap: "var(--s-5)" }}>
-      <header className="hstack" style={{ justifyContent: "space-between" }}>
-        <div>
-          <h2 style={{ fontSize: "var(--fs-xl)", fontWeight: 600 }}>Review</h2>
-          <p className="muted" style={{ fontSize: "var(--fs-sm)", marginTop: 4 }}>
-            Verify the plan before deploy.
-          </p>
-        </div>
-        <button className="btn btn--sm">Download plan ⤓</button>
+      <header>
+        <h2 style={{ fontSize: "var(--fs-xl)", fontWeight: 600 }}>Review</h2>
+        <p className="muted" style={{ fontSize: "var(--fs-sm)", marginTop: 4 }}>
+          Verify the plan before deploy.
+        </p>
       </header>
 
       <div className="card vstack" style={{ gap: "var(--s-2)" }}>
@@ -51,7 +62,8 @@ MINIO_OPTS="--console-address :9001"`;
           <div><div className="field-label">Pools</div><div>1</div></div>
           <div><div className="field-label">Drives</div><div>{totalDrives}</div></div>
           <div><div className="field-label">Parity</div><div>EC:{t.parity}</div></div>
-          <div><div className="field-label">Usable</div><div>~{Math.round(usableTiB)} TiB</div></div>
+          <div><div className="field-label">Drives / node</div><div>{drivesPerNode || "—"}</div></div>
+          <div><div className="field-label">Usable / Raw</div><div>~{Math.round(usableTiB)} TiB / {Math.round(rawTiB)} TiB</div></div>
         </div>
       </div>
 
@@ -61,9 +73,6 @@ MINIO_OPTS="--console-address :9001"`;
           <span className="mono">dnf install</span>{" "}
           <span className="subtle">(RHEL 9 detected on all nodes)</span>
         </p>
-        <button className="btn btn--sm" style={{ alignSelf: "flex-start" }}>
-          Override for individual nodes…
-        </button>
       </div>
 
       <div className="card vstack" style={{ gap: "var(--s-2)" }}>
@@ -91,15 +100,6 @@ MINIO_OPTS="--console-address :9001"`;
         </ol>
       </div>
 
-      <label className="hstack" style={{ gap: 8 }}>
-        <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
-        I have backed up any existing data on selected drives.
-      </label>
-      {!ack && (
-        <p className="subtle" style={{ fontSize: "var(--fs-xs)" }}>
-          Check the box above to enable Deploy.
-        </p>
-      )}
     </div>
   );
 }

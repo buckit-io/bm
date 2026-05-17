@@ -8,20 +8,20 @@ interface Props {
 }
 
 const CHECKS: Omit<PreflightResult, "result">[] = [
-  { id: "ssh", label: "SSH reachability" },
-  { id: "sudo", label: "Sudo (passwordless)" },
-  { id: "time", label: "Time sync (skew < 1s)" },
-  { id: "admin", label: "MinIO admin API reachable on all nodes" },
-  { id: "healthy", label: "Current MinIO cluster healthy" },
-  { id: "xl", label: "xl.meta format version compatible" },
-  { id: "minio_sys", label: ".minio.sys/ readable on all drives" },
-  { id: "env", label: "/etc/default/minio present and readable" },
-  { id: "pkg", label: "Package manager available (dnf)" },
-  { id: "rpm", label: "buckit-1.0.0.rpm reachable" },
-  { id: "minio_pkg", label: "minio installed via package manager", detail: "Required for clean dnf remove on Finalize" },
-  { id: "no_conflict", label: "No package conflicts (minio ↔ buckit)", detail: "Verified buckit package does not claim /etc/default/minio" },
-  { id: "root_creds", label: "Root credentials valid" },
-  { id: "no_admin_ops", label: "No in-flight admin operations", detail: "No active healing, decommission, or rebalance jobs" },
+  { id: "ssh", label: "SSH reachability", severity: "blocking" },
+  { id: "sudo", label: "Sudo (passwordless)", severity: "blocking" },
+  { id: "time", label: "Time sync (skew < 1s)", severity: "advisory" },
+  { id: "admin", label: "MinIO admin API reachable on all nodes", severity: "blocking" },
+  { id: "healthy", label: "Current MinIO cluster healthy", severity: "blocking" },
+  { id: "xl", label: "xl.meta format version compatible", severity: "blocking" },
+  { id: "minio_sys", label: ".minio.sys/ readable on all drives", severity: "blocking" },
+  { id: "env", label: "/etc/default/minio present and readable", severity: "blocking" },
+  { id: "pkg", label: "Package manager available (dnf)", severity: "blocking" },
+  { id: "rpm", label: "buckit-1.0.0.rpm reachable", severity: "blocking" },
+  { id: "minio_pkg", label: "minio installed via package manager", severity: "advisory", detail: "Required for clean dnf remove on Finalize" },
+  { id: "no_conflict", label: "No package conflicts (minio ↔ buckit)", severity: "blocking", detail: "Verified buckit package does not claim /etc/default/minio" },
+  { id: "root_creds", label: "Root credentials valid", severity: "blocking" },
+  { id: "no_admin_ops", label: "No in-flight admin operations", severity: "blocking", detail: "No active healing, decommission, or rebalance jobs" },
 ];
 
 function pill(r: PreflightResult["result"]) {

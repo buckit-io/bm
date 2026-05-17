@@ -5,7 +5,6 @@ import { TaskLogStream } from "../../../../components/TaskLogStream";
 interface Props {
   draft: NewClusterDraft;
   update: (patch: Partial<NewClusterDraft>) => void;
-  onDone: () => void;
 }
 
 const ORDER: DeployNodeState["state"][] = [
@@ -37,7 +36,7 @@ const STATE_GLYPH: Record<DeployNodeState["state"], string> = {
   failed: "✗",
 };
 
-export function Deploy({ draft, update, onDone }: Props) {
+export function Deploy({ draft, update }: Props) {
   const hosts = draft.hosts.filter((h) => h.hostname.trim());
   const started = useRef(false);
 
@@ -75,7 +74,6 @@ export function Deploy({ draft, update, onDone }: Props) {
             canceled: false,
           },
         });
-        setTimeout(onDone, 600);
         return;
       }
 
@@ -117,16 +115,13 @@ export function Deploy({ draft, update, onDone }: Props) {
 
   return (
     <div className="vstack" style={{ gap: "var(--s-4)" }}>
-      <header className="hstack" style={{ justifyContent: "space-between" }}>
-        <div>
-          <h2 style={{ fontSize: "var(--fs-xl)", fontWeight: 600 }}>
-            Deploying {draft.name || "cluster"}
-          </h2>
-          <p className="muted" style={{ fontSize: "var(--fs-sm)", marginTop: 4 }}>
-            ● Running · started just now
-          </p>
-        </div>
-        <button className="btn btn--sm btn--danger">Cancel deploy</button>
+      <header>
+        <h2 style={{ fontSize: "var(--fs-xl)", fontWeight: 600 }}>
+          Deploying {draft.name || "cluster"}
+        </h2>
+        <p className="muted" style={{ fontSize: "var(--fs-sm)", marginTop: 4 }}>
+          ● Running · started just now
+        </p>
       </header>
 
       <div className="hstack">
@@ -160,7 +155,7 @@ export function Deploy({ draft, update, onDone }: Props) {
         })}
       </div>
 
-      <TaskLogStream taskId="new-cluster-deploy" />
+      <TaskLogStream taskId="new-cluster-deploy" showPause={false} />
     </div>
   );
 }
