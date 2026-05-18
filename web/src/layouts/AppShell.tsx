@@ -1,11 +1,9 @@
 import { NavLink, Outlet, useLocation, useParams } from "react-router-dom";
-import { useTasks, useClusters } from "../api/hooks";
+import { useClusters } from "../api/hooks";
 import "./AppShell.css";
 
 export function AppShell() {
   const { data: clusters } = useClusters();
-  const { data: tasks } = useTasks();
-  const runningTasks = (tasks ?? []).filter((t) => t.state === "running");
   const location = useLocation();
   const params = useParams();
 
@@ -30,17 +28,11 @@ export function AppShell() {
         )}
 
         <div className="grow" />
-
-        <NavLink to="/tasks" className="shell__tasks">
-          <span className={runningTasks.length ? "shell__tasks-dot is-active" : "shell__tasks-dot"} />
-          {runningTasks.length} task{runningTasks.length === 1 ? "" : "s"}
-        </NavLink>
       </header>
 
       <div className="shell__body">
         <nav className="shell__sidebar">
           <NavLink to="/clusters" className="shell__nav">Clusters</NavLink>
-          <NavLink to="/tasks" className="shell__nav">Tasks</NavLink>
           <NavLink to="/history" className="shell__nav">History</NavLink>
           <NavLink to="/settings" className="shell__nav">Settings</NavLink>
           <div className="grow" />

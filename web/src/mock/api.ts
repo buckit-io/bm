@@ -11,11 +11,11 @@ import {
   computeHealthSummary,
   history,
   HistoryEntry,
+  HostOpStatus,
   makeNodes,
   Node,
   nodesByCluster,
-  Task,
-  tasks,
+  OperationResult,
 } from "./data";
 
 const LATENCY_MS = 80;
@@ -328,7 +328,7 @@ export async function commitImport(
     lastActivityAt: nowIso,
     createdAt: nowIso,
   };
-  cluster.healthSummary = computeHealthSummary(cluster, nodes, tasks);
+  cluster.healthSummary = computeHealthSummary(cluster, nodes);
   cluster.health = computeHealth(cluster, cluster.healthSummary);
 
   clusters.push(cluster);
@@ -364,7 +364,7 @@ export async function refreshAllClusters(): Promise<Cluster[]> {
     c.lastFetchedAt = nowIso;
     c.unreachableSince = null;
     const nodes = nodesByCluster[c.id] ?? [];
-    c.healthSummary = computeHealthSummary(c, nodes, tasks);
+    c.healthSummary = computeHealthSummary(c, nodes);
     c.health = computeHealth(c, c.healthSummary);
   }
   return clusters;
@@ -436,22 +436,6 @@ export function getNode(clusterId: string, nodeId: string): Promise<Node | null>
   return delay(list.find((n) => n.id === nodeId) ?? null);
 }
 
-// ---- tasks ----
-
-export function listTasks(opts?: {
-  clusterId?: string;
-  state?: Task["state"];
-}): Promise<Task[]> {
-  let result = tasks;
-  if (opts?.clusterId) result = result.filter((t) => t.clusterId === opts.clusterId);
-  if (opts?.state) result = result.filter((t) => t.state === opts.state);
-  return delay(result);
-}
-
-export function getTask(id: string): Promise<Task | null> {
-  return delay(tasks.find((t) => t.id === id) ?? null);
-}
-
 // ---- audit ----
 
 export function listAudit() {
@@ -471,10 +455,8 @@ export function clearHistory(): Promise<{ ok: true }> {
 }
 
 let historySeq = 1000;
-// recordHistory appends a row in-process. The real backend would route
-// every state-changing handler through this same path. The prototype
-// calls it from action buttons (Rolling restart, Tear down, etc.) so
-// the History tab updates feel real.
+// recordHistory appends a row in-process. Real backend writes through
+// dispatch as well; the prototype just mutates in memory.
 export function recordHistory(
   entry: Omit<HistoryEntry, "id" | "at">,
 ): HistoryEntry {
@@ -487,23 +469,30 @@ export function recordHistory(
   return row;
 }
 
+// Finalize a previously-recorded history row when its operation
+// reaches a terminal state. Status flips from "running" to the final
+// state; durationSec is computed from a start timestamp we tracked at
+// dispatch.
+function updateHistoryEntry(
+  id: string,
+  patch: Partial<Omit<HistoryEntry, "id">>,
+) {
+  const row = history.find((r) => r.id === id);
+  if (!row) return;
+  Object.assign(row, patch);
+}
+
 // ---- cluster operation dispatch ----
 //
 // Single entry point for every cluster Action menu item. Real backend
 // routes by `kind` to the right admin API call or SSH orchestration.
-// The mock fabricates a Task record + history row, then advances state
-// asynchronously for orchestrated ops so the OperationModal has
-// something to subscribe to.
+// The mock advances state asynchronously for orchestrated ops so the
+// OperationModal has something to subscribe to.
 
-export type HostOpState = "pending" | "running" | "succeeded" | "failed";
-
-export interface HostOpStatus {
-  hostId: string;
-  hostname: string;
-  state: HostOpState;
-  detail?: string;        // current sub-step on this node
-  durationSec?: number;   // populated when state is terminal
-}
+// HostOpState / HostOpStatus live in mock/data.ts now (they're shared
+// with HistoryEntry.result). Re-exported here so consumers that
+// already import from mock/api don't break.
+export type { HostOpState, HostOpStatus } from "./data";
 
 export interface OpEvent {
   ts: string;
@@ -598,9 +587,13 @@ export function cancelOperation(taskId: string) {
       events,
       detail: "Stopped following. Heal continues on the server.",
     };
+    finalizeHistory(taskId, "succeeded");
     return;
   }
   operations[taskId] = { ...cur, state: "canceled", detail: "Cancel requested. Finishing current host…" };
+  // The actual history finalize happens in the orchestrated progression
+  // when the in-flight host finishes — see startOrchestratedProgression's
+  // wasCanceled branch.
 }
 
 export interface DispatchOptions {
@@ -608,6 +601,45 @@ export interface DispatchOptions {
   // Undefined = all cluster nodes (cluster-wide ops). Used by the
   // selected-host bulk bar (N hosts) and per-node Actions menu (1 host).
   targetHostIds?: string[];
+}
+
+// Per-task metadata needed to finalize the history row when the op
+// reaches a terminal state.
+interface TaskMeta {
+  historyId: string;
+  startMs: number;
+}
+const taskMeta: Map<string, TaskMeta> = new Map();
+
+function finalizeHistory(
+  taskId: string,
+  status: HistoryEntry["status"],
+  extra: { failureNote?: string } = {},
+) {
+  const meta = taskMeta.get(taskId);
+  if (!meta) return;
+  const durationSec = Math.max(
+    1,
+    Math.round((Date.now() - meta.startMs) / 1000),
+  );
+  // Snapshot the operation's terminal state for the History View modal.
+  // Live-only fields (events stream, progress counters) are dropped.
+  const prog = operations[taskId];
+  const result: OperationResult | undefined = prog
+    ? {
+        state: status === "running" ? "succeeded" : status,
+        detail: prog.detail,
+        summary: prog.summary,
+        hostStatuses: prog.hostStatuses,
+        failureNote: extra.failureNote ?? prog.failureNote,
+      }
+    : undefined;
+  updateHistoryEntry(meta.historyId, {
+    status,
+    durationSec,
+    failureNote: extra.failureNote,
+    result,
+  });
 }
 
 export async function dispatchOperation(
@@ -625,14 +657,27 @@ export async function dispatchOperation(
   const targetHosts = opts.targetHostIds
     ? allClusterHosts.filter((h) => opts.targetHostIds!.includes(h.id))
     : allClusterHosts;
+  // Host scope is only meaningful when the op was *explicitly* scoped
+  // to a subset of nodes (bulk bar / per-node menu). Cluster-wide ops
+  // omit hostScope so the page renders them as "on <cluster>" only.
+  const hostScope =
+    opts.targetHostIds && targetHosts.length > 0
+      ? {
+          hostnames: targetHosts.map((h) => h.hostname),
+          count: targetHosts.length,
+        }
+      : undefined;
 
   operations[taskId] = { taskId, state: "running" };
-  recordHistory({
-    kind: "ui_action",
-    display: humanLabel(kind, params, targetHosts) + ` on ${clusterName}`,
-    target: clusterId,
+  const row = recordHistory({
+    opKind: kind,
+    opLabel: humanLabel(kind, params),
+    clusterId,
+    clusterName,
+    hostScope,
     status: "running",
   });
+  taskMeta.set(taskId, { historyId: row.id, startMs: Date.now() });
 
   // Admin API ops with rich progress: bm sends one admin API call,
   // then polls the cluster until results are ready. From the UI's
@@ -660,6 +705,7 @@ export async function dispatchOperation(
       state: "succeeded",
       detail: signalSuccessDetail(kind),
     };
+    finalizeHistory(taskId, "succeeded");
     return { taskId };
   }
 
@@ -723,6 +769,7 @@ function startRestartProgression(taskId: string, cluster: Cluster | undefined) {
               },
             ],
           };
+          finalizeHistory(taskId, "succeeded");
         } else {
           operations[taskId] = {
             ...operations[taskId]!,
@@ -789,6 +836,7 @@ function startStopProgression(taskId: string, cluster: Cluster | undefined) {
               },
             ],
           };
+          finalizeHistory(taskId, "succeeded");
         } else {
           operations[taskId] = {
             ...operations[taskId]!,
@@ -863,6 +911,7 @@ function startHealProgression(taskId: string, cluster: Cluster | undefined) {
           { label: "Duration", value: `${(durationMs / 1000).toFixed(1)} s` },
         ],
       };
+      finalizeHistory(taskId, "succeeded");
       return;
     }
     const bucket = buckets[i % buckets.length];
@@ -922,36 +971,27 @@ function signalSuccessDetail(kind: OpKind): string {
 function humanLabel(
   kind: OpKind,
   params: Record<string, unknown>,
-  targetHosts: Node[] = [],
 ): string {
-  // For host-scoped ops, suffix with which host(s) — "(node1)" for a
-  // single host, "(3 hosts)" for a bulk selection. Cluster-wide ops
-  // ignore this since the cluster name is already appended by the
-  // caller.
-  const hostSuffix =
-    targetHosts.length === 1
-      ? ` (${targetHosts[0].hostname})`
-      : targetHosts.length > 1
-        ? ` (${targetHosts.length} hosts)`
-        : "";
+  // Returns the operation label only — host scope is rendered
+  // separately by the History page using HistoryEntry.hostScope.
   switch (kind) {
     case "restart_cluster":   return "Restart cluster";
     case "stop_cluster":      return "Stop cluster";
-    case "freeze_api":     return "Froze S3 API";
-    case "unfreeze_api":   return "Unfroze S3 API";
-    case "start_heal":        return "Started heal";
+    case "freeze_api":        return "Freeze S3 API";
+    case "unfreeze_api":      return "Unfreeze S3 API";
+    case "start_heal":        return "Start heal";
     case "rolling_restart":   return "Rolling restart";
     case "rolling_upgrade":   return `Rolling upgrade to ${params.version ?? "?"}`;
     case "start_cluster":     return "Start cluster";
-    case "rotate_root_creds": return "Rotated root credentials";
-    case "add_pool":          return "Added pool";
-    case "remove_cluster":    return "Removed cluster definition";
-    case "systemctl_restart": return "Systemctl restart service" + hostSuffix;
-    case "systemctl_stop":    return "Systemctl stop service" + hostSuffix;
-    case "systemctl_start":   return "Systemctl start service" + hostSuffix;
-    case "redeploy_software": return `Redeploy ${params.version ?? "?"}` + hostSuffix;
-    case "reboot_host":       return "Reboot host" + hostSuffix;
-    case "shutdown_host":     return "Shut down host" + hostSuffix;
+    case "rotate_root_creds": return "Rotate root credentials";
+    case "add_pool":          return "Add pool";
+    case "remove_cluster":    return "Remove cluster definition";
+    case "systemctl_restart": return "Systemctl restart service";
+    case "systemctl_stop":    return "Systemctl stop service";
+    case "systemctl_start":   return "Systemctl start service";
+    case "redeploy_software": return `Redeploy ${params.version ?? "?"}`;
+    case "reboot_host":       return "Reboot host";
+    case "shutdown_host":     return "Shut down host";
   }
 }
 
@@ -1018,6 +1058,7 @@ function startOrchestratedProgression(
           detail: `${humanLabel(kind, {})} canceled after ${idx} of ${total} hosts.`,
           hostStatuses: [...hostStatuses],
         };
+        finalizeHistory(taskId, "canceled");
         return;
       }
       operations[taskId] = {
@@ -1028,6 +1069,7 @@ function startOrchestratedProgression(
         detail: done ? `${humanLabel(kind, {})} complete.` : undefined,
         hostStatuses: [...hostStatuses],
       };
+      if (done) finalizeHistory(taskId, "succeeded");
       if (!done) setTimeout(step, 300);
     }, 1100);
   };

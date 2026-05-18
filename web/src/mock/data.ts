@@ -3,12 +3,6 @@
 // types defined here become the contract derived in UI-P7.
 
 export type Health = "healthy" | "degraded" | "critical" | "unknown";
-export type TaskState =
-  | "pending"
-  | "running"
-  | "succeeded"
-  | "failed"
-  | "canceled";
 
 // HealthSummary is the rolled-up signal data the manager uses to compute
 // `Cluster.health`. The backend computes both fields server-side and returns
@@ -17,10 +11,6 @@ export type TaskState =
 export interface HealthSummary {
   nodes: { online: number; degraded: number; offline: number; total: number };
   drives: { ready: number; healing: number; failed: number; total: number };
-  // Names of in-flight long-running ops on this cluster (cutover, rolling
-  // restart, deploy, healing job, etc.). Presence flags the cluster as
-  // "Degraded" even when nodes and drives all read clean.
-  activeOps: string[];
 }
 
 // Which server software is running on the cluster's nodes.
@@ -108,39 +98,6 @@ export interface Drive {
   isBoot?: boolean;
 }
 
-export interface Task {
-  id: string;
-  name: string;
-  kind:
-    | "discovery"
-    | "preflight"
-    | "deploy"
-    | "snapshot"
-    | "cutover"
-    | "verify"
-    | "rollback"
-    | "finalize"
-    | "rolling_restart"
-    | "health_probe";
-  clusterId?: string;
-  clusterName?: string;
-  state: TaskState;
-  triggeredBy: string;
-  startedAt: string;
-  durationSec?: number;
-  steps: TaskStep[];
-  failureNote?: string;
-  retryable?: boolean;
-}
-
-export interface TaskStep {
-  id: string;
-  name: string;
-  state: TaskState;
-  durationSec?: number;
-  children?: TaskStep[];
-}
-
 export interface AuditEvent {
   id: string;
   at: string;
@@ -149,20 +106,60 @@ export interface AuditEvent {
   target?: string;
 }
 
-// HistoryEntry is the row backing the History tab. Two flavours, both
-// stored in the same bucket on the backend: literal CLI invocations and
-// human-readable UI action descriptions. See ui-architecture.md for the
-// vocabulary.
+// Per-host outcome for orchestrated ops. Persisted as part of an
+// OperationResult so the History tab's View modal can show the same
+// per-host breakdown the live OperationModal showed.
+export type HostOpState = "pending" | "running" | "succeeded" | "failed";
+
+export interface HostOpStatus {
+  hostId: string;
+  hostname: string;
+  state: HostOpState;
+  detail?: string;
+  durationSec?: number;
+}
+
+// Snapshot of an operation's terminal state, persisted on the history
+// row. Renders into the History tab's View modal. Live-only fields
+// (events stream, progress counters) are intentionally omitted.
+export interface OperationResult {
+  state: "succeeded" | "failed" | "canceled";
+  // Signal ops one-liner, e.g. "S3 API frozen."
+  detail?: string;
+  // Admin API result table for ops that have one (restart/stop/heal).
+  summary?: { label: string; value: string }[];
+  // Per-host outcome for SSH-orchestrated ops.
+  hostStatuses?: HostOpStatus[];
+  failureNote?: string;
+}
+
+// HistoryEntry is the row backing the History tab. Every entry is a
+// mutable action initiated from the web UI — cluster Actions, bulk-
+// host actions, or per-node Actions. Read-only fetches and CLI
+// invocations are not recorded.
 export interface HistoryEntry {
   id: string;
   at: string;
-  kind: "cli" | "ui_action";
-  display: string;
-  target?: string;
-  status: "succeeded" | "failed" | "running";
+  // Operation identifier — matches the OpKind union in mock/api.ts.
+  // The page renders the human-friendly label from `opLabel`.
+  opKind: string;
+  opLabel: string;
+  // Target cluster. Always present — every mutable op has a cluster.
+  clusterId: string;
+  clusterName: string;
+  // Host scope. Undefined for cluster-wide ops (Restart cluster,
+  // Rolling restart, etc.); set when the op was scoped to a subset
+  // of hosts via the bulk-selection bar or per-node Actions menu.
+  hostScope?: {
+    hostnames: string[];
+    count: number;
+  };
+  status: "succeeded" | "failed" | "running" | "canceled";
   durationSec?: number;
-  taskId?: string;
-  exitCode?: number;
+  failureNote?: string;
+  // Persisted snapshot of the op's terminal state. Undefined while
+  // status is "running". Rendered by the History page's View modal.
+  result?: OperationResult;
 }
 
 // ---- fixture data ----
@@ -380,170 +377,132 @@ export const nodesByCluster: Record<string, Node[]> = {
   "legacy-east": makeNodes("legacy-east", [4], "legacy-east"),
 };
 
-function step(
-  id: string,
-  name: string,
-  state: TaskState,
-  durationSec?: number,
-  children?: TaskStep[],
-): TaskStep {
-  return { id, name, state, durationSec, children };
-}
-
-export const tasks: Task[] = [
-  {
-    id: "task-migrate-legacy-1",
-    name: "Migrate legacy-east",
-    kind: "cutover",
-    clusterId: "legacy-migrate",
-    clusterName: "legacy-migrate",
-    state: "running",
-    triggeredBy: "admin",
-    startedAt: minutesAgo(3),
-    steps: [
-      step("snapshot", "Snapshot MinIO state", "succeeded", 18),
-      step("preflight", "Preflight", "succeeded", 22),
-      step("cutover", "Cutover (3/8 nodes)", "running", 152, [
-        step("c-node1", "node1", "succeeded", 58),
-        step("c-node2", "node2", "succeeded", 61),
-        step("c-node3", "node3", "running", 33),
-        step("c-node4", "node4", "pending"),
-        step("c-node5", "node5", "pending"),
-        step("c-node6", "node6", "pending"),
-        step("c-node7", "node7", "pending"),
-        step("c-node8", "node8", "pending"),
-      ]),
-      step("verify", "Verify", "pending"),
-      step("finalize", "Finalize", "pending"),
-    ],
-    retryable: false,
-  },
-  {
-    id: "task-probe-prod-1",
-    name: "Health probe",
-    kind: "health_probe",
-    clusterId: "prod-east",
-    clusterName: "prod-east",
-    state: "running",
-    triggeredBy: "system",
-    startedAt: minutesAgo(0),
-    steps: [step("probe", "Probe all nodes", "running", 20)],
-  },
-  {
-    id: "task-restart-prod-1",
-    name: "Rolling restart",
-    kind: "rolling_restart",
-    clusterId: "prod-east",
-    clusterName: "prod-east",
-    state: "succeeded",
-    triggeredBy: "admin",
-    startedAt: hoursAgo(2),
-    durationSec: 252,
-    steps: [
-      step("plan", "Plan order", "succeeded", 2),
-      step("restart", "Rolling restart (6 nodes)", "succeeded", 240),
-    ],
-  },
-  {
-    id: "task-deploy-staging-1",
-    name: "Deploy v1.0.0",
-    kind: "deploy",
-    clusterId: "staging",
-    clusterName: "staging",
-    state: "failed",
-    triggeredBy: "admin",
-    startedAt: daysAgo(1),
-    durationSec: 720,
-    steps: [
-      step("fetch", "Fetch package", "succeeded", 12),
-      step("install", "Install on nodes", "failed", 708, [
-        step("i-node1", "node1", "succeeded", 110),
-        step("i-node2", "node2", "succeeded", 112),
-        step("i-node3", "node3", "failed", 600),
-        step("i-node4", "node4", "canceled"),
-      ]),
-    ],
-    failureNote: "node3: SSH timeout",
-    retryable: true,
-  },
-];
-
 export const auditEvents: AuditEvent[] = [
-  { id: "a1", at: minutesAgo(0), actor: "admin", action: "task.start", target: "task-migrate-legacy-1" },
+  { id: "a1", at: minutesAgo(0), actor: "admin", action: "cluster.migrate", target: "legacy-migrate" },
   { id: "a2", at: hoursAgo(2), actor: "admin", action: "cluster.restart", target: "prod-east" },
-  { id: "a3", at: daysAgo(1), actor: "admin", action: "task.start", target: "task-deploy-staging-1" },
+  { id: "a3", at: daysAgo(1), actor: "admin", action: "cluster.deploy", target: "staging" },
   { id: "a4", at: daysAgo(3), actor: "admin", action: "cluster.deploy", target: "prod-east" },
 ];
 
-// History is the user-facing log surfaced in the History tab. Phase 1
-// records UI action descriptions; future phases will add literal CLI
-// command rows from terminal invocations.
+// History is the user-facing log surfaced in the History tab. Every
+// row is a mutable action initiated from the web UI.
 export const history: HistoryEntry[] = [
   {
     id: "h1",
     at: hoursAgo(2),
-    kind: "ui_action",
-    display: "Rolling restart on prod-east",
-    target: "prod-east",
+    opKind: "rolling_restart",
+    opLabel: "Rolling restart",
+    clusterId: "prod-east",
+    clusterName: "prod-east",
     status: "succeeded",
     durationSec: 252,
-    taskId: "task-restart-prod-1",
+    result: {
+      state: "succeeded",
+      hostStatuses: [
+        { hostId: "prod-east-node1", hostname: "prod-east-node1", state: "succeeded", durationSec: 19 },
+        { hostId: "prod-east-node2", hostname: "prod-east-node2", state: "succeeded", durationSec: 18 },
+        { hostId: "prod-east-node3", hostname: "prod-east-node3", state: "succeeded", durationSec: 21 },
+        { hostId: "prod-east-node4", hostname: "prod-east-node4", state: "succeeded", durationSec: 17 },
+      ],
+    },
   },
   {
     id: "h2",
     at: hoursAgo(5),
-    kind: "cli",
-    display: "bm cluster ls",
+    opKind: "systemctl_restart",
+    opLabel: "Systemctl restart service",
+    clusterId: "prod-east",
+    clusterName: "prod-east",
+    hostScope: {
+      hostnames: ["prod-east-node3", "prod-east-node4"],
+      count: 2,
+    },
     status: "succeeded",
-    exitCode: 0,
+    durationSec: 18,
+    result: {
+      state: "succeeded",
+      hostStatuses: [
+        { hostId: "prod-east-node3", hostname: "prod-east-node3", state: "succeeded", durationSec: 9 },
+        { hostId: "prod-east-node4", hostname: "prod-east-node4", state: "succeeded", durationSec: 9 },
+      ],
+    },
   },
   {
     id: "h3",
     at: daysAgo(1),
-    kind: "ui_action",
-    display: "Deployed cluster staging v1.0.0",
-    target: "staging",
+    opKind: "deploy_cluster",
+    opLabel: "Deploy cluster staging v1.0.0",
+    clusterId: "staging",
+    clusterName: "staging",
     status: "failed",
     durationSec: 720,
-    taskId: "task-deploy-staging-1",
+    failureNote: "node3: SSH timeout during package install",
+    result: {
+      state: "failed",
+      failureNote: "node3: SSH timeout during package install",
+      hostStatuses: [
+        { hostId: "staging-node1", hostname: "staging-node1", state: "succeeded", durationSec: 110 },
+        { hostId: "staging-node2", hostname: "staging-node2", state: "succeeded", durationSec: 112 },
+        { hostId: "staging-node3", hostname: "staging-node3", state: "failed", durationSec: 600 },
+        { hostId: "staging-node4", hostname: "staging-node4", state: "pending" },
+      ],
+    },
   },
   {
     id: "h4",
     at: daysAgo(2),
-    kind: "ui_action",
-    display: "Rotated SSH credentials for prod-east",
-    target: "prod-east",
+    opKind: "rotate_root_creds",
+    opLabel: "Rotate root credentials",
+    clusterId: "prod-east",
+    clusterName: "prod-east",
     status: "succeeded",
-    durationSec: 3,
+    durationSec: 47,
+    result: {
+      state: "succeeded",
+      detail: "Root credentials rotated and the cluster restarted with the new key.",
+    },
   },
   {
     id: "h5",
+    at: daysAgo(2),
+    opKind: "reboot_host",
+    opLabel: "Reboot host",
+    clusterId: "prod-east",
+    clusterName: "prod-east",
+    hostScope: {
+      hostnames: ["prod-east-node1"],
+      count: 1,
+    },
+    status: "succeeded",
+    durationSec: 64,
+    result: {
+      state: "succeeded",
+      hostStatuses: [
+        { hostId: "prod-east-node1", hostname: "prod-east-node1", state: "succeeded", durationSec: 64 },
+      ],
+    },
+  },
+  {
+    id: "h6",
     at: daysAgo(3),
-    kind: "ui_action",
-    display: "Deployed cluster prod-east v1.0.0",
-    target: "prod-east",
+    opKind: "deploy_cluster",
+    opLabel: "Deploy cluster prod-east v1.0.0",
+    clusterId: "prod-east",
+    clusterName: "prod-east",
     status: "succeeded",
     durationSec: 574,
-    taskId: "task-deploy-prod-east-initial",
+    result: {
+      state: "succeeded",
+      detail: "Cluster deployed across 4 hosts (pool 1).",
+    },
   },
 ];
 
 // ---- health computation ----
 
-// Kinds of tasks that count as "active operations" affecting cluster health.
-// health_probe is excluded — it's just monitoring noise.
-const ACTIVE_OP_KINDS: Task["kind"][] = [
-  "deploy",
-  "cutover",
-  "rolling_restart",
-  "rollback",
-  "finalize",
-];
-
 export function computeHealthSummary(
-  cluster: Cluster,
+  _cluster: Cluster,
   nodes: Node[],
-  allTasks: Task[],
 ): HealthSummary {
   let nOnline = 0;
   let nDegraded = 0;
@@ -566,15 +525,6 @@ export function computeHealthSummary(
     }
   }
 
-  const activeOps = allTasks
-    .filter(
-      (t) =>
-        t.state === "running" &&
-        t.clusterId === cluster.id &&
-        ACTIVE_OP_KINDS.includes(t.kind),
-    )
-    .map((t) => t.name);
-
   return {
     nodes: {
       online: nOnline,
@@ -588,18 +538,16 @@ export function computeHealthSummary(
       failed: dFailed,
       total: dReady + dHealing + dFailed,
     },
-    activeOps,
   };
 }
 
 // computeHealth rolls a summary into a single status string. The rule:
-//   - draft clusters or clusters we can't reach are "unknown"
+//   - clusters we can't reach are "unknown"
 //   - "critical" means parity is exhausted (cluster cannot serve writes):
 //       drive failures exceed the per-set parity tolerance, or node
 //       failures exceed parity
 //   - "degraded" means cluster still serves traffic but is not clean:
-//       any node not fully online, any drive not ready, or any
-//       long-running op in flight
+//       any node not fully online, or any drive not ready
 //   - everything else is "healthy"
 export function computeHealth(cluster: Cluster, s: HealthSummary): Health {
   if (s.nodes.total === 0) return "unknown";
@@ -607,7 +555,6 @@ export function computeHealth(cluster: Cluster, s: HealthSummary): Health {
   if (s.nodes.offline > cluster.parity) return "critical";
   if (s.nodes.offline > 0 || s.nodes.degraded > 0) return "degraded";
   if (s.drives.healing > 0 || s.drives.failed > 0) return "degraded";
-  if (s.activeOps.length > 0) return "degraded";
   return "healthy";
 }
 
@@ -617,7 +564,7 @@ export function computeHealth(cluster: Cluster, s: HealthSummary): Health {
 // records.
 clusters.forEach((c) => {
   const nodes = nodesByCluster[c.id] ?? [];
-  c.healthSummary = computeHealthSummary(c, nodes, tasks);
+  c.healthSummary = computeHealthSummary(c, nodes);
   c.health = computeHealth(c, c.healthSummary);
 });
 

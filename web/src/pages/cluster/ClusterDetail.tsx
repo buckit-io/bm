@@ -455,9 +455,6 @@ export function ClusterDetailLayout() {
                 {summary.drives.healing > 0 && ` · ${summary.drives.healing} healing`}
                 {summary.drives.failed > 0 && ` · ${summary.drives.failed} failed`}
               </div>
-              {summary.activeOps.length > 0 && (
-                <div className="cdetail__card-sub">⟳ {summary.activeOps[0]}</div>
-              )}
             </>
           )}
         </div>

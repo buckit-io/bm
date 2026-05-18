@@ -73,21 +73,6 @@ export function useNode(clusterId: string | undefined, nodeId: string | undefine
   });
 }
 
-export function useTasks(opts?: { clusterId?: string }) {
-  return useQuery({
-    queryKey: ["tasks", opts?.clusterId ?? "all"],
-    queryFn: () => api.listTasks(opts),
-  });
-}
-
-export function useTask(id: string | undefined) {
-  return useQuery({
-    queryKey: ["task", id],
-    queryFn: () => api.getTask(id!),
-    enabled: !!id,
-  });
-}
-
 export function useAudit() {
   return useQuery({ queryKey: ["audit"], queryFn: api.listAudit });
 }

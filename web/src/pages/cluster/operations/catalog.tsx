@@ -276,21 +276,22 @@ const ROTATE_ROOT_CREDS: OperationDef<{
   ],
 };
 
-const ADD_POOL: OperationDef<Record<string, never>> = {
-  id: "add_pool",
-  group: "ssh",
-  label: "Add new pool…",
-  description: "Expand the cluster with another pool.",
-  flavor: "orchestrated",
-  opKind: "add_pool",
-  initialParams: {},
-  inputSteps: [
-    confirmStep(
-      "Adding a new pool requires updating MINIO_VOLUMES on every node and rolling-restarting the cluster. The full pool-add wizard hasn't shipped yet.",
-      "Continue",
-    ),
-  ],
-};
+// Hidden until the pool-add wizard ships.
+// const ADD_POOL: OperationDef<Record<string, never>> = {
+//   id: "add_pool",
+//   group: "ssh",
+//   label: "Add new pool…",
+//   description: "Expand the cluster with another pool.",
+//   flavor: "orchestrated",
+//   opKind: "add_pool",
+//   initialParams: {},
+//   inputSteps: [
+//     confirmStep(
+//       "Adding a new pool requires updating MINIO_VOLUMES on every node and rolling-restarting the cluster. The full pool-add wizard hasn't shipped yet.",
+//       "Continue",
+//     ),
+//   ],
+// };
 
 // ── Manager ───────────────────────────────────────────────────────
 
@@ -358,7 +359,7 @@ export const CLUSTER_OPERATIONS: OperationDef[] = [
   ROLLING_UPGRADE,
   START_CLUSTER,
   ROTATE_ROOT_CREDS,
-  ADD_POOL,
+  // ADD_POOL,  // hidden — pool-add wizard not yet shipped
   // Manager
   CONFIGURE_SSH,
   REMOVE_CLUSTER,

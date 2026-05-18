@@ -7,8 +7,6 @@ import { Clusters } from "./pages/Clusters";
 import { Import } from "./pages/Import";
 import { Settings } from "./pages/Settings";
 import { History } from "./pages/History";
-import { Tasks } from "./pages/Tasks";
-import { TaskDetail } from "./pages/TaskDetail";
 import { ClusterDetailLayout } from "./pages/cluster/ClusterDetail";
 import { NodeDetail } from "./pages/cluster/NodeDetail";
 import { NodeLogs } from "./pages/cluster/NodeLogs";
@@ -41,8 +39,6 @@ export function AppRoutes() {
         <Route path="/clusters/:clusterId/settings" element={<ClusterSettings />} />
         <Route path="/clusters/:clusterId/ssh" element={<ClusterSshSettings />} />
 
-        <Route path="/tasks" element={<Tasks />} />
-        <Route path="/tasks/:taskId" element={<TaskDetail />} />
         <Route path="/history" element={<History />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="*" element={<Placeholder title="Not found" />} />
