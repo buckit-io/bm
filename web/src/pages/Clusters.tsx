@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { Pill, PillTone } from "../components/Pill";
+import { Pill } from "../components/Pill";
 import { useClusters, useRefreshClusters } from "../api/hooks";
 import { Cluster, formatBytes } from "../mock/data";
 import "./Clusters.css";
@@ -27,18 +27,7 @@ function formatAge(sec: number): string {
   return `${h}h ${m % 60}m ago`;
 }
 
-type Filter = "all" | "active" | "draft" | "migrating" | "failed";
-const FILTERS: { id: Filter; label: string }[] = [
-  { id: "all", label: "All" },
-  { id: "active", label: "Active" },
-  { id: "draft", label: "Draft" },
-  { id: "migrating", label: "Migrating" },
-  { id: "failed", label: "Failed" },
-];
-
 function healthPill(c: Cluster) {
-  if (c.status === "draft")
-    return <Pill tone="neutral" icon="○">—</Pill>;
   switch (c.health) {
     case "healthy":
       return <Pill tone="success" icon="●">Healthy</Pill>;
@@ -54,8 +43,8 @@ function healthPill(c: Cluster) {
 // Renders "online / total" or "ready / total" with a subtle red on the
 // numerator when it lags the denominator — so the eye catches "71/72" the
 // same way it catches the Degraded pill.
-function ratioCell(ok: number, total: number, draft: boolean) {
-  if (draft || total === 0) return <span className="subtle">—</span>;
+function ratioCell(ok: number, total: number) {
+  if (total === 0) return <span className="subtle">—</span>;
   const short = ok < total;
   return (
     <span className="mono" style={{ fontVariantNumeric: "tabular-nums" }}>
@@ -67,22 +56,11 @@ function ratioCell(ok: number, total: number, draft: boolean) {
   );
 }
 
-function statusPill(c: Cluster) {
-  const map: Record<Cluster["status"], PillTone> = {
-    active: "success",
-    draft: "neutral",
-    migrating: "warning",
-    failed: "danger",
-  };
-  const label = c.status[0].toUpperCase() + c.status.slice(1);
-  return <Pill tone={map[c.status]}>{label}</Pill>;
-}
-
 export function Clusters() {
   const { data: clusters, isLoading } = useClusters();
   const refresh = useRefreshClusters();
-  const [filter, setFilter] = useState<Filter>("all");
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   // Re-render every second so "Fetched Ns ago" actually ticks while the
   // operator stares at the page. Cheap — one setState per second.
@@ -92,9 +70,20 @@ export function Clusters() {
     return () => clearInterval(id);
   }, []);
 
-  const filtered = (clusters ?? []).filter(
-    (c) => filter === "all" || c.status === filter,
-  );
+  // Close the +New menu on outside-click.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onMouseDown = (e: MouseEvent) => {
+      const target = e.target as globalThis.Node | null;
+      if (menuRef.current && target && !menuRef.current.contains(target)) {
+        setMenuOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", onMouseDown);
+    return () => window.removeEventListener("mousedown", onMouseDown);
+  }, [menuOpen]);
+
+  const filtered = clusters ?? [];
   const mostStale = pickMostStale(clusters ?? []);
   const stale = mostStale ? ageSeconds(mostStale) : null;
 
@@ -127,40 +116,36 @@ export function Clusters() {
             </span>
             {refresh.isPending ? "Refreshing…" : "Refresh"}
           </button>
-          <div className="clusters__new">
+          <div className="clusters__new" ref={menuRef}>
             <button
               className="btn btn--primary"
               onClick={() => setMenuOpen((v) => !v)}
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
             >
               + New ▾
             </button>
             {menuOpen && (
               <div className="clusters__menu" role="menu">
-                <Link to="/clusters/new" className="clusters__menu-item">
+                <Link
+                  to="/clusters/new"
+                  className="clusters__menu-item"
+                  onClick={() => setMenuOpen(false)}
+                >
                   Deploy new cluster
                 </Link>
-                <Link to="/clusters/import" className="clusters__menu-item">
-                  Import existing cluster
+                <Link
+                  to="/clusters/import"
+                  className="clusters__menu-item"
+                  onClick={() => setMenuOpen(false)}
+                >
+                  Import existing Buckit or MinIO cluster
                 </Link>
               </div>
             )}
           </div>
         </div>
       </header>
-
-      <div className="clusters__filters" role="tablist">
-        {FILTERS.map((f) => (
-          <button
-            key={f.id}
-            role="tab"
-            aria-selected={filter === f.id}
-            className={"chip" + (filter === f.id ? " is-active" : "")}
-            onClick={() => setFilter(f.id)}
-          >
-            {f.label}
-          </button>
-        ))}
-      </div>
 
       <div className="card clusters__table-wrap">
         {isLoading ? (
@@ -178,12 +163,10 @@ export function Clusters() {
                 <th>Version</th>
                 <th>Health</th>
                 <th>Used</th>
-                <th>Status</th>
               </tr>
             </thead>
             <tbody>
               {filtered.map((c) => {
-                const draft = c.status === "draft";
                 const s = c.healthSummary;
                 return (
                   <tr key={c.id}>
@@ -201,7 +184,7 @@ export function Clusters() {
                       )}
                     </td>
                     <td className="num">
-                      {draft || c.poolCount === 0 ? (
+                      {c.poolCount === 0 ? (
                         <span className="subtle">—</span>
                       ) : (
                         <span className="mono" style={{ fontVariantNumeric: "tabular-nums" }}>
@@ -210,10 +193,10 @@ export function Clusters() {
                       )}
                     </td>
                     <td className="num">
-                      {ratioCell(s?.nodes.online ?? 0, s?.nodes.total ?? 0, draft)}
+                      {ratioCell(s?.nodes.online ?? 0, s?.nodes.total ?? 0)}
                     </td>
                     <td className="num">
-                      {ratioCell(s?.drives.ready ?? 0, s?.drives.total ?? 0, draft)}
+                      {ratioCell(s?.drives.ready ?? 0, s?.drives.total ?? 0)}
                     </td>
                     <td>{c.version}</td>
                     <td>{healthPill(c)}</td>
@@ -226,7 +209,6 @@ export function Clusters() {
                         </span>
                       )}
                     </td>
-                    <td>{statusPill(c)}</td>
                   </tr>
                 );
               })}

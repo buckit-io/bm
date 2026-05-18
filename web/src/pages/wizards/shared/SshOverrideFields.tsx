@@ -54,24 +54,38 @@ export function SshOverrideFields({ defaults, value, onChange }: Props) {
             placeholder={defaults.user}
           />
         </div>
-        <label
-          className="hstack"
-          style={{ gap: 6, alignSelf: "flex-end", paddingBottom: 6 }}
-        >
-          <input
-            type="checkbox"
-            checked={value.sudo ?? defaults.sudo}
-            onChange={(e) =>
-              patch({
-                sudo:
-                  e.target.checked === defaults.sudo
-                    ? undefined
-                    : e.target.checked,
-              })
-            }
-          />
-          Use sudo (passwordless)
-        </label>
+        {(() => {
+          // Effective SSH user: override.user if set, else cluster default.
+          const effectiveUser = (value.user ?? defaults.user).trim();
+          const isRoot = effectiveUser === "root";
+          return (
+            <label
+              className="hstack"
+              style={{
+                gap: 6,
+                alignSelf: "flex-end",
+                paddingBottom: 6,
+                opacity: isRoot ? 0.55 : 1,
+              }}
+              title={isRoot ? "Not needed when connecting as root." : undefined}
+            >
+              <input
+                type="checkbox"
+                checked={isRoot ? false : (value.sudo ?? defaults.sudo)}
+                disabled={isRoot}
+                onChange={(e) =>
+                  patch({
+                    sudo:
+                      e.target.checked === defaults.sudo
+                        ? undefined
+                        : e.target.checked,
+                  })
+                }
+              />
+              Use sudo (passwordless)
+            </label>
+          );
+        })()}
       </div>
 
       {authMethod === "key" && (
@@ -82,7 +96,9 @@ export function SshOverrideFields({ defaults, value, onChange }: Props) {
               className="input"
               value={value.keyPath ?? ""}
               onChange={(e) => patch({ keyPath: e.target.value })}
-              placeholder={defaults.keyPath || "~/.ssh/id_ed25519"}
+              placeholder={
+                defaults.keyPath || "~/.ssh/id_ed25519 or ~/.ssh/id_rsa"
+              }
             />
           </div>
           <div className="field" style={{ minWidth: 200 }}>

@@ -43,6 +43,17 @@
   display: flex;
   flex-direction: column;
 }
+.cdetail__menu--wide {
+  min-width: 360px;
+}
+
+/* Two-line menu item: label on top, description underneath. */
+.cdetail__menu-item--stacked {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+}
 
 .cdetail__menu-item {
   text-align: left;

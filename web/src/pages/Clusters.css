@@ -49,7 +49,7 @@
   border: 1px solid var(--c-border);
   border-radius: var(--r-md);
   box-shadow: var(--shadow-md);
-  min-width: 200px;
+  min-width: 280px;
   padding: var(--s-1);
   z-index: 20;
 }
@@ -60,6 +60,7 @@
   border-radius: var(--r-sm);
   color: var(--c-fg);
   font-size: var(--fs-md);
+  white-space: nowrap;
 }
 .clusters__menu-item:hover {
   background: var(--c-surface-2);

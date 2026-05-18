@@ -211,7 +211,7 @@ export function emptyDraft(): NewClusterDraft {
     hosts: [
       { id: "h1", hostname: "", port: 22, probe: "idle" },
     ],
-    ssh: { authMethod: "agent", user: "buckit", sudo: true },
+    ssh: { authMethod: "agent", user: "", sudo: true },
     discovery: {},
     topology: {
       setSize: 16,

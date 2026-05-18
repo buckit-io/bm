@@ -3,8 +3,11 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCluster, useNodes } from "../../api/hooks";
 import { Pill } from "../../components/Pill";
-import { recordHistory } from "../../mock/api";
 import { Cluster, formatBytes, Node } from "../../mock/data";
+import { OperationDef } from "./operations/defs";
+import { OperationModal } from "./operations/OperationModal";
+import { CLUSTER_OPERATIONS, GROUP_LABELS } from "./operations/catalog";
+import { BULK_HOST_OPERATIONS } from "./operations/bulkHostCatalog";
 import "./ClusterDetail.css";
 
 // ---- small render helpers ----
@@ -35,7 +38,6 @@ function nodeStatePill(n: Node) {
 }
 
 function clusterHealthPill(c: Cluster) {
-  if (c.status === "draft") return <Pill tone="neutral" icon="○">—</Pill>;
   switch (c.health) {
     case "healthy":
       return <Pill tone="success" icon="●">Healthy</Pill>;
@@ -214,29 +216,12 @@ function SortHeader({ active, dir, label, align = "left", onClick, title }: Sort
 
 // ---- the page ----
 
-type ClusterAction = {
-  label: string;
-  danger?: boolean;
-  kind?: "navigate";
-};
 
-const CLUSTER_ACTIONS: ClusterAction[] = [
-  { label: "Rolling restart" },
-  { label: "Rolling upgrade…" },
-  { label: "Stop all" },
-  { label: "Start all" },
-  { label: "Rotate root credentials" },
-  { label: "Add new pool…" },
-  { label: "Configure SSH credentials", kind: "navigate" },
-  { label: "Remove cluster definition", danger: true },
-];
-
-const HOST_ACTIONS = [
-  "Systemctl restart service",
-  "Redeploy software",
-  "Reboot host",
-  "Shut down host",
-];
+interface ActiveOp {
+  op: OperationDef;
+  targetHostIds?: string[];
+  scopeLabel?: string;
+}
 
 export function ClusterDetailLayout() {
   const { clusterId } = useParams();
@@ -348,31 +333,19 @@ export function ClusterDetailLayout() {
     window.addEventListener("mousedown", onMouseDown);
     return () => window.removeEventListener("mousedown", onMouseDown);
   }, [actionsOpen]);
-  const recordAction = (display: string, target: string) => {
-    recordHistory({
-      kind: "ui_action",
-      display,
-      target,
-      status: "succeeded",
-      durationSec: 1,
-    });
-    qc.invalidateQueries({ queryKey: ["history"] });
-  };
-  const runClusterAction = (label: string) => {
-    if (!cluster) return;
-    setActionsOpen(false);
-    recordAction(`${label} on ${cluster.name}`, cluster.id);
-  };
-  const runHostAction = (label: string) => {
+  const [activeOp, setActiveOp] = useState<ActiveOp | null>(null);
+  const runHostAction = (op: OperationDef) => {
     if (!cluster || selected.size === 0) return;
-    const hosts = (nodes ?? [])
-      .filter((n) => selected.has(n.id))
-      .map((n) => n.hostname);
-    recordAction(
-      `${label} on ${hosts.length === 1 ? hosts[0] : `${hosts.length} hosts`} (${cluster.name})`,
-      cluster.id,
-    );
-    setSelected(new Set());
+    const selectedNodes = (nodes ?? []).filter((n) => selected.has(n.id));
+    const scopeLabel =
+      selectedNodes.length === 1
+        ? `on ${selectedNodes[0].hostname}`
+        : `on ${selectedNodes.length} hosts`;
+    setActiveOp({
+      op,
+      targetHostIds: selectedNodes.map((n) => n.id),
+      scopeLabel,
+    });
   };
 
   if (isLoading) return <p className="muted">Loading cluster…</p>;
@@ -411,10 +384,6 @@ export function ClusterDetailLayout() {
           <h1 className="cdetail__name">
             {cluster.name}
             {clusterHealthPill(cluster)}
-            {cluster.status === "migrating" && (
-              <Pill tone="warning">Migrating</Pill>
-            )}
-            {cluster.status === "draft" && <Pill tone="neutral">Draft</Pill>}
           </h1>
           <p className="muted cdetail__meta">
             {cluster.version} · {cluster.nodeCount} nodes · {cluster.poolCount} pool ·
@@ -449,29 +418,18 @@ export function ClusterDetailLayout() {
               aria-haspopup="menu"
               aria-expanded={actionsOpen}
             >
-              Actions ▾
+              Cluster Actions ▾
             </button>
             {actionsOpen && (
-              <div className="cdetail__menu" role="menu">
-                {CLUSTER_ACTIONS.map((a) => (
-                  <button
-                    key={a.label}
-                    className={
-                      "cdetail__menu-item" + (a.danger ? " is-danger" : "")
-                    }
-                    onClick={() => {
-                      if (a.kind === "navigate") {
-                        setActionsOpen(false);
-                        navigate(`/clusters/${cluster.id}/settings`);
-                      } else {
-                        runClusterAction(a.label);
-                      }
-                    }}
-                    role="menuitem"
-                  >
-                    {a.label}
-                  </button>
-                ))}
+              <div className="cdetail__menu cdetail__menu--wide" role="menu">
+                {renderActionsMenu(cluster, (op) => {
+                  setActionsOpen(false);
+                  if (op.flavor === "navigate" && op.navigateTo) {
+                    navigate(op.navigateTo(cluster));
+                    return;
+                  }
+                  setActiveOp({ op });
+                })}
               </div>
             )}
           </div>
@@ -601,15 +559,15 @@ export function ClusterDetailLayout() {
           )}
           <div className="grow" />
           <div className="hstack" style={{ flexWrap: "wrap" }}>
-            {HOST_ACTIONS.map((a) => (
+            {BULK_HOST_OPERATIONS.map((op) => (
               <button
-                key={a}
-                className="btn btn--sm"
-                onClick={() => runHostAction(a)}
+                key={op.id}
+                className={"btn btn--sm" + (op.danger ? " btn--danger-ghost" : "")}
+                onClick={() => runHostAction(op)}
                 disabled={!hostActionsEnabled}
                 title={hostActionsHint ?? undefined}
               >
-                {a}
+                {op.label.replace(/…$/, "")}
               </button>
             ))}
           </div>
@@ -836,8 +794,75 @@ export function ClusterDetailLayout() {
           </table>
         </div>
       </div>
+
+      {activeOp && (
+        <OperationModal
+          def={activeOp.op}
+          cluster={cluster}
+          targetHostIds={activeOp.targetHostIds}
+          scopeLabel={activeOp.scopeLabel}
+          onClose={(result) => {
+            const finishedOp = activeOp.op;
+            const wasBulk = !!activeOp.targetHostIds;
+            setActiveOp(null);
+            // Cluster state may have mutated (freeze, remove, etc.).
+            qc.invalidateQueries({ queryKey: ["cluster", cluster.id] });
+            qc.invalidateQueries({ queryKey: ["clusters"] });
+            qc.invalidateQueries({ queryKey: ["history"] });
+            // Clear the row selection after a successful bulk run so
+            // the operator isn't sitting with stale checkboxes.
+            if (wasBulk && result === "success") setSelected(new Set());
+            // Remove-cluster mutates the list itself; navigate away if
+            // this cluster no longer exists.
+            if (finishedOp.id === "remove_cluster") {
+              navigate("/clusters");
+            }
+          }}
+        />
+      )}
     </section>
   );
+}
+
+// Renders the Cluster Actions menu, grouped by transport (admin /
+// ssh / manager). Filters out items hidden by their `visible`
+// predicate.
+function renderActionsMenu(
+  cluster: Cluster,
+  onPick: (op: OperationDef) => void,
+) {
+  const visible = CLUSTER_OPERATIONS.filter(
+    (o) => o.visible?.(cluster) ?? true,
+  );
+  const groups: OperationDef["group"][] = ["admin", "ssh", "manager"];
+  return groups.flatMap((g) => {
+    const items = visible.filter((o) => o.group === g);
+    if (items.length === 0) return [];
+    return [
+      <div key={`g-${g}`} className="cdetail__menu-group">
+        {GROUP_LABELS[g]}
+      </div>,
+      ...items.map((op) => (
+        <button
+          key={op.id}
+          className={
+            "cdetail__menu-item cdetail__menu-item--stacked" +
+            (op.danger ? " is-danger" : "")
+          }
+          onClick={() => onPick(op)}
+          role="menuitem"
+        >
+          <div>{op.dynamicLabel ? op.dynamicLabel(cluster) : op.label}</div>
+          <div
+            className="subtle"
+            style={{ fontSize: "var(--fs-xs)", fontWeight: 400 }}
+          >
+            {op.description}
+          </div>
+        </button>
+      )),
+    ];
+  });
 }
 
 function formatUptime(sec: number): string {

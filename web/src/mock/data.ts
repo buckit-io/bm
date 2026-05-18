@@ -2,7 +2,6 @@
 // matches the domain shapes the backend will eventually serve. The
 // types defined here become the contract derived in UI-P7.
 
-export type ClusterStatus = "active" | "draft" | "migrating" | "failed";
 export type Health = "healthy" | "degraded" | "critical" | "unknown";
 export type TaskState =
   | "pending"
@@ -38,7 +37,6 @@ export interface Cluster {
   description?: string;
   engine: ClusterEngine;
   version: string;
-  status: ClusterStatus;
   health: Health;
   healthSummary: HealthSummary | null;
   nodeCount: number;
@@ -57,6 +55,9 @@ export interface Cluster {
   // Whether SSH credentials have been set up for this cluster. Host-level
   // actions (reboot, redeploy, restart unit) are only enabled when true.
   sshConfigured: boolean;
+  // Whether the cluster is currently in `mc admin service freeze` state.
+  // Reads continue; writes are blocked at the S3 API.
+  apiFrozen: boolean;
   lastActivityAt: string;
   createdAt: string;
   migratedFrom?: { product: "minio"; version: string; finalizedAt: string };
@@ -285,12 +286,12 @@ export const clusters: Cluster[] = [
     description: "Customer-facing production",
     engine: "buckit",
     version: "v1.0.0",
-    status: "active",
     health: "unknown", // overwritten by computeAndApplyHealth below
     healthSummary: null,
     lastFetchedAt: secondsAgo(14),
     unreachableSince: null,
     sshConfigured: true,
+    apiFrozen: false,
     nodeCount: 14,
     poolCount: 3,
     driveCount: 168,
@@ -306,12 +307,12 @@ export const clusters: Cluster[] = [
     name: "staging",
     engine: "buckit",
     version: "v1.0.0",
-    status: "active",
     health: "unknown", // overwritten by computeAndApplyHealth below
     healthSummary: null,
     lastFetchedAt: secondsAgo(26),
     unreachableSince: null,
     sshConfigured: true,
+    apiFrozen: false,
     nodeCount: 4,
     poolCount: 1,
     driveCount: 48,
@@ -323,37 +324,16 @@ export const clusters: Cluster[] = [
     createdAt: daysAgo(30),
   },
   {
-    id: "prod-west-new",
-    name: "prod-west-new",
-    engine: "buckit",
-    version: "—",
-    status: "draft",
-    health: "unknown",
-    healthSummary: null,
-    lastFetchedAt: null,
-    unreachableSince: null,
-    sshConfigured: true,
-    nodeCount: 0,
-    poolCount: 0,
-    driveCount: 0,
-    parity: 0,
-    usableBytes: 0,
-    rawBytes: 0,
-    usedBytes: 0,
-    lastActivityAt: minutesAgo(5),
-    createdAt: minutesAgo(20),
-  },
-  {
     id: "legacy-migrate",
     name: "legacy-migrate",
     engine: "buckit",
     version: "v1.0.0",
-    status: "migrating",
     health: "unknown", // overwritten by computeAndApplyHealth below
     healthSummary: null,
     lastFetchedAt: secondsAgo(8),
     unreachableSince: null,
     sshConfigured: true,
+    apiFrozen: false,
     nodeCount: 8,
     poolCount: 1,
     driveCount: 96,
@@ -375,12 +355,12 @@ export const clusters: Cluster[] = [
     description: "Imported MinIO cluster, awaiting migration",
     engine: "minio",
     version: "RELEASE.2024-10-13T13-34-11Z",
-    status: "active",
     health: "unknown", // overwritten by computeAndApplyHealth below
     healthSummary: null,
     lastFetchedAt: secondsAgo(45),
     unreachableSince: null,
     sshConfigured: false,
+    apiFrozen: false,
     nodeCount: 4,
     poolCount: 1,
     driveCount: 16,
@@ -396,7 +376,6 @@ export const clusters: Cluster[] = [
 export const nodesByCluster: Record<string, Node[]> = {
   "prod-east": makeNodes("prod-east", [6, 4, 4]),
   staging: makeNodes("staging", [4]),
-  "prod-west-new": [],
   "legacy-migrate": makeNodes("legacy-migrate", [8], "legacy-node"),
   "legacy-east": makeNodes("legacy-east", [4], "legacy-east"),
 };
@@ -486,18 +465,6 @@ export const tasks: Task[] = [
     ],
     failureNote: "node3: SSH timeout",
     retryable: true,
-  },
-  {
-    id: "task-discover-1",
-    name: "Discover nodes",
-    kind: "discovery",
-    clusterId: "prod-west-new",
-    clusterName: "prod-west-new",
-    state: "canceled",
-    triggeredBy: "admin",
-    startedAt: daysAgo(1),
-    durationSec: 45,
-    steps: [step("probe", "SSH probe", "canceled", 45)],
   },
 ];
 
@@ -635,7 +602,6 @@ export function computeHealthSummary(
 //       long-running op in flight
 //   - everything else is "healthy"
 export function computeHealth(cluster: Cluster, s: HealthSummary): Health {
-  if (cluster.status === "draft") return "unknown";
   if (s.nodes.total === 0) return "unknown";
   if (s.drives.failed > cluster.parity) return "critical";
   if (s.nodes.offline > cluster.parity) return "critical";

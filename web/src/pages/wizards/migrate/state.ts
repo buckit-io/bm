@@ -1,5 +1,5 @@
 // Migration draft state. Mirrors new-cluster shape where applicable, plus
-// MinIO-specific snapshot, plan, cutover, verify and finalize substates.
+// MinIO-specific snapshot, plan, cutover, and verify substates.
 
 import {
   DiscoveredDrive,
@@ -20,11 +20,16 @@ export type {
 };
 
 export interface MigrationDraft {
+  // The imported MinIO cluster being migrated. The wizard is entered
+  // via /clusters/migrate?from=<id> from the cluster detail page; this
+  // is the id of that source record. Name/hosts are seeded from the
+  // same record at mount time.
+  sourceClusterId: string;
   name: string;
   description: string;
+  // Buckit version to install. Chosen on the Plan step.
   version: string;
 
-  importAlias?: string;
   hosts: HostRow[];
   ssh: SshCreds;
 
@@ -36,7 +41,6 @@ export interface MigrationDraft {
   preflight: PreflightResult[];
   cutover: CutoverState;
   verify: VerifyResult | null;
-  finalized: boolean;
 }
 
 export interface MinioNodeInfo {
@@ -68,7 +72,6 @@ export interface MinioSnapshot {
 
 export interface MigrationPlan {
   installMethod: "dnf" | "apt" | "apk" | "tarball";
-  concurrency: "sequential" | "two_at_a_time";
   estimatedDowntimeSec: number;
   estimatedTotalSec: number;
   ack: boolean;
@@ -111,22 +114,21 @@ export interface VerifyResult {
   smokeOk: boolean;
 }
 
-export function emptyMigration(): MigrationDraft {
+export function emptyMigration(
+  source: { id: string; name: string; description?: string; hosts: HostRow[] },
+): MigrationDraft {
   return {
-    name: "legacy-east",
-    description: "",
+    sourceClusterId: source.id,
+    name: source.name,
+    description: source.description ?? "",
     version: "v1.0.0",
-    hosts: [
-      { id: "m1", hostname: "", port: 22, probe: "idle" },
-      { id: "m2", hostname: "", port: 22, probe: "idle" },
-    ],
-    ssh: { authMethod: "agent", user: "buckit", sudo: true },
+    hosts: source.hosts,
+    ssh: { authMethod: "agent", user: "", sudo: true },
     discovery: {},
     minioDetection: {},
     snapshot: null,
     plan: {
       installMethod: "dnf",
-      concurrency: "sequential",
       estimatedDowntimeSec: 60,
       estimatedTotalSec: 720,
       ack: false,
@@ -134,18 +136,11 @@ export function emptyMigration(): MigrationDraft {
     preflight: [],
     cutover: { perNode: {}, overallNodesDone: 0, paused: false },
     verify: null,
-    finalized: false,
   };
 }
 
 export const STEPS = [
-  { id: "basics", label: "Basics" },
-  { id: "nodes", label: "Nodes" },
-  { id: "discover", label: "Discover" },
-  { id: "snapshot", label: "Snapshot" },
-  { id: "plan", label: "Plan" },
-  { id: "preflight", label: "Preflight" },
-  { id: "cutover", label: "Cutover" },
-  { id: "verify", label: "Verify" },
-  { id: "finalize", label: "Finalize" },
+  { id: "ssh", label: "SSH credentials" },
+  { id: "review", label: "Preflight Check" },
+  { id: "migrate", label: "Migrate" },
 ];

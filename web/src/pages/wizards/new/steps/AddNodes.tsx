@@ -1,9 +1,34 @@
 import { useState } from "react";
-import { HostRow, NewClusterDraft, SshOverrides } from "../state";
+import { HostRow, NewClusterDraft, SshCreds, SshOverrides } from "../state";
 import { Pill } from "../../../../components/Pill";
 import { expandHostPattern } from "./hostExpansion";
 import { detectHostnamePattern } from "./hostnamePattern";
 import { SshOverrideFields } from "../../shared/SshOverrideFields";
+
+const AUTH_OPTIONS: {
+  value: SshCreds["authMethod"];
+  label: string;
+  hint: string;
+}[] = [
+  {
+    value: "agent",
+    label: "Use SSH agent",
+    hint:
+      "Run ssh-add to load your keys into ssh-agent; Buckit Manager will authenticate through the agent.",
+  },
+  {
+    value: "key",
+    label: "Use key file",
+    hint:
+      "Point Buckit Manager at a private key file on disk. Typically ~/.ssh/id_ed25519 or ~/.ssh/id_rsa.",
+  },
+  {
+    value: "password",
+    label: "Password",
+    hint:
+      "Authenticate with an SSH password. Most production servers disable this — use only for legacy hosts.",
+  },
+];
 
 interface Props {
   draft: NewClusterDraft;
@@ -252,15 +277,30 @@ export function AddNodes({ draft, update }: Props) {
 
       <div className="card vstack" style={{ gap: "var(--s-3)" }}>
         <h3 className="card-stat__title">Default SSH credentials</h3>
-        <div className="hstack" style={{ flexWrap: "wrap", gap: "var(--s-4)" }}>
-          {(["agent", "key", "password"] as const).map((m) => (
-            <label key={m} className="hstack" style={{ gap: 6 }}>
+        <div className="vstack" style={{ gap: "var(--s-2)" }}>
+          {AUTH_OPTIONS.map((opt) => (
+            <label
+              key={opt.value}
+              className="hstack"
+              style={{ gap: "var(--s-2)", alignItems: "flex-start" }}
+            >
               <input
                 type="radio"
-                checked={draft.ssh.authMethod === m}
-                onChange={() => update({ ssh: { ...draft.ssh, authMethod: m } })}
+                checked={draft.ssh.authMethod === opt.value}
+                onChange={() =>
+                  update({ ssh: { ...draft.ssh, authMethod: opt.value } })
+                }
+                style={{ marginTop: 4 }}
               />
-              {m === "agent" ? "Use SSH agent" : m === "key" ? "Use key file" : "Password"}
+              <div className="vstack" style={{ gap: 2 }}>
+                <span>{opt.label}</span>
+                <span
+                  className="subtle"
+                  style={{ fontSize: "var(--fs-xs)" }}
+                >
+                  {opt.hint}
+                </span>
+              </div>
             </label>
           ))}
         </div>
@@ -276,12 +316,8 @@ export function AddNodes({ draft, update }: Props) {
                 onChange={(e) =>
                   update({ ssh: { ...draft.ssh, keyPath: e.target.value } })
                 }
-                placeholder="~/.ssh/id_ed25519"
+                placeholder="~/.ssh/id_ed25519 or ~/.ssh/id_rsa"
               />
-              <span className="field-hint">
-                Path the bm process can read. Same key you'd pass to{" "}
-                <span className="mono">ssh -i</span>.
-              </span>
             </div>
             <div className="field" style={{ minWidth: 200 }}>
               <label className="field-label" htmlFor="key-pass">
@@ -324,13 +360,30 @@ export function AddNodes({ draft, update }: Props) {
               className="input"
               value={draft.ssh.user}
               onChange={(e) => update({ ssh: { ...draft.ssh, user: e.target.value } })}
+              placeholder="buckit"
             />
           </div>
-          <label className="hstack" style={{ gap: 6, alignSelf: "flex-end", paddingBottom: 6 }}>
+          <label
+            className="hstack"
+            style={{
+              gap: 6,
+              alignSelf: "flex-end",
+              paddingBottom: 6,
+              opacity: draft.ssh.user.trim() === "root" ? 0.55 : 1,
+            }}
+            title={
+              draft.ssh.user.trim() === "root"
+                ? "Not needed when connecting as root."
+                : undefined
+            }
+          >
             <input
               type="checkbox"
-              checked={draft.ssh.sudo}
-              onChange={(e) => update({ ssh: { ...draft.ssh, sudo: e.target.checked } })}
+              checked={draft.ssh.user.trim() === "root" ? false : draft.ssh.sudo}
+              disabled={draft.ssh.user.trim() === "root"}
+              onChange={(e) =>
+                update({ ssh: { ...draft.ssh, sudo: e.target.checked } })
+              }
             />
             Use sudo (passwordless)
           </label>
@@ -339,7 +392,7 @@ export function AddNodes({ draft, update }: Props) {
 
       <div>
         <button className="btn" onClick={probeAll}>
-          Probe reachability
+          Test SSH connection
         </button>
       </div>
 

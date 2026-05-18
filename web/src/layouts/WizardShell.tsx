@@ -56,13 +56,15 @@ export function WizardShell({
           </button>
         )}
         <div className="grow" />
-        <button
-          className="btn btn--primary"
-          onClick={onNext}
-          disabled={nextDisabled}
-        >
-          {nextLabel}
-        </button>
+        {onNext && (
+          <button
+            className="btn btn--primary"
+            onClick={onNext}
+            disabled={nextDisabled}
+          >
+            {nextLabel}
+          </button>
+        )}
       </footer>
     </div>
   );

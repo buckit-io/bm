@@ -1,42 +1,49 @@
-import { useEffect, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCluster, useNode } from "../../api/hooks";
 import { Pill } from "../../components/Pill";
 import { formatBytes, formatDuration } from "../../mock/data";
-import { recordHistory } from "../../mock/api";
+import { OperationDef } from "./operations/defs";
+import { OperationModal } from "./operations/OperationModal";
+import {
+  NODE_OPERATIONS,
+  NODE_GROUP_LABELS,
+} from "./operations/nodeCatalog";
 
-type NodeAction =
-  | { kind: "group"; label: string }
-  | {
-      kind: "item";
-      label: string;
-      requires?: "ssh" | "api";
-    };
+// Ops grouped by NODE_GROUP_LABELS for menu rendering; preserves the
+// catalog's declared order.
+function groupedNodeOps(): { group: string; ops: OperationDef[] }[] {
+  const groups: { group: string; ops: OperationDef[] }[] = [];
+  for (const op of NODE_OPERATIONS) {
+    let bucket = groups.find((g) => g.group === op.group);
+    if (!bucket) {
+      bucket = { group: op.group, ops: [] };
+      groups.push(bucket);
+    }
+    bucket.ops.push(op);
+  }
+  return groups;
+}
 
-const NODE_ACTIONS: NodeAction[] = [
-  { kind: "group", label: "Service" },
-  { kind: "item", label: "Systemctl restart service", requires: "ssh" },
-  { kind: "item", label: "Systemctl stop service", requires: "ssh" },
-  { kind: "item", label: "Systemctl start service", requires: "ssh" },
-  { kind: "group", label: "Software" },
-  { kind: "item", label: "Redeploy software…", requires: "ssh" },
-  { kind: "group", label: "Diagnostics" },
-  { kind: "item", label: "View live logs", requires: "api" },
-  { kind: "item", label: "Run trace", requires: "api" },
-  { kind: "group", label: "Host" },
-  { kind: "item", label: "Reboot host…", requires: "ssh" },
-  { kind: "item", label: "Shut down host…", requires: "ssh" },
-];
+// Per-op gating: SSH-flavored ops need cluster.sshConfigured; API-
+// flavored ops (logs/trace navigate) need this node's API to be up.
+function opRequires(op: OperationDef): "ssh" | "api" | undefined {
+  if (op.flavor === "navigate") return "api";
+  return "ssh";
+}
 
 export function NodeDetail() {
   const { clusterId, nodeId } = useParams();
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const { data: cluster } = useCluster(clusterId);
   const { data: node, isLoading } = useNode(clusterId, nodeId);
 
   const [actionsOpen, setActionsOpen] = useState(false);
+  const [activeOp, setActiveOp] = useState<OperationDef | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const groups = useMemo(() => groupedNodeOps(), []);
 
   useEffect(() => {
     if (!actionsOpen) return;
@@ -57,27 +64,28 @@ export function NodeDetail() {
   const sshOk = cluster?.sshConfigured ?? false;
   const apiOk = node.apiAccessible;
 
-  const isDisabled = (a: Extract<NodeAction, { kind: "item" }>) =>
-    (a.requires === "ssh" && !sshOk) || (a.requires === "api" && !apiOk);
+  const isDisabled = (op: OperationDef) => {
+    const r = opRequires(op);
+    return (r === "ssh" && !sshOk) || (r === "api" && !apiOk);
+  };
 
-  const disabledHint = (a: Extract<NodeAction, { kind: "item" }>) =>
-    a.requires === "ssh" && !sshOk
+  const disabledHint = (op: OperationDef) => {
+    const r = opRequires(op);
+    return r === "ssh" && !sshOk
       ? "SSH is not configured for this cluster."
-      : a.requires === "api" && !apiOk
+      : r === "api" && !apiOk
         ? "S3 API is not reachable on this node."
         : undefined;
+  };
 
-  const runAction = (label: string) => {
+  const onPick = (op: OperationDef) => {
     if (!cluster) return;
     setActionsOpen(false);
-    recordHistory({
-      kind: "ui_action",
-      display: `${label} on ${node.hostname} (${cluster.name})`,
-      target: cluster.id,
-      status: "succeeded",
-      durationSec: 1,
-    });
-    qc.invalidateQueries({ queryKey: ["history"] });
+    if (op.flavor === "navigate" && op.navigateTo) {
+      navigate(op.navigateTo(cluster, { nodeId: node.id }));
+      return;
+    }
+    setActiveOp(op);
   };
 
   return (
@@ -107,25 +115,35 @@ export function NodeDetail() {
             Actions ▾
           </button>
           {actionsOpen && (
-            <div className="cdetail__menu" role="menu">
-              {NODE_ACTIONS.map((a, i) =>
-                a.kind === "group" ? (
-                  <div key={`g-${i}`} className="cdetail__menu-group">
-                    {a.label}
+            <div className="cdetail__menu cdetail__menu--wide" role="menu">
+              {groups.map(({ group, ops }) => (
+                <div key={group}>
+                  <div className="cdetail__menu-group">
+                    {NODE_GROUP_LABELS[group] ?? group}
                   </div>
-                ) : (
-                  <button
-                    key={a.label}
-                    className="cdetail__menu-item"
-                    onClick={() => runAction(a.label)}
-                    disabled={isDisabled(a)}
-                    title={disabledHint(a)}
-                    role="menuitem"
-                  >
-                    {a.label}
-                  </button>
-                ),
-              )}
+                  {ops.map((op) => (
+                    <button
+                      key={op.id}
+                      className={
+                        "cdetail__menu-item cdetail__menu-item--stacked" +
+                        (op.danger ? " is-danger" : "")
+                      }
+                      onClick={() => onPick(op)}
+                      disabled={isDisabled(op)}
+                      title={disabledHint(op)}
+                      role="menuitem"
+                    >
+                      <span>{op.label}</span>
+                      <span
+                        className="subtle"
+                        style={{ fontSize: "var(--fs-xs)" }}
+                      >
+                        {op.description}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -249,6 +267,21 @@ export function NodeDetail() {
           </tbody>
         </table>
       </div>
+
+      {activeOp && cluster && (
+        <OperationModal
+          def={activeOp}
+          cluster={cluster}
+          targetHostIds={[node.id]}
+          scopeLabel={`on ${node.hostname}`}
+          onClose={() => {
+            setActiveOp(null);
+            qc.invalidateQueries({ queryKey: ["node", clusterId, nodeId] });
+            qc.invalidateQueries({ queryKey: ["cluster", clusterId] });
+            qc.invalidateQueries({ queryKey: ["history"] });
+          }}
+        />
+      )}
     </section>
   );
 }
