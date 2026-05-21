@@ -37,7 +37,8 @@ const SYSTEM_MOUNT_PREFIXES = [
 export function isEligibleMount(d: DiscoveredDrive): boolean {
   if (d.isBoot) return false;
   if (!d.mount) return false;
-  if (!d.fsType) return false;
+  // A drive with a mountpoint is clearly formatted even if fsType wasn't
+  // detected (e.g. loop devices where lsblk doesn't report fstype).
   if (SYSTEM_MOUNT_PREFIXES.includes(d.mount)) return false;
   return true;
 }

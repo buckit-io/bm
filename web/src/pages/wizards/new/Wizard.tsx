@@ -12,6 +12,11 @@ import { Review } from "./steps/Review";
 import { Deploy } from "./steps/Deploy";
 import { Done } from "./steps/Done";
 
+function clusterRouteForDraft(draft: NewClusterDraft): string {
+  const slug = draft.done.clusterId || draft.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "cluster";
+  return `/clusters/${encodeURIComponent(slug)}`;
+}
+
 export function NewClusterWizard() {
   const navigate = useNavigate();
   const [draft, setDraft] = useState<NewClusterDraft>(() => emptyDraft());
@@ -44,8 +49,11 @@ export function NewClusterWizard() {
       if (p === c) return true;
       return false;
     }
-    if (index === 1)
-      return draft.hosts.filter((h) => h.hostname.trim()).length < 1;
+    if (index === 1) {
+      const enteredHosts = draft.hosts.filter((h) => h.hostname.trim());
+      if (enteredHosts.length < 1) return true;
+      return enteredHosts.some((h) => h.probe !== "reachable");
+    }
     if (index === 3) return topologyErrors(draft).length > 0;
     if (index === 4) {
       // Block on any blocking-severity preflight failure. Advisory
@@ -71,7 +79,7 @@ export function NewClusterWizard() {
       case 4: return <Preflight draft={draft} update={update} />;
       case 5: return <Review draft={draft} />;
       case 6: return <Deploy draft={draft} update={update} />;
-      case 7: return <Done draft={draft} update={update} onFinish={() => navigate("/clusters/prod-east")} />;
+      case 7: return <Done draft={draft} update={update} onFinish={() => navigate(clusterRouteForDraft(draft))} />;
       default: return null;
     }
   })();

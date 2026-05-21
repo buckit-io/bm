@@ -270,17 +270,24 @@
 .cdetail__filter-row th {
   text-transform: none;
   letter-spacing: 0;
-  padding: var(--s-1) var(--s-2);
+  padding: 6px var(--s-2);
   background: var(--c-surface);
   border-bottom: 1px solid var(--c-border);
 }
 
-.input--xs {
-  height: 26px;
-  padding: 0 var(--s-2);
-  font-size: var(--fs-xs);
-  border-radius: var(--r-sm);
+.cdetail__filter-row .input.input--xs,
+.cdetail__filter-row .select.input--xs {
+  height: 22px;
+  min-height: 22px;
+  padding: 0 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 20px;
   width: 100%;
+}
+
+.cdetail__filter-row .select.input--xs {
+  padding-right: 22px;
 }
 
 /* ── nodes table ────────────────────────────────────────────────── */

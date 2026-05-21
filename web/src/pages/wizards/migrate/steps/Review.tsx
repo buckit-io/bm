@@ -1,29 +1,34 @@
-// Preflight Check step. Runs three orchestrated phases:
-//   1. Capturing pre-migration snapshot (per-host SSH discover + mc admin
-//      info snapshot rolled into one phase from the operator's POV)
-//   2. Running preflight checks
-//   3. Generating migration plan
+// Preflight Check step. Runs two orchestrated phases against the real
+// backend, plus a static plan summary:
+//
+//   1. POST /clusters/:id/migrate/snapshot — captures pre-migration
+//      state to an on-disk JSON file. The cutover step reads this back.
+//   2. POST /clusters/:id/migrate/preflight — runs the migration check
+//      catalog (minio detected, mc-compatible version, drives ready,
+//      space available, /etc/default writable, etc.).
+//   3. Plan — static text describing the per-host cutover sequence.
 //
 // Each phase shows its detail inline beneath the phase row when done.
 
 import { useEffect, useRef, useState } from "react";
 import {
-  DiscoveredDrive,
-  DiscoveryResult,
   MigrationDraft,
-  MinioNodeInfo,
   MinioSnapshot,
   PreflightResult,
 } from "../state";
 import { Pill } from "../../../../components/Pill";
-import { formatDuration } from "../../../../mock/data";
+import { formatDuration } from "../../../../lib/format";
+import {
+  migratePreflight,
+  migrateSnapshot,
+} from "../../../../api/client";
 
 interface Props {
   draft: MigrationDraft;
   update: (patch: Partial<MigrationDraft>) => void;
 }
 
-type PhaseState = "pending" | "running" | "done";
+type PhaseState = "pending" | "running" | "done" | "failed";
 type PhaseId = "snapshot" | "preflight" | "plan";
 
 interface PhaseRow {
@@ -32,89 +37,6 @@ interface PhaseRow {
   state: PhaseState;
   detail?: string;
 }
-
-const TiB = 1024 ** 4;
-
-// ── mock data ────────────────────────────────────────────────────
-
-const SNAPSHOT: MinioSnapshot = {
-  buckets: 142,
-  largestBucket: { name: "logs-archive", size: "412 TiB" },
-  versioning: 38,
-  lifecycle: 21,
-  objectLock: 4,
-  users: 17,
-  groups: 3,
-  customPolicies: 11,
-  serviceAccounts: 42,
-  policies: 57,
-  notifications: 9,
-  replicationTargets: 3,
-  warnings: [
-    "This cluster replicates to external targets. Buckit will preserve the configuration; the targets must remain reachable post-migration.",
-  ],
-};
-
-const PREFLIGHT_CHECKS: Omit<PreflightResult, "result">[] = [
-  { id: "ssh", label: "SSH reachability", severity: "blocking" },
-  { id: "sudo", label: "Sudo (passwordless)", severity: "blocking" },
-  { id: "time", label: "Time sync (skew < 1s)", severity: "advisory" },
-  { id: "admin", label: "MinIO admin API reachable on all nodes", severity: "blocking" },
-  {
-    id: "healthy",
-    label: "Current MinIO cluster healthy",
-    severity: "blocking",
-    detail:
-      "All nodes online, no in-flight heal / decommission / rebalance. Failed drives within parity tolerance are OK — Buckit will heal them after cutover.",
-  },
-  { id: "xl", label: "xl.meta format version compatible", severity: "blocking" },
-  { id: "minio_sys", label: ".minio.sys/ readable on all drives", severity: "blocking" },
-  { id: "env", label: "/etc/default/minio present and readable", severity: "blocking" },
-  { id: "pkg", label: "Package manager available (dnf)", severity: "blocking" },
-  { id: "rpm", label: "buckit-1.0.0.rpm reachable", severity: "blocking" },
-  {
-    id: "minio_pkg",
-    label: "minio installed via package manager",
-    severity: "advisory",
-    detail: "Kept installed alongside Buckit to enable rollback at any time.",
-  },
-  {
-    id: "no_conflict",
-    label: "No package conflicts (minio ↔ buckit)",
-    severity: "blocking",
-    detail: "Verified buckit package does not claim /etc/default/minio",
-  },
-  { id: "root_creds", label: "Root credentials valid", severity: "blocking" },
-  {
-    id: "no_admin_ops",
-    label: "No in-flight admin operations",
-    severity: "blocking",
-    detail: "No active healing, decommission, or rebalance jobs",
-  },
-];
-
-function mockDrives(): DiscoveredDrive[] {
-  const drives: DiscoveredDrive[] = [
-    {
-      device: "/dev/nvme0n1",
-      mount: "/",
-      sizeBytes: 256 * 1024 ** 3,
-      fsType: "ext4",
-      isBoot: true,
-    },
-  ];
-  for (let i = 1; i <= 12; i++) {
-    drives.push({
-      device: `/dev/sd${String.fromCharCode(96 + i)}`,
-      mount: `/data/disk${i}`,
-      sizeBytes: 16 * TiB,
-      fsType: "xfs",
-    });
-  }
-  return drives;
-}
-
-// ── component ─────────────────────────────────────────────────────
 
 export function Review({ draft, update }: Props) {
   const hosts = draft.hosts.filter((h) => h.hostname.trim());
@@ -132,111 +54,107 @@ export function Review({ draft, update }: Props) {
       rows.map((r) => (r.id === id ? { ...r, ...patch } : r)),
     );
 
-  const runPreflight = (onComplete?: () => void) => {
+  // runPreflight POSTs the migrate-preflight catalog and stores the
+  // typed PreflightResult[] on the draft. The backend writes a history
+  // row per call so the operator can audit when this last ran.
+  const runPreflight = async (
+    onComplete?: (failures: number) => void,
+  ): Promise<void> => {
     setPhase("preflight", { state: "running", detail: undefined });
-    let i = 0;
-    const out: PreflightResult[] = [];
     update({ preflight: [] });
-    const tick = () => {
-      if (i >= PREFLIGHT_CHECKS.length) {
-        const blocking = out.filter(
-          (p) => p.severity === "blocking" && p.result === "fail",
-        ).length;
-        const warns = out.filter(
-          (p) =>
-            (p.severity === "advisory" && p.result === "warn") ||
-            p.result === "warn",
-        ).length;
-        setPhase("preflight", {
-          state: "done",
-          detail: blocking
-            ? `${blocking} blocking ${blocking === 1 ? "failure" : "failures"}`
-            : warns
-              ? `${PREFLIGHT_CHECKS.length} checks · ${warns} advisory`
-              : `${PREFLIGHT_CHECKS.length} checks passed`,
-        });
-        onComplete?.();
-        return;
-      }
-      out.push({ ...PREFLIGHT_CHECKS[i], result: "pass" });
-      update({ preflight: [...out] });
-      i++;
-      setTimeout(tick, 100);
-    };
-    tick();
+    try {
+      const rows = await migratePreflight(draft.sourceClusterId, {
+        // The backend hydrates hosts from the cluster's node list, so
+        // the body is mostly informational. We pass discovery here in
+        // case the backend uses it for arch/os uniformity checks.
+        ssh: draft.ssh,
+        hosts: hosts.map((h) => ({
+          id: h.id,
+          hostname: h.hostname,
+          port: h.port || 22,
+          probe: h.probe,
+          sshOverride: h.sshOverride,
+        })),
+      });
+      const list = rows as unknown as PreflightResult[];
+      update({ preflight: list });
+      const blocking = list.filter(
+        (p) => p.severity === "blocking" && p.result === "fail",
+      ).length;
+      const warns = list.filter(
+        (p) => p.result === "warn",
+      ).length;
+      setPhase("preflight", {
+        state: "done",
+        detail: blocking
+          ? `${blocking} blocking ${blocking === 1 ? "failure" : "failures"}`
+          : warns
+            ? `${list.length} checks · ${warns} advisory`
+            : `${list.length} checks passed`,
+      });
+      onComplete?.(blocking);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Preflight failed.";
+      setPhase("preflight", { state: "failed", detail: message });
+      onComplete?.(0);
+    }
   };
 
   useEffect(() => {
     if (fired.current) return;
     fired.current = true;
 
-    // Phase 1: discover + snapshot combined.
-    setPhase("snapshot", { state: "running" });
-    setTimeout(() => {
-      const discovery: Record<string, DiscoveryResult> = {};
-      const detection: Record<string, MinioNodeInfo> = {};
-      hosts.forEach((h) => {
-        discovery[h.id] = {
-          state: "done",
-          os: "Ubuntu 24.04",
-          arch: "amd64",
-          kernel: "6.8.0-31-generic",
-          cores: 16,
-          ramGiB: 64,
-          drives: mockDrives(),
-          nic: "eno1 / 10 GbE",
-          existingService: "minio",
-          sudoOk: true,
-        };
-        detection[h.id] = {
-          binaryPath: "/usr/local/bin/minio",
-          binaryVersion: "RELEASE.2024-10-13T13-34-11Z",
-          serviceUnit: "minio.service",
-          serviceActive: true,
-          envFile: "/etc/default/minio",
-          minioVolumes: `https://${hosts[0]?.hostname || "node1"}{1...${hosts.length}}:9000/data/disk{1...12}`,
-          minioOpts: "--console-address :9001",
-          detectedPools: `1 pool, ${hosts.length}×12 drives, EC:4`,
-        };
-      });
-      // Stagger snapshot completion so the phase row briefly shows
-      // partial state, then jumps to done.
-      setTimeout(() => {
+    (async () => {
+      // Phase 1: snapshot capture. The backend reads buckets / users /
+      // groups / policies / lifecycle / notifications via admin + S3
+      // and writes the JSON to ~/.config/bm/snapshots/<cluster>-<ts>.json.
+      setPhase("snapshot", { state: "running" });
+      try {
+        const result = await migrateSnapshot(draft.sourceClusterId);
+        // The wire response is { snapshot, summary, path }. The wizard
+        // renders the counts shape (summary), not the full snapshot.
+        const summary = (result as unknown as {
+          summary: MinioSnapshot;
+          path: string;
+        });
         update({
-          discovery,
-          minioDetection: detection,
-          snapshot: SNAPSHOT,
+          snapshot: summary.summary,
+          snapshotPath: summary.path,
         });
         setPhase("snapshot", {
           state: "done",
-          detail: `${hosts.length} hosts · ${SNAPSHOT.buckets} buckets · ${SNAPSHOT.users} users`,
+          detail: `${hosts.length} hosts · ${summary.summary?.buckets ?? 0} buckets · ${summary.summary?.users ?? 0} users`,
         });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Snapshot failed.";
+        setPhase("snapshot", { state: "failed", detail: message });
+        return;
+      }
 
-        // Phase 2: Preflight
-        runPreflight(() => {
-          // Phase 3: Plan — static
-          setPhase("plan", { state: "running" });
-          setTimeout(() => {
-            setPhase("plan", {
-              state: "done",
-              detail: `Rolling, ~90 s per node, ~${formatDuration(hosts.length * 90)} total`,
-            });
-          }, 200);
-        });
-      }, 500);
-    }, 600);
+      // Phase 2: Preflight.
+      await runPreflight((failures) => {
+        // Phase 3: Plan — static.
+        setPhase("plan", { state: "running" });
+        setTimeout(() => {
+          setPhase("plan", {
+            state: "done",
+            detail:
+              failures > 0
+                ? "Plan generated; resolve preflight blockers before cutover"
+                : `Rolling, ~90 s per node, ~${formatDuration(hosts.length * 90)} total`,
+          });
+        }, 100);
+      });
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const onReRunPreflight = () => {
     setReRunningPreflight(true);
-    runPreflight(() => setReRunningPreflight(false));
+    runPreflight().finally(() => setReRunningPreflight(false));
   };
 
   const s = draft.snapshot;
-  const m = Object.values(draft.minioDetection)[0];
-  const sampleDriveCount =
-    Object.values(draft.discovery)[0]?.drives?.filter((d) => !d.isBoot).length ?? 0;
   const blockingFails = draft.preflight.filter(
     (p) => p.severity === "blocking" && p.result === "fail",
   ).length;
@@ -266,37 +184,49 @@ export function Review({ draft, update }: Props) {
       </header>
 
       {/* ── Phase 1: Capturing pre-migration snapshot ─────────────── */}
-      <PhaseRow row={snapshotPhase} />
-      {snapshotPhase.state === "done" && (
+      <PhaseRowView row={snapshotPhase} />
+      {snapshotPhase.state === "done" && s && (
         <div className="card card-stat">
           <div className="card-stat__title">Snapshot</div>
           <div className="card-stat__sub">
-            <b>Hosts</b> {hosts.length} ·{" "}
-            <b>MinIO</b>{" "}
-            <span className="mono">{m?.binaryVersion ?? "—"}</span> ·{" "}
-            <b>Drives / host</b> {sampleDriveCount} ·{" "}
-            <b>Topology</b> {m?.detectedPools ?? "—"}
-          </div>
-          {s && (
-            <>
-              <div className="card-stat__sub">
-                <b>Buckets</b> {s.buckets}{" "}
+            <b>Buckets</b> {s.buckets}
+            {s.largestBucket && (
+              <>
+                {" "}
                 <span className="subtle">
-                  · {s.versioning} versioned · {s.lifecycle} with lifecycle
+                  · largest <span className="mono">{s.largestBucket.name}</span>
+                  {" "}({s.largestBucket.size})
                 </span>
-              </div>
-              <div className="card-stat__sub">
-                <b>IAM</b> {s.users} users · {s.groups} groups ·{" "}
-                {s.customPolicies} policies · {s.serviceAccounts} service
-                accounts
-              </div>
-              <div className="card-stat__sub">
-                <b>Bucket configs</b> {s.policies} policies ·{" "}
-                {s.notifications} notifications · {s.replicationTargets}{" "}
-                replication targets
-              </div>
-            </>
+              </>
+            )}
+          </div>
+          <div className="card-stat__sub">
+            <span className="subtle">
+              {s.versioning} versioned · {s.lifecycle} with lifecycle ·{" "}
+              {s.objectLock} with object-lock
+            </span>
+          </div>
+          <div className="card-stat__sub">
+            <b>IAM</b> {s.users} users · {s.groups} groups ·{" "}
+            {s.customPolicies} custom policies · {s.serviceAccounts} service
+            accounts
+          </div>
+          <div className="card-stat__sub">
+            <b>Bucket configs</b> {s.policies} policies ·{" "}
+            {s.notifications} notifications · {s.replicationTargets}{" "}
+            replication targets
+          </div>
+          {draft.snapshotPath && (
+            <div className="card-stat__sub subtle" style={{ fontSize: "var(--fs-xs)" }}>
+              <span className="mono">{draft.snapshotPath}</span>
+            </div>
           )}
+        </div>
+      )}
+      {snapshotPhase.state === "failed" && (
+        <div className="banner banner--danger">
+          <span>✗</span>
+          <span>Snapshot failed: {snapshotPhase.detail}</span>
         </div>
       )}
       {s &&
@@ -310,7 +240,7 @@ export function Review({ draft, update }: Props) {
         ))}
 
       {/* ── Phase 2: Running preflight checks ─────────────────────── */}
-      <PhaseRow row={preflightPhase} />
+      <PhaseRowView row={preflightPhase} />
       {preflightPhase.state === "done" && (
         <>
           {blockingFails > 0 ? (
@@ -395,9 +325,15 @@ export function Review({ draft, update }: Props) {
           </div>
         </>
       )}
+      {preflightPhase.state === "failed" && (
+        <div className="banner banner--danger">
+          <span>✗</span>
+          <span>Preflight failed: {preflightPhase.detail}</span>
+        </div>
+      )}
 
       {/* ── Phase 3: Generating migration plan ────────────────────── */}
-      <PhaseRow row={planPhase} />
+      <PhaseRowView row={planPhase} />
       {planPhase.state === "done" && (
         <>
           <div className="card card-stat">
@@ -423,37 +359,31 @@ export function Review({ draft, update }: Props) {
             >
               <li>Wait for cluster quorum (other nodes must be healthy)</li>
               <li>
-                scp <span className="mono">buckit-1.0.0.rpm</span> to{" "}
-                <span className="mono">/tmp/</span>
-              </li>
-              <li>
-                <span className="mono">
-                  dnf install -y /tmp/buckit-1.0.0.rpm
-                </span>{" "}
-                <span className="subtle">
-                  (minio still running; package lands binary + unit but
-                  doesn't start the service)
-                </span>
-              </li>
-              <li>
-                Update <span className="mono">buckit.service</span> to use
-                minio's user/group
-              </li>
-              <li>
-                <span className="mono">systemctl daemon-reload</span>
+                Backup{" "}
+                <span className="mono">/etc/default/minio</span> →{" "}
+                <span className="mono">/etc/default/minio.bm-bak</span>
               </li>
               <li>
                 <span className="mono">systemctl stop minio</span>{" "}
                 <span className="subtle">— downtime begins (~2–3 s)</span>
               </li>
               <li>
+                <span className="mono">curl -fSL -o /tmp/buckit.rpm &lt;url&gt;</span>
+              </li>
+              <li>
+                <span className="mono">dnf install -y /tmp/buckit.rpm</span>
+              </li>
+              <li>
                 <span className="mono">systemctl disable minio</span>
+              </li>
+              <li>
+                <span className="mono">systemctl daemon-reload</span>
               </li>
               <li>
                 <span className="mono">systemctl enable --now buckit</span>
               </li>
-              <li>Wait for node-healthy probe (timeout 2 m) — downtime ends</li>
-              <li>Wait for cluster-healthy probe (timeout 5 m) before next node</li>
+              <li>Wait for node-healthy probe (timeout 90 s) — downtime ends</li>
+              <li>Wait for cluster-healthy probe (timeout 120 s) before next node</li>
             </ol>
           </div>
 
@@ -463,11 +393,13 @@ export function Review({ draft, update }: Props) {
               style={{ paddingLeft: "1.2em", fontSize: "var(--fs-sm)" }}
             >
               <li>
-                <span className="mono">systemctl stop buckit</span>{" "}
+                <span className="mono">systemctl disable --now buckit</span>{" "}
                 <span className="subtle">— downtime begins (~2–3 s)</span>
               </li>
               <li>
-                <span className="mono">systemctl disable buckit</span>
+                Restore{" "}
+                <span className="mono">/etc/default/minio.bm-bak</span> →{" "}
+                <span className="mono">/etc/default/minio</span>
               </li>
               <li>
                 <span className="mono">systemctl enable --now minio</span>
@@ -481,7 +413,7 @@ export function Review({ draft, update }: Props) {
   );
 }
 
-function PhaseRow({ row }: { row: PhaseRow }) {
+function PhaseRowView({ row }: { row: PhaseRow }) {
   return (
     <div
       className="hstack"
@@ -496,6 +428,8 @@ function PhaseRow({ row }: { row: PhaseRow }) {
           <span style={{ color: "var(--c-success)" }}>✓</span>
         ) : row.state === "running" ? (
           <span style={{ color: "var(--c-info)" }}>⟳</span>
+        ) : row.state === "failed" ? (
+          <span style={{ color: "var(--c-danger)" }}>✗</span>
         ) : (
           <span className="subtle">·</span>
         )}

@@ -15,15 +15,20 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  cancelOperation,
+  cancelOperation as cancelOperationApi,
+  deleteCluster,
   dispatchOperation,
   getOperationProgress,
+} from "../../../api/client";
+import { subscribeOperationEvents } from "../../../api/sse";
+import type {
+  Cluster,
   HostOpState,
   OperationProgress,
   OpEvent,
-} from "../../../mock/api";
+  OpKind,
+} from "../../../api/types";
 import { Pill } from "../../../components/Pill";
-import { Cluster } from "../../../mock/data";
 import { OperationDef } from "./defs";
 
 interface Props {
@@ -54,7 +59,7 @@ export function OperationModal({
   const [params, setParams] = useState<unknown>(def.initialParams);
   const [taskId, setTaskId] = useState<string | null>(null);
   const [progress, setProgress] = useState<OperationProgress | null>(null);
-  const pollRef = useRef<number | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   // beforeunload guard while we're not in a terminal phase.
   useEffect(() => {
@@ -69,35 +74,52 @@ export function OperationModal({
     return () => window.removeEventListener("beforeunload", handler);
   }, [phase]);
 
-  // Poll the operation progress while running.
+  // Subscribe to /operations/:taskId/events while the op is running. The
+  // backend pushes a state snapshot on connect plus incremental updates
+  // until a terminal frame closes the stream. We flip into the terminal
+  // phase when the snapshot reports a non-running state AND no host is
+  // still in flight (the second guard handles cancellation: state goes
+  // canceled immediately, but the in-flight host needs another moment to
+  // wrap up).
   useEffect(() => {
     if (phase !== "running") return;
     if (!taskId) return;
-    const tick = () => {
-      const p = getOperationProgress(taskId);
-      if (!p) return;
-      setProgress(p);
-      // Transition to terminal only when (a) the top-level state has
-      // settled and (b) no host is still in flight. The second guard
-      // matters during a cancel: state flips to "canceled" right
-      // away, but the in-flight host needs another moment to wrap up.
-      if (p.state !== "running") {
-        const anyHostRunning = p.hostStatuses?.some(
-          (h) => h.state === "running",
-        );
-        if (!anyHostRunning) {
-          setPhase("terminal");
-          if (pollRef.current) window.clearInterval(pollRef.current);
-          pollRef.current = null;
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    let terminal = false;
+    subscribeOperationEvents(taskId, {
+      signal: ctrl.signal,
+      onProgress: (p) => {
+        setProgress(p);
+        if (p.state !== "running") {
+          const anyHostRunning = p.hostStatuses?.some(
+            (h) => h.state === "running",
+          );
+          if (!anyHostRunning) {
+            terminal = true;
+            setPhase("terminal");
+          }
         }
-      }
-    };
-    tick();
-    pollRef.current = window.setInterval(tick, 500);
-    return () => {
-      if (pollRef.current) window.clearInterval(pollRef.current);
-      pollRef.current = null;
-    };
+      },
+    }).catch((err) => {
+      // Aborted streams are expected on unmount / phase change.
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      // Stream errored before terminal — fall back to a one-shot snapshot
+      // fetch so we don't strand the modal in "running" indefinitely.
+      if (terminal) return;
+      getOperationProgress(taskId)
+        .then((p) => {
+          setProgress(p);
+          setPhase("terminal");
+        })
+        .catch(() => {
+          // Last-ditch: flip to terminal with whatever we have so the
+          // operator can close the modal.
+          setPhase("terminal");
+        });
+    });
+    return () => ctrl.abort();
   }, [phase, taskId]);
 
   const currentStep = def.inputSteps[stepIdx];
@@ -108,22 +130,62 @@ export function OperationModal({
 
   async function dispatch() {
     setPhase("dispatching");
-    const res = await dispatchOperation(
-      cluster.id,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      def.opKind as any,
-      params as Record<string, unknown>,
-      { targetHostIds },
-    );
-    setTaskId(res.taskId);
-    const p = getOperationProgress(res.taskId);
-    setProgress(p);
-    // Signal flavor: progress is already in terminal state (succeeded).
-    // Orchestrated: progress is "running" and the poll above takes over.
-    if (def.flavor === "signal" || p?.state !== "running") {
+    // delete flavor: not an operation in the dispatcher sense — just a
+    // one-shot DELETE /clusters/:id. No taskId, no SSE, no history row.
+    // Modal flips straight to terminal phase on success.
+    if (def.flavor === "delete") {
+      try {
+        await deleteCluster(cluster.id);
+        setProgress({
+          taskId: "delete",
+          state: "succeeded",
+          detail: `${cluster.name} removed from this manager.`,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Delete failed.";
+        setProgress({
+          taskId: "delete",
+          state: "failed",
+          failureNote: message,
+          detail: message,
+        });
+      }
       setPhase("terminal");
-    } else {
-      setPhase("running");
+      return;
+    }
+
+    try {
+      const opLabel = (def.dynamicLabel ? def.dynamicLabel(cluster) : def.label).replace(/…$/, "");
+      const res = await dispatchOperation({
+        clusterId: cluster.id,
+        kind: def.opKind as OpKind,
+        params: params as Record<string, unknown>,
+        targetHostIds,
+        clusterName: cluster.name,
+        opLabel,
+      });
+      setTaskId(res.taskId);
+      // Pull the initial snapshot so the modal renders something while
+      // the SSE subscription effect spins up. For signal-flavor ops this
+      // snapshot is already terminal.
+      const snapshot = await getOperationProgress(res.taskId).catch(() => null);
+      if (snapshot) setProgress(snapshot);
+      if (def.flavor === "signal" || (snapshot && snapshot.state !== "running")) {
+        setPhase("terminal");
+      } else {
+        setPhase("running");
+      }
+    } catch (err) {
+      // Dispatch rejection (validation_failed, cluster_busy, etc).
+      // Surface via the existing terminal-phase failure path.
+      const message = err instanceof Error ? err.message : "Dispatch failed.";
+      setProgress({
+        taskId: "dispatch-failed",
+        state: "failed",
+        failureNote: message,
+        detail: message,
+      });
+      setPhase("terminal");
     }
   }
 
@@ -223,7 +285,12 @@ export function OperationModal({
           {phase === "running" && def.cancellable && taskId && (
             <button
               className="btn btn--danger"
-              onClick={() => cancelOperation(taskId)}
+              onClick={() => {
+                cancelOperationApi(taskId).catch(() => {
+                  // Best-effort — the SSE stream will surface the
+                  // canceled state when it lands.
+                });
+              }}
               disabled={progress?.state !== "running"}
             >
               {progress?.state === "canceled"

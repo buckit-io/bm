@@ -7,13 +7,18 @@
 //                  to terminal phase immediately on success.
 //   orchestrated — bm runs a multi-step per-node loop. Modal stays in
 //                  running phase until bm reports terminal.
+//   delete       — DELETE /clusters/:id. Not an operation in the
+//                  dispatcher sense (no taskId, no history row); just a
+//                  one-shot REST call that drops the cluster row. Modal
+//                  flips to terminal phase on success. Used by the
+//                  "Remove cluster definition" menu item.
 //   navigate     — not really an operation. The menu item just routes
 //                  to a different page. Handled inline by the menu.
 
 import { ReactNode } from "react";
-import { Cluster } from "../../../mock/data";
+import { Cluster } from "../../../api/types";
 
-export type OperationFlavor = "signal" | "orchestrated" | "navigate";
+export type OperationFlavor = "signal" | "orchestrated" | "delete" | "navigate";
 // Free-form group key — the menu's caller supplies a Record<group,label>
 // at render time. Cluster Actions uses admin/ssh/manager; the per-node
 // Actions menu uses service/software/diagnostics/host.
@@ -66,7 +71,7 @@ export interface OperationDef<P = any> {
   // confirmation step.
   inputSteps: InputStep<P>[];
   initialParams: P;
-  // Returns the OpKind for mock/api.ts dispatchOperation.
+  // Returns the OpKind for client.dispatchOperation.
   opKind?: string;
   // For navigate flavor only. Receives the cluster plus an optional
   // context bag — used by per-node menu items to pass the node id.

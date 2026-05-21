@@ -136,10 +136,9 @@ export interface DiscoveredDrive {
 export interface Topology {
   setSize: number;
   parity: 2 | 3 | 4 | 6 | 8;
-  // The drive mountpoints selected for MINIO_VOLUMES. Computed
-  // automatically as the intersection of per-host mountpoints once
-  // discovery completes; empty when discovery hasn't run or no common
-  // mounts exist (case C).
+  // The mountpoints selected on the Topology step. Deploy uses a
+  // managed `buckit/` subdirectory under each selected mount rather
+  // than writing directly at the mount root.
   selectedMounts: string[];
 }
 
@@ -190,6 +189,7 @@ export interface DeployNodeState {
 }
 
 export interface DoneState {
+  clusterId: string;
   consoleUrl: string;
   nodesHealthy: number;
   poolsOnline: number;
@@ -221,6 +221,7 @@ export function emptyDraft(): NewClusterDraft {
     preflight: [],
     deploy: { perNode: {}, overallPct: 0, canceled: false },
     done: {
+      clusterId: "",
       consoleUrl: "",
       nodesHealthy: 0,
       poolsOnline: 0,

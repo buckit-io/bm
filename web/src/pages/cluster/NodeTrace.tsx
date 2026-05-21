@@ -1,7 +1,6 @@
 // S3 API trace viewer for a single node. Real backend proxies
-// /minio/admin/v3/trace and streams to the browser via SSE. Mock uses
-// the existing TaskLogStream (it doesn't care that the content shape is
-// different).
+// /minio/admin/v3/trace and streams to the browser via SSE (endpoint
+// currently 501).
 
 import { Link, useParams } from "react-router-dom";
 import { useCluster, useNode } from "../../api/hooks";

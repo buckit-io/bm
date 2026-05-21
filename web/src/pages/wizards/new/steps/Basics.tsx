@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { validateCustomArtifact } from "../../../../mock/api";
+import { listVersions, validateCustomArtifact } from "../../../../api/client";
+import type { BuckitVersion } from "../../../../api/types";
 import {
-  BUCKIT_VERSIONS,
   CUSTOM_VERSION,
   CustomUrlCheck,
   NewClusterDraft,
@@ -17,6 +17,22 @@ const CHECK_DEBOUNCE_MS = 700;
 export function Basics({ draft, update }: Props) {
   const isCustom = draft.version === CUSTOM_VERSION;
   const [showPass, setShowPass] = useState(false);
+  const [versions, setVersions] = useState<BuckitVersion[]>([]);
+
+  // Fetch the version catalog from the backend on mount.
+  useEffect(() => {
+    listVersions().then(setVersions).catch(() => {});
+  }, []);
+
+  // The draft starts with a placeholder version. Once the real catalog
+  // arrives, replace that stale value if it doesn't exist in the fetched list.
+  useEffect(() => {
+    if (draft.version === CUSTOM_VERSION) return;
+    if (versions.length === 0) return;
+    if (versions.some((v) => v.tag === draft.version)) return;
+    update({ version: versions[0].tag });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [versions, draft.version]);
 
   const setPort = (key: "port" | "consolePort", v: string) => {
     const n = parseInt(v, 10);
@@ -46,9 +62,15 @@ export function Basics({ draft, update }: Props) {
     const gen = ++genRef.current;
     update({ customUrlCheck: { state: "checking" } });
     const handle = setTimeout(async () => {
-      const result = await validateCustomArtifact(url);
-      if (gen !== genRef.current) return;
-      update({ customUrlCheck: result as CustomUrlCheck });
+      try {
+        const result = await validateCustomArtifact(url);
+        if (gen !== genRef.current) return;
+        update({ customUrlCheck: result as CustomUrlCheck });
+      } catch (err) {
+        if (gen !== genRef.current) return;
+        const message = err instanceof Error ? err.message : "Validation failed.";
+        update({ customUrlCheck: { state: "error", message } });
+      }
     }, CHECK_DEBOUNCE_MS);
     return () => clearTimeout(handle);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -96,7 +118,7 @@ export function Basics({ draft, update }: Props) {
           value={draft.version}
           onChange={(e) => update({ version: e.target.value })}
         >
-          {BUCKIT_VERSIONS.map((v) => (
+          {versions.map((v) => (
             <option key={v.tag} value={v.tag}>
               {v.label}
             </option>

@@ -311,8 +311,9 @@ const REMOVE_CLUSTER: OperationDef<{ typedName: string }> = {
   group: "manager",
   label: "Remove cluster definition",
   description: "Drop the cluster from this manager. Hosts and data untouched.",
-  flavor: "signal",
-  opKind: "remove_cluster",
+  // Backend: DELETE /clusters/:id. Not an OpKind — the design doc
+  // dropped remove_cluster from the dispatch path in favor of REST.
+  flavor: "delete",
   danger: true,
   initialParams: { typedName: "" },
   inputSteps: [

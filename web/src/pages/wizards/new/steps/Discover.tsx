@@ -1,34 +1,7 @@
-import { useEffect, useRef, useState } from "react";
-import { DiscoveredDrive, DiscoveryResult, NewClusterDraft } from "../state";
+import { useEffect, useState } from "react";
+import { DiscoveryResult, NewClusterDraft } from "../state";
 import { Pill } from "../../../../components/Pill";
-
-const TiB = 1024 ** 4;
-
-// Build a plausible per-host drive list. Default: 1 boot + 12 data
-// drives mounted at /data/disk{1..12}, all 16 TiB XFS. For demo, one
-// data drive on the third host comes up as ext4 so the XFS advisory
-// preflight check has something to flag.
-function mockDrives(hostIndex: number): DiscoveredDrive[] {
-  const drives: DiscoveredDrive[] = [
-    {
-      device: "/dev/nvme0n1",
-      mount: "/",
-      sizeBytes: 256 * 1024 ** 3,
-      fsType: "ext4",
-      isBoot: true,
-    },
-  ];
-  for (let i = 1; i <= 12; i++) {
-    const isExt4 = hostIndex === 2 && i === 5; // mixed-fs demo
-    drives.push({
-      device: `/dev/sd${String.fromCharCode(96 + i)}`,
-      mount: `/data/disk${i}`,
-      sizeBytes: 16 * TiB,
-      fsType: isExt4 ? "ext4" : "xfs",
-    });
-  }
-  return drives;
-}
+import { newClusterDiscover } from "../../../../api/client";
 
 interface Props {
   draft: NewClusterDraft;
@@ -42,69 +15,79 @@ function disksSummary(r: DiscoveryResult): string {
   const mounted = data.filter((d) => d.mount).length;
   const unformatted = data.filter((d) => !d.fsType).length;
   const sample = data[0];
-  const sizeTiB = Math.round(sample.sizeBytes / (1024 ** 4));
+  const size = humanDriveSize(sample.sizeBytes);
   const parts = [`${mounted} mounted`];
   if (unformatted > 0) parts.push(`${unformatted} unformatted`);
-  return `${parts.join(", ")} · ${sizeTiB} TiB each`;
+  return `${parts.join(", ")} · ${size} each`;
+}
+
+function humanDriveSize(bytes: number): string {
+  if (bytes >= 1024 ** 4) return `${(bytes / 1024 ** 4).toFixed(1)} TiB`;
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(0)} GiB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(0)} MiB`;
+  return `${(bytes / 1024).toFixed(0)} KiB`;
 }
 
 function statusPill(s: DiscoveryResult["state"]) {
   switch (s) {
     case "done": return <Pill tone="success" icon="✓">Done</Pill>;
     case "running": return <Pill tone="info" icon="⟳">…</Pill>;
-    case "failed": return <Pill tone="danger" icon="✗">Timeout</Pill>;
+    case "failed": return <Pill tone="danger" icon="✗">Failed</Pill>;
     default: return <Pill tone="neutral">Pending</Pill>;
   }
 }
 
+function osSummary(r: DiscoveryResult) {
+  return (
+    <div className="vstack" style={{ gap: 2 }}>
+      <span>{r.os ?? "—"}</span>
+      {(r.kernel || r.arch) && (
+        <span className="subtle" style={{ fontSize: "var(--fs-xs)" }}>
+          {[r.kernel, r.arch].filter(Boolean).join(" · ")}
+        </span>
+      )}
+    </div>
+  );
+}
+
 export function Discover({ draft, update }: Props) {
   const validHosts = draft.hosts.filter((h) => h.hostname.trim());
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const initialized = useRef(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (initialized.current) return;
-    initialized.current = true;
     const initial: Record<string, DiscoveryResult> = {};
-    validHosts.forEach((h) => (initial[h.id] = { state: "pending" }));
+    validHosts.forEach((h) => (initial[h.id] = { state: "running" }));
     update({ discovery: initial });
 
-    let i = 0;
-    const tick = () => {
-      if (i >= validHosts.length) return;
-      const h = validHosts[i];
-      i++;
-      update({
-        discovery: {
-          ...initial,
-          [h.id]: { state: "running" },
-        },
+    const ctrl = new AbortController();
+    newClusterDiscover(
+      {
+        hosts: validHosts.map((h) => ({
+          id: h.id,
+          hostname: h.hostname,
+          port: h.port || 22,
+          probe: h.probe,
+          sshOverride: h.sshOverride,
+        })),
+        ssh: draft.ssh,
+      },
+      ctrl.signal,
+    )
+      .then((resp) => {
+        if (ctrl.signal.aborted) return;
+        update({
+          discovery: resp as unknown as Record<string, DiscoveryResult>,
+        });
+      })
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        const message = err instanceof Error ? err.message : "Discovery failed.";
+        setError(message);
+        const fail: Record<string, DiscoveryResult> = {};
+        validHosts.forEach((h) => (fail[h.id] = { state: "failed" }));
+        update({ discovery: fail });
       });
-      setTimeout(() => {
-        // mutate the result inline; React state must be set from latest
-        const idx = i - 1; // i is already advanced
-        initial[h.id] =
-          i === validHosts.length && validHosts.length >= 8
-            ? { state: "failed" }
-            : {
-                state: "done",
-                // Mostly Ubuntu, one Rocky 9 to demo the OS-uniformity
-                // advisory.
-                os: idx === 1 ? "Rocky Linux 9.4" : "Ubuntu 24.04",
-                arch: "amd64",
-                kernel:
-                  idx === 1 ? "5.14.0-427.el9.x86_64" : "6.8.0-31-generic",
-                cores: 16,
-                ramGiB: 64,
-                drives: mockDrives(idx),
-                nic: "eno1 / 10 GbE",
-                sudoOk: true,
-              };
-        update({ discovery: { ...initial } });
-        tick();
-      }, 600 + Math.random() * 600);
-    };
-    tick();
+    return () => ctrl.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -115,8 +98,14 @@ export function Discover({ draft, update }: Props) {
       <header>
         <h2 style={{ fontSize: "var(--fs-xl)", fontWeight: 600 }}>Discovery</h2>
         <p className="muted" style={{ fontSize: "var(--fs-sm)", marginTop: 4 }}>
-          Probing each host over SSH for OS, disks, NIC and existing services.
+          Probing each host over SSH for OS, kernel, architecture, CPU, RAM,
+          and disks.
         </p>
+        {error && (
+          <p className="subtle" style={{ color: "var(--c-danger)", marginTop: 4 }}>
+            {error}
+          </p>
+        )}
       </header>
 
       <div className="hstack">
@@ -148,37 +137,16 @@ export function Discover({ draft, update }: Props) {
             {validHosts.map((h) => {
               const r = draft.discovery[h.id] ?? { state: "pending" as const };
               return (
-                <>
-                  <tr
-                    key={h.id}
-                    onClick={() => setExpanded(expanded === h.id ? null : h.id)}
-                    style={{ cursor: "pointer" }}
-                  >
-                    <td>
-                      <span className="mono">{h.hostname}</span>
-                      <span className="subtle" style={{ marginLeft: 6 }}>
-                        {expanded === h.id ? "▾" : "▸"}
-                      </span>
-                    </td>
-                    <td>{r.os ?? "—"}</td>
-                    <td>{r.cores ?? "—"}</td>
-                    <td>{r.ramGiB ? `${r.ramGiB} GiB` : "—"}</td>
-                    <td>{disksSummary(r)}</td>
-                    <td>{statusPill(r.state)}</td>
-                  </tr>
-                  {expanded === h.id && r.state === "done" && (
-                    <tr key={h.id + "-detail"} className="discover__detail">
-                      <td colSpan={6}>
-                        <div className="vstack subtle" style={{ gap: 4, padding: "var(--s-2) 0" }}>
-                          <span><b>Kernel</b> {r.kernel}</span>
-                          <span><b>NIC</b> {r.nic}</span>
-                          <span><b>Time skew vs manager</b> &lt; 1s</span>
-                          <span><b>Existing services</b> none detected</span>
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                </>
+                <tr key={h.id}>
+                  <td>
+                    <span className="mono">{h.hostname}</span>
+                  </td>
+                  <td>{osSummary(r)}</td>
+                  <td>{r.cores ?? "—"}</td>
+                  <td>{r.ramGiB ? `${r.ramGiB} GiB` : "—"}</td>
+                  <td>{disksSummary(r)}</td>
+                  <td>{statusPill(r.state)}</td>
+                </tr>
               );
             })}
           </tbody>

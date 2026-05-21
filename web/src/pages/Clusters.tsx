@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
 import { Pill } from "../components/Pill";
 import { useClusters, useRefreshClusters } from "../api/hooks";
-import { Cluster, formatBytes } from "../mock/data";
+import { Cluster } from "../api/types";
+import { formatBytes } from "../lib/format";
 import "./Clusters.css";
 
 function pickMostStale(clusters: Cluster[]): string | null {
@@ -26,6 +27,8 @@ function formatAge(sec: number): string {
   const h = Math.floor(m / 60);
   return `${h}h ${m % 60}m ago`;
 }
+
+const autoRefreshStaleAfterSec = 30 * 60;
 
 function healthPill(c: Cluster) {
   switch (c.health) {
@@ -61,6 +64,7 @@ export function Clusters() {
   const refresh = useRefreshClusters();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const autoRefreshStarted = useRef(false);
 
   // Re-render every second so "Fetched Ns ago" actually ticks while the
   // operator stares at the page. Cheap — one setState per second.
@@ -83,9 +87,22 @@ export function Clusters() {
     return () => window.removeEventListener("mousedown", onMouseDown);
   }, [menuOpen]);
 
+  // Redirect to /welcome when the backend has no clusters yet (first run).
+  if (!isLoading && clusters && clusters.length === 0) {
+    return <Navigate to="/welcome" replace />;
+  }
+
   const filtered = clusters ?? [];
   const mostStale = pickMostStale(clusters ?? []);
   const stale = mostStale ? ageSeconds(mostStale) : null;
+
+  useEffect(() => {
+    if (autoRefreshStarted.current) return;
+    if (isLoading || !clusters || clusters.length === 0) return;
+    if (stale !== null && stale < autoRefreshStaleAfterSec) return;
+    autoRefreshStarted.current = true;
+    refresh.mutate();
+  }, [clusters, isLoading, refresh, stale]);
 
   return (
     <section className="clusters">
@@ -158,8 +175,8 @@ export function Clusters() {
               <tr>
                 <th>Name</th>
                 <th className="num">Pools</th>
-                <th className="num">Nodes</th>
-                <th className="num">Drives</th>
+                <th className="num" title="Online / total nodes">Nodes (Online/Total)</th>
+                <th className="num" title="Ready / total drives">Drives (Ready/Total)</th>
                 <th>Version</th>
                 <th>Health</th>
                 <th>Used</th>
@@ -168,6 +185,10 @@ export function Clusters() {
             <tbody>
               {filtered.map((c) => {
                 const s = c.healthSummary;
+                const nodeTotal = s?.nodes.total && s.nodes.total > 0 ? s.nodes.total : c.nodeCount;
+                const nodeReady = s?.nodes.total && s.nodes.total > 0 ? s.nodes.online : c.nodeCount;
+                const driveTotal = s?.drives.total && s.drives.total > 0 ? s.drives.total : c.driveCount;
+                const driveReady = s?.drives.total && s.drives.total > 0 ? s.drives.ready : c.driveCount;
                 return (
                   <tr key={c.id}>
                     <td>
@@ -193,10 +214,10 @@ export function Clusters() {
                       )}
                     </td>
                     <td className="num">
-                      {ratioCell(s?.nodes.online ?? 0, s?.nodes.total ?? 0)}
+                      {ratioCell(nodeReady, nodeTotal)}
                     </td>
                     <td className="num">
-                      {ratioCell(s?.drives.ready ?? 0, s?.drives.total ?? 0)}
+                      {ratioCell(driveReady, driveTotal)}
                     </td>
                     <td>{c.version}</td>
                     <td>{healthPill(c)}</td>

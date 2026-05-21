@@ -4,6 +4,7 @@ import { Pill } from "../../../../components/Pill";
 import { expandHostPattern } from "./hostExpansion";
 import { detectHostnamePattern } from "./hostnamePattern";
 import { SshOverrideFields } from "../../shared/SshOverrideFields";
+import { newClusterDiscover } from "../../../../api/client";
 
 const AUTH_OPTIONS: {
   value: SshCreds["authMethod"];
@@ -95,23 +96,67 @@ export function AddNodes({ draft, update }: Props) {
     });
   };
 
-  const probeAll = () => {
-    update({
-      hosts: draft.hosts.map((h) => ({ ...h, probe: "probing" })),
-    });
-    setTimeout(() => {
-      update({
-        hosts: draft.hosts.map((h, i) => ({
-          ...h,
-          probe:
-            !h.hostname.trim()
-              ? "timeout"
-              : i % 9 === 7
-                ? "auth_failed"
-                : "reachable",
+  const probeAll = async () => {
+    // Mark every host with a non-empty hostname as probing; rows with
+    // a blank hostname stay idle (nothing to dial against).
+    const probing = draft.hosts.map((h) =>
+      h.hostname.trim()
+        ? ({ ...h, probe: "probing" } as HostRow)
+        : ({ ...h, probe: "idle" } as HostRow),
+    );
+    update({ hosts: probing });
+
+    const targets = draft.hosts.filter((h) => h.hostname.trim());
+    if (targets.length === 0) return;
+
+    try {
+      const resp = await newClusterDiscover({
+        hosts: targets.map((h) => ({
+          id: h.id,
+          hostname: h.hostname,
+          port: h.port || 22,
+          probe: h.probe,
+          sshOverride: h.sshOverride,
         })),
+        ssh: draft.ssh,
       });
-    }, 900);
+      // Backend returns Record<hostId, WizardDiscoveryResult>. Map
+      // state→probe: done → reachable, failed + auth-flavored error →
+      // auth_failed, anything else → timeout.
+      const results = resp as unknown as Record<
+        string,
+        { state: string; error?: string }
+      >;
+      update({
+        hosts: draft.hosts.map((h) => {
+          if (!h.hostname.trim()) return { ...h, probe: "idle" } as HostRow;
+          const r = results[h.id];
+          if (!r) return { ...h, probe: "timeout" } as HostRow;
+          if (r.state === "done") return { ...h, probe: "reachable" } as HostRow;
+          const err = (r.error ?? "").toLowerCase();
+          const authFailed =
+            err.includes("auth") ||
+            err.includes("permission") ||
+            err.includes("publickey") ||
+            err.includes("password");
+          return {
+            ...h,
+            probe: authFailed ? "auth_failed" : "timeout",
+          } as HostRow;
+        }),
+      });
+    } catch {
+      // Whole-call failure (network drop, validation reject) — flag
+      // every probed host as timeout so the operator knows nothing got
+      // through.
+      update({
+        hosts: draft.hosts.map((h) =>
+          h.hostname.trim()
+            ? ({ ...h, probe: "timeout" } as HostRow)
+            : ({ ...h, probe: "idle" } as HostRow),
+        ),
+      });
+    }
   };
 
   const importPaste = () => {
@@ -337,21 +382,6 @@ export function AddNodes({ draft, update }: Props) {
           </div>
         )}
 
-        {draft.ssh.authMethod === "password" && (
-          <div className="field" style={{ maxWidth: 320 }}>
-            <label className="field-label" htmlFor="ssh-pw">SSH password</label>
-            <input
-              id="ssh-pw"
-              type="password"
-              className="input"
-              value={draft.ssh.password ?? ""}
-              onChange={(e) =>
-                update({ ssh: { ...draft.ssh, password: e.target.value } })
-              }
-            />
-          </div>
-        )}
-
         <div className="hstack" style={{ gap: "var(--s-4)", flexWrap: "wrap" }}>
           <div className="field" style={{ minWidth: 200 }}>
             <label className="field-label" htmlFor="user">SSH user</label>
@@ -388,6 +418,21 @@ export function AddNodes({ draft, update }: Props) {
             Use sudo (passwordless)
           </label>
         </div>
+
+        {draft.ssh.authMethod === "password" && (
+          <div className="field" style={{ width: 200 }}>
+            <label className="field-label" htmlFor="ssh-pw">SSH password</label>
+            <input
+              id="ssh-pw"
+              type="password"
+              className="input"
+              value={draft.ssh.password ?? ""}
+              onChange={(e) =>
+                update({ ssh: { ...draft.ssh, password: e.target.value } })
+              }
+            />
+          </div>
+        )}
       </div>
 
       <div>

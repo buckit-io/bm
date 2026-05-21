@@ -6,7 +6,8 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useClearHistory, useClusters, useHistory } from "../api/hooks";
 import { Pill, PillTone } from "../components/Pill";
-import { formatDuration, formatRelative, HistoryEntry } from "../mock/data";
+import { HistoryEntry } from "../api/types";
+import { formatDuration, formatRelative } from "../lib/format";
 import { HistoryResultModal } from "./HistoryResultModal";
 import "./History.css";
 

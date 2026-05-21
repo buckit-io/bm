@@ -14,6 +14,7 @@ import {
   SshOverrides,
 } from "../state";
 import { SshOverrideFields } from "../../shared/SshOverrideFields";
+import { newClusterDiscover } from "../../../../api/client";
 
 const AUTH_OPTIONS: {
   value: SshCreds["authMethod"];
@@ -55,20 +56,68 @@ export function SshCredentials({ draft, update }: Props) {
       ),
     });
 
-  const probeAll = () => {
+  const probeAll = async () => {
     setProbing(true);
     update({
-      hosts: draft.hosts.map((h) => ({ ...h, probe: "probing" })),
+      hosts: draft.hosts.map((h) =>
+        h.hostname.trim()
+          ? ({ ...h, probe: "probing" } as HostRow)
+          : ({ ...h, probe: "idle" } as HostRow),
+      ),
     });
-    setTimeout(() => {
-      update({
-        hosts: draft.hosts.map((h) => ({
-          ...h,
-          probe: h.hostname.trim() ? "reachable" : "timeout",
-        })),
-      });
+    const targets = draft.hosts.filter((h) => h.hostname.trim());
+    if (targets.length === 0) {
       setProbing(false);
-    }, 900);
+      return;
+    }
+    try {
+      // Reuse the new-cluster discover endpoint — it's a generic SSH
+      // probe (not bound to a committed cluster). The migrate wizard
+      // doesn't need the full discovery payload here, only the per-host
+      // reachability state.
+      const resp = await newClusterDiscover({
+        hosts: targets.map((h) => ({
+          id: h.id,
+          hostname: h.hostname,
+          port: h.port || 22,
+          probe: h.probe,
+          sshOverride: h.sshOverride,
+        })),
+        ssh: draft.ssh,
+      });
+      const results = resp as unknown as Record<
+        string,
+        { state: string; error?: string }
+      >;
+      update({
+        hosts: draft.hosts.map((h) => {
+          if (!h.hostname.trim()) return { ...h, probe: "idle" } as HostRow;
+          const r = results[h.id];
+          if (!r) return { ...h, probe: "timeout" } as HostRow;
+          if (r.state === "done") return { ...h, probe: "reachable" } as HostRow;
+          const err = (r.error ?? "").toLowerCase();
+          const authFailed =
+            err.includes("auth") ||
+            err.includes("permission") ||
+            err.includes("publickey") ||
+            err.includes("password");
+          return {
+            ...h,
+            probe: authFailed ? "auth_failed" : "timeout",
+          } as HostRow;
+        }),
+      });
+    } catch {
+      update({
+        hosts: draft.hosts.map((h) =>
+          h.hostname.trim()
+            ? ({ ...h, probe: "timeout" } as HostRow)
+            : ({ ...h, probe: "idle" } as HostRow),
+        ),
+      });
+    } finally {
+      setProbing(false);
+    }
   };
 
   return (
@@ -147,20 +196,6 @@ export function SshCredentials({ draft, update }: Props) {
           </div>
         )}
 
-        {draft.ssh.authMethod === "password" && (
-          <div className="field" style={{ maxWidth: 320 }}>
-            <label className="field-label">SSH password</label>
-            <input
-              type="password"
-              className="input"
-              value={draft.ssh.password ?? ""}
-              onChange={(e) =>
-                update({ ssh: { ...draft.ssh, password: e.target.value } })
-              }
-            />
-          </div>
-        )}
-
         <div className="hstack" style={{ gap: "var(--s-4)", flexWrap: "wrap" }}>
           <div className="field" style={{ minWidth: 200 }}>
             <label className="field-label">SSH user</label>
@@ -198,6 +233,20 @@ export function SshCredentials({ draft, update }: Props) {
             Use sudo (passwordless)
           </label>
         </div>
+
+        {draft.ssh.authMethod === "password" && (
+          <div className="field" style={{ width: 200 }}>
+            <label className="field-label">SSH password</label>
+            <input
+              type="password"
+              className="input"
+              value={draft.ssh.password ?? ""}
+              onChange={(e) =>
+                update({ ssh: { ...draft.ssh, password: e.target.value } })
+              }
+            />
+          </div>
+        )}
       </div>
 
       <div className="card card--table">

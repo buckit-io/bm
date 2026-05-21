@@ -10,11 +10,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useCluster, useNodes } from "../../api/hooks";
-import { Node } from "../../mock/data";
+import { Node } from "../../api/types";
 import {
   getClusterSshConfig,
+  newClusterDiscover,
   saveClusterSshConfig,
-} from "../../mock/api";
+} from "../../api/client";
 import { SshOverrideFields } from "../wizards/shared/SshOverrideFields";
 import {
   HostRow,
@@ -115,18 +116,53 @@ export function ClusterSshSettings() {
       prev.map((h) => (h.id === id ? { ...h, sshOverride: override } : h)),
     );
 
-  const probeAll = () => {
+  const probeAll = async () => {
     setProbing(true);
     setHosts((prev) => prev.map((h) => ({ ...h, probe: "probing" })));
-    setTimeout(() => {
-      setHosts((prev) =>
-        prev.map((h) => ({
-          ...h,
-          probe: h.hostname.trim() ? "reachable" : "timeout",
-        })),
-      );
+    const targets = hosts.filter((h) => h.hostname.trim());
+    if (targets.length === 0) {
       setProbing(false);
-    }, 900);
+      return;
+    }
+    try {
+      const resp = await newClusterDiscover({
+        hosts: targets.map((h) => ({
+          id: h.id,
+          hostname: h.hostname,
+          port: h.port || 22,
+          probe: h.probe,
+          sshOverride: h.sshOverride,
+        })),
+        ssh,
+      });
+      const results = resp as unknown as Record<
+        string,
+        { state: string; error?: string }
+      >;
+      setHosts((prev) =>
+        prev.map((h) => {
+          if (!h.hostname.trim()) return { ...h, probe: "idle" } as HostRow;
+          const r = results[h.id];
+          if (!r) return { ...h, probe: "timeout" } as HostRow;
+          if (r.state === "done") return { ...h, probe: "reachable" } as HostRow;
+          const err = (r.error ?? "").toLowerCase();
+          const authFailed =
+            err.includes("auth") || err.includes("permission") ||
+            err.includes("publickey") || err.includes("password");
+          return { ...h, probe: authFailed ? "auth_failed" : "timeout" } as HostRow;
+        }),
+      );
+    } catch {
+      setHosts((prev) =>
+        prev.map((h) =>
+          h.hostname.trim()
+            ? ({ ...h, probe: "timeout" } as HostRow)
+            : ({ ...h, probe: "idle" } as HostRow),
+        ),
+      );
+    } finally {
+      setProbing(false);
+    }
   };
 
   const canSave = useMemo(() => {
@@ -143,8 +179,12 @@ export function ClusterSshSettings() {
     for (const h of hosts) {
       if (h.sshOverride) overrides[h.id] = h.sshOverride;
     }
-    await saveClusterSshConfig(clusterId, { ssh, overrides });
-    navigate(`/clusters/${clusterId}`);
+    try {
+      await saveClusterSshConfig(clusterId, { ssh, overrides });
+      navigate(`/clusters/${clusterId}`);
+    } finally {
+      setSaving(false);
+    }
   };
 
   if (loadingCluster || loadingNodes || !ready) {
@@ -231,18 +271,6 @@ export function ClusterSshSettings() {
           </div>
         )}
 
-        {ssh.authMethod === "password" && (
-          <div className="field" style={{ maxWidth: 320 }}>
-            <label className="field-label">SSH password</label>
-            <input
-              type="password"
-              className="input"
-              value={ssh.password ?? ""}
-              onChange={(e) => setSsh({ ...ssh, password: e.target.value })}
-            />
-          </div>
-        )}
-
         <div className="hstack" style={{ gap: "var(--s-4)", flexWrap: "wrap" }}>
           <div className="field" style={{ minWidth: 200 }}>
             <label className="field-label">SSH user</label>
@@ -276,6 +304,18 @@ export function ClusterSshSettings() {
             Use sudo (passwordless)
           </label>
         </div>
+
+        {ssh.authMethod === "password" && (
+          <div className="field" style={{ width: 200 }}>
+            <label className="field-label">SSH password</label>
+            <input
+              type="password"
+              className="input"
+              value={ssh.password ?? ""}
+              onChange={(e) => setSsh({ ...ssh, password: e.target.value })}
+            />
+          </div>
+        )}
       </div>
 
       <div className="card card--table">

@@ -21,10 +21,9 @@ function toAliasName(name: string): string {
 }
 
 export function Done({ draft, update, onFinish }: Props) {
-  // Done is now a verification surface — credentials and topology are
-  // already what the operator set in Basics. We just populate the
-  // post-deploy facts (console URL, health counts) the first time the
-  // step renders.
+  // Done renders the post-deploy verification captured during the Deploy
+  // step. Only fill in a fallback console URL if the verify summary has not
+  // populated one yet.
   useEffect(() => {
     if (!draft.done.consoleUrl) {
       const host =
@@ -34,9 +33,6 @@ export function Done({ draft, update, onFinish }: Props) {
         done: {
           ...draft.done,
           consoleUrl: `http://${host}:${draft.api.consolePort}`,
-          nodesHealthy: draft.hosts.filter((h) => h.hostname.trim()).length,
-          poolsOnline: 1,
-          smokeTestPassed: true,
         },
       });
     }
@@ -48,6 +44,21 @@ export function Done({ draft, update, onFinish }: Props) {
   const rootPass = draft.credentials.rootPassword;
   const alias = toAliasName(draft.name);
   const aliasDiffers = alias !== draft.name.trim();
+  const totalHosts = draft.hosts.filter((h) => h.hostname.trim()).length;
+  const quickChecks = [
+    {
+      label: `${d.nodesHealthy} / ${totalHosts} nodes healthy`,
+      healthy: totalHosts > 0 && d.nodesHealthy === totalHosts,
+    },
+    {
+      label: `${d.poolsOnline} / 1 pool online`,
+      healthy: d.poolsOnline > 0,
+    },
+    {
+      label: `Read/write smoke test ${d.smokeTestPassed ? "passed" : "pending"}`,
+      healthy: d.smokeTestPassed,
+    },
+  ];
 
   return (
     <div className="vstack" style={{ gap: "var(--s-5)", maxWidth: 720 }}>
@@ -108,16 +119,25 @@ export function Done({ draft, update, onFinish }: Props) {
       <div className="card vstack" style={{ gap: "var(--s-2)" }}>
         <h3 className="card-stat__title">Quick checks</h3>
         <ul style={{ listStyle: "none", padding: 0, fontSize: "var(--fs-sm)" }}>
-          <li>
-            ● {d.nodesHealthy} / {d.nodesHealthy} nodes healthy
-          </li>
-          <li>
-            ● {d.poolsOnline} / {d.poolsOnline} pool online
-          </li>
-          <li>
-            ● Read/write smoke test{" "}
-            {d.smokeTestPassed ? "passed" : "pending"}
-          </li>
+          {quickChecks.map((check) => (
+            <li
+              key={check.label}
+              className="hstack"
+              style={{ gap: "var(--s-2)", alignItems: "center" }}
+            >
+              <span
+                aria-hidden="true"
+                style={{
+                  color: check.healthy ? "var(--c-success)" : "var(--c-fg-muted)",
+                  fontSize: "var(--fs-sm)",
+                  lineHeight: 1,
+                }}
+              >
+                ●
+              </span>
+              <span>{check.label}</span>
+            </li>
+          ))}
         </ul>
       </div>
 
@@ -141,13 +161,8 @@ export function Done({ draft, update, onFinish }: Props) {
           With the alias saved, the <span className="mono">bm</span> CLI
           can target this cluster by name.
         </p>
-        <div
-          className="vstack"
-          style={{ gap: "var(--s-1)", fontSize: "var(--fs-sm)" }}
-        >
-          <span className="mono">bm admin info {alias}</span>
-          <span className="mono">bm admin user add {alias} alice</span>
-        </div>
+        <pre className="codeblock">{`bm admin info ${alias}
+bm admin user add ${alias} alice`}</pre>
         <details>
           <summary
             className="subtle"

@@ -37,6 +37,10 @@ export interface MigrationDraft {
   minioDetection: Record<string, MinioNodeInfo>;
 
   snapshot: MinioSnapshot | null;
+  // On-disk path the backend wrote the snapshot file to. Captured by
+  // POST /clusters/:id/migrate/snapshot in the Review step; consumed by
+  // POST /clusters/:id/migrate/cutover in the Migrate step.
+  snapshotPath: string | null;
   plan: MigrationPlan;
   preflight: PreflightResult[];
   cutover: CutoverState;
@@ -127,6 +131,7 @@ export function emptyMigration(
     discovery: {},
     minioDetection: {},
     snapshot: null,
+    snapshotPath: null,
     plan: {
       installMethod: "dnf",
       estimatedDowntimeSec: 60,

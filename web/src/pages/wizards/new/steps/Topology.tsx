@@ -8,7 +8,72 @@ interface Props {
   update: (patch: Partial<NewClusterDraft>) => void;
 }
 
+const GiB = 1024 ** 3;
 const TiB = 1024 ** 4;
+
+function humanSize(bytes: number): string {
+  if (bytes >= TiB) return `${(bytes / TiB).toFixed(1)} TiB`;
+  if (bytes >= GiB) return `${(bytes / GiB).toFixed(1)} GiB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(0)} MiB`;
+  return `${(bytes / 1024).toFixed(0)} KiB`;
+}
+
+// Valid erasure set sizes — mirrors setSizes in buckit/cmd/endpoint-ellipses.go.
+const VALID_SET_SIZES = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+
+// selectByPattern groups mounts by their directory prefix (stripping the
+// trailing numeric segment), then picks the largest group. E.g. given
+// ["/data/drive0", ..., "/data/drive15", "/var/lib/buckit-drives"], the
+// prefix "/data/drive" has 16 entries and wins — "/var/lib/buckit-drives"
+// is excluded. If all mounts share the same prefix (or there's no clear
+// pattern), all are selected.
+function selectByPattern(mounts: string[]): string[] {
+  if (mounts.length <= 1) return [...mounts];
+  const groups: Record<string, string[]> = {};
+  for (const m of mounts) {
+    // Strip trailing digits to get the prefix: /data/drive15 → /data/drive
+    const prefix = m.replace(/\d+$/, "");
+    (groups[prefix] ??= []).push(m);
+  }
+  // Pick the largest group.
+  let best: string[] = [];
+  for (const g of Object.values(groups)) {
+    if (g.length > best.length) best = g;
+  }
+  // If the largest group is the same size as the full list, just return all.
+  // Otherwise return only the pattern-matched group.
+  return best.length > 0 ? best.sort() : [...mounts];
+}
+
+// computeSetSize picks the largest valid set size that evenly divides
+// totalDrives, resulting in the fewest erasure sets. Mirrors
+// commonSetDriveCount() in buckit/cmd/endpoint-ellipses.go.
+function computeSetSize(totalDrives: number): number {
+  if (totalDrives <= 0) return 16;
+  if (totalDrives < VALID_SET_SIZES[0]) return totalDrives;
+  let best = VALID_SET_SIZES[0];
+  let bestSets = totalDrives;
+  for (const s of VALID_SET_SIZES) {
+    if (totalDrives % s === 0) {
+      const sets = totalDrives / s;
+      if (sets <= bestSets) {
+        bestSets = sets;
+        best = s;
+      }
+    }
+  }
+  return best;
+}
+
+// defaultParityBlocks mirrors DefaultParityBlocks() in
+// buckit/internal/config/storageclass/storage-class.go.
+function defaultParityBlocks(setDriveCount: number): number {
+  if (setDriveCount <= 1) return 0;
+  if (setDriveCount <= 3) return 1;
+  if (setDriveCount <= 5) return 2;
+  if (setDriveCount <= 7) return 3;
+  return 4;
+}
 
 export function Topology({ draft, update }: Props) {
   const validHosts = draft.hosts.filter((h) => h.hostname.trim());
@@ -26,6 +91,8 @@ export function Topology({ draft, update }: Props) {
 
   const intersection = useMemo(() => intersectMounts(perHost), [perHost]);
   const { common, extrasByHost, eligibleByHost } = intersection;
+  const commonKey = common.join("|");
+  const preferredMounts = useMemo(() => selectByPattern(common), [commonKey]);
 
   // Case detection.
   const someoneHasNoEligible = validHosts.some(
@@ -38,47 +105,75 @@ export function Topology({ draft, update }: Props) {
         ? "B"
         : "A";
 
-  // Auto-select the intersection on first arrival or whenever it
-  // changes. Operator can opt to skip / configure in case C but cases
-  // A/B always pre-select.
-  const commonKey = common.join("|");
+  // Auto-select drives that share a common path pattern. If most drives
+  // share a prefix like /data/drive, /data/disk, etc., select only those
+  // and exclude outliers (e.g. /var/lib/buckit-drives). This mirrors what
+  // Buckit expects: uniform mount paths across all hosts.
   useEffect(() => {
     const same =
-      t.selectedMounts.length === common.length &&
-      t.selectedMounts.every((m, i) => m === common[i]);
+      t.selectedMounts.length === preferredMounts.length &&
+      t.selectedMounts.every((m, i) => m === preferredMounts[i]);
     if (!same) {
-      update({ topology: { ...t, selectedMounts: [...common] } });
+      update({
+        topology: { ...t, selectedMounts: preferredMounts },
+      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [commonKey]);
+  }, [commonKey, preferredMounts]);
+
+  // Recalculate setSize + parity whenever total drives changes (drive
+  // selection toggled, host count changed, etc.). Uses the same defaults
+  // Buckit would pick at startup.
+  const drivesPerNode = t.selectedMounts.length;
+  const totalDrives = validHosts.length * drivesPerNode;
+  useEffect(() => {
+    if (totalDrives <= 0) return;
+    const setSize = computeSetSize(totalDrives);
+    const parity = defaultParityBlocks(setSize);
+    if (t.setSize !== setSize || t.parity !== parity) {
+      update({ topology: { ...t, setSize, parity: parity as typeof t.parity } });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [totalDrives]);
 
   // Derived counts. Use a sample drive size from the first eligible
   // entry — real backend will validate uniformity in preflight.
   const sampleSize = sampleDriveSize(perHost);
-  const drivesPerNode = t.selectedMounts.length;
-  const totalDrives = validHosts.length * drivesPerNode;
   const rawBytes = totalDrives * sampleSize;
   const usableBytes = rawBytes - rawBytes * (t.parity / Math.max(t.setSize, 1));
   const errors = topologyErrors(draft);
+  const hasUnselectedPreferredMount = preferredMounts.some(
+    (mount) => !t.selectedMounts.includes(mount),
+  );
 
   return (
     <div className="vstack" style={{ gap: "var(--s-5)" }}>
       <header>
         <h2 style={{ fontSize: "var(--fs-xl)", fontWeight: 600 }}>Topology</h2>
         <p className="muted" style={{ fontSize: "var(--fs-sm)", marginTop: 4 }}>
-          Drive selection is computed from discovery. Adjust parity and set
-          size if needed.
+          Select drives on each node to use as storage drives. Adjust set size
+          and parity if needed.
         </p>
       </header>
 
       {/* ── case banner ───────────────────────────────────────────── */}
-      {caseKind === "A" && (
+      {caseKind === "A" && errors.length === 0 && (
         <div className="banner banner--info">
           <span>✓</span>
           <span>
-            {common.length} common mountpoint{common.length === 1 ? "" : "s"}{" "}
-            found across {validHosts.length}{" "}
+            {drivesPerNode} drive{drivesPerNode === 1 ? "" : "s"} selected{" "}
+            across {validHosts.length}{" "}
             host{validHosts.length === 1 ? "" : "s"}. Ready to deploy.
+          </span>
+        </div>
+      )}
+      {caseKind === "A" && errors.length > 0 && (
+        <div className="banner banner--warning">
+          <span>⚠</span>
+          <span>
+            {drivesPerNode} drive{drivesPerNode === 1 ? "" : "s"} selected{" "}
+            across {validHosts.length}{" "}
+            host{validHosts.length === 1 ? "" : "s"}. Fix the errors below to continue.
           </span>
         </div>
       )}
@@ -132,16 +227,25 @@ export function Topology({ draft, update }: Props) {
             <select
               className="select"
               value={t.setSize}
-              onChange={(e) =>
+              onChange={(e) => {
+                const newSetSize = parseInt(e.target.value, 10);
                 update({
-                  topology: { ...t, setSize: parseInt(e.target.value, 10) },
-                })
-              }
+                  topology: {
+                    ...t,
+                    setSize: newSetSize,
+                    parity: defaultParityBlocks(newSetSize) as typeof t.parity,
+                  },
+                });
+              }}
             >
-              {[8, 12, 16, 24].map((n) => (
-                <option key={n}>{n}</option>
-              ))}
+              {VALID_SET_SIZES.filter((s) => totalDrives > 0 && totalDrives % s === 0).map((n) => {
+                const rec = computeSetSize(totalDrives);
+                return <option key={n} value={n}>{n}{n === rec ? " (recommended)" : ""}</option>;
+              })}
             </select>
+            <p className="subtle" style={{ fontSize: "var(--fs-xs)", marginTop: 4 }}>
+              Drives grouped into one erasure unit. Must evenly divide total drives.
+            </p>
           </div>
           <div>
             <div className="field-label">Parity</div>
@@ -157,10 +261,14 @@ export function Topology({ draft, update }: Props) {
                 })
               }
             >
-              {[2, 3, 4, 6, 8].map((n) => (
-                <option key={n}>{n}</option>
-              ))}
+              {Array.from({ length: Math.floor(t.setSize / 2) }, (_, i) => i + 1).map((n) => {
+                const rec = defaultParityBlocks(t.setSize);
+                return <option key={n} value={n}>{n}{n === rec ? " (recommended)" : ""}</option>;
+              })}
             </select>
+            <p className="subtle" style={{ fontSize: "var(--fs-xs)", marginTop: 4 }}>
+              Drives reserved for redundancy per set. Higher = more fault tolerance, less usable space. Max: {Math.floor(t.setSize / 2)}.
+            </p>
           </div>
         </div>
 
@@ -169,8 +277,8 @@ export function Topology({ draft, update }: Props) {
             Total drives: <b>{totalDrives}</b> ·{" "}
             <b>{totalDrives / t.setSize || 0}</b> erasure set
             {totalDrives / t.setSize === 1 ? "" : "s"} · Usable capacity:{" "}
-            <b>~{Math.round(usableBytes / TiB)} TiB</b> of{" "}
-            {Math.round(rawBytes / TiB)} TiB raw
+            <b>~{humanSize(usableBytes)}</b> of{" "}
+            {humanSize(rawBytes)} raw
           </div>
         )}
 
@@ -187,14 +295,49 @@ export function Topology({ draft, update }: Props) {
           <div className="banner banner--info">
             <span>ℹ</span>
             <span>
-              EC:{t.parity} tolerates loss of up to {t.parity} drives per set
-              of {t.setSize}.
+              EC:{t.parity} tolerates loss of up to <b>{t.parity} drives</b> per
+              set of {t.setSize} without data loss. Each object is split into{" "}
+              {t.setSize - t.parity} data shards + {t.parity} parity shards.
+              Usable capacity ≈ {Math.round((1 - t.parity / t.setSize) * 100)}%
+              of raw.
             </span>
           </div>
         )}
-      </div>
 
-      {/* ── selected mountpoints ──────────────────────────────────── */}
+        <details className="subtle" style={{ fontSize: "var(--fs-xs)", marginTop: "var(--s-2)" }}>
+          <summary style={{ cursor: "pointer" }}>How are set size and parity calculated?</summary>
+          <div className="vstack" style={{ gap: "var(--s-2)", marginTop: "var(--s-2)", paddingLeft: "var(--s-3)" }}>
+            <p>
+              <b>Set size</b> is the number of drives in one erasure unit. Buckit
+              supports set sizes from 2 to 16. The default is the largest value
+              that evenly divides your total drive count, resulting in the fewest
+              erasure sets.
+            </p>
+            <p>
+              <b>Parity</b> is how many drives per set are reserved for redundancy.
+              The default depends on set size:
+            </p>
+            <ul style={{ paddingLeft: "1.2em", margin: 0 }}>
+              <li>Set size 2–3 → parity 1</li>
+              <li>Set size 4–5 → parity 2</li>
+              <li>Set size 6–7 → parity 3</li>
+              <li>Set size 8–16 → parity 4</li>
+            </ul>
+            <p>
+              Maximum allowed parity is half the set size (e.g. set size 16 → max
+              parity 8). Higher parity means more fault tolerance but less usable
+              capacity.
+            </p>
+            <p>
+              <b>Your configuration:</b> {totalDrives} total drives ÷ set size{" "}
+              {t.setSize} = {Math.floor(totalDrives / t.setSize)} erasure set
+              {Math.floor(totalDrives / t.setSize) === 1 ? "" : "s"}. Each set
+              stores {t.setSize - t.parity} data shards + {t.parity} parity
+              shards per object.
+            </p>
+          </div>
+        </details>
+      </div>
       <div className="card vstack" style={{ gap: "var(--s-3)" }}>
         <h3 className="card-stat__title">Selected drives</h3>
         {caseKind === "C" ? (
@@ -207,8 +350,8 @@ export function Topology({ draft, update }: Props) {
         ) : (
           <>
             <p className="subtle" style={{ fontSize: "var(--fs-sm)" }}>
-              These mountpoints exist on every host and will be included
-              in <span className="mono">MINIO_VOLUMES</span>.
+              These mountpoints exist on every host and will be used as
+              storage drives.
             </p>
             <div
               className="hstack"
@@ -243,15 +386,19 @@ export function Topology({ draft, update }: Props) {
                 );
               })}
             </div>
-            {t.selectedMounts.length !== common.length && (
+            {hasUnselectedPreferredMount && (
               <>
                 <div className="banner banner--warning">
                   <span>⚠</span>
                   <span>
                     Deploying with {t.selectedMounts.length} of{" "}
-                    {common.length} discoverable drives per host. Unused
-                    drives can't be added to this pool later — you'd have
-                    to add a new pool with its own erasure set.
+                    {preferredMounts.length} drives with the{" "}
+                    <span className="mono">
+                      {mountPatternLabel(preferredMounts)}
+                    </span>{" "}
+                    pattern per host. Unused drives can't be added to this
+                    pool later — you'd have to add a new pool with its own
+                    erasure set.
                   </span>
                 </div>
                 <div>
@@ -321,6 +468,12 @@ function byMount(a: string, b: string): number {
     return String(ax[i]) < String(bx[i]) ? -1 : 1;
   }
   return ax.length - bx.length;
+}
+
+function mountPatternLabel(mounts: string[]): string {
+  if (mounts.length === 0) return "selected";
+  const base = mounts[0].replace(/\d+$/, "");
+  return base === mounts[0] ? mounts[0] : base;
 }
 
 function sampleDriveSize(

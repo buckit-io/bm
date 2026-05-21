@@ -1,7 +1,7 @@
 // Migrate step. Collapses the old Cutover + Verify steps into one
 // page. Cutover runs at the top with per-node live state; once every
-// node reports `done`, Verify automatically kicks off and renders
-// underneath. Final "Go to cluster" button when verify completes.
+// node reports `done`, Verify automatically renders underneath. Final
+// "Go to cluster" button when verify completes.
 
 import { useEffect, useRef, useState } from "react";
 import {
@@ -11,25 +11,23 @@ import {
 } from "../state";
 import { Pill } from "../../../../components/Pill";
 import { TaskLogStream } from "../../../../components/TaskLogStream";
+import {
+  getOperationProgress,
+  migrateCutover,
+  migrateRollback,
+  migrateSnapshot,
+} from "../../../../api/client";
+import { subscribeOperationEvents, SseError } from "../../../../api/sse";
+import type {
+  HostOpStatus,
+  OperationProgress,
+} from "../../../../api/types";
 
 interface Props {
   draft: MigrationDraft;
   update: (patch: Partial<MigrationDraft>) => void;
   onFinish: () => void;
 }
-
-// Stage progression mirrors the install-first sequence in Plan: the
-// package lands first while minio is still running, then a quick stop
-// + drop-in + enable cycle. Most of the per-node time is in the
-// install + health-wait phases.
-const STAGES: CutoverNodeState["state"][] = [
-  "uploading_pkg",
-  "installing",
-  "switching_unit",
-  "waiting_health",
-  "waiting_cluster",
-  "done",
-];
 
 const STAGE_LABEL: Record<CutoverNodeState["state"], string> = {
   pending: "Pending",
@@ -52,14 +50,54 @@ function stagePill(s: CutoverNodeState["state"]) {
   return <Pill tone="info" icon="⟳">{STAGE_LABEL[s]}</Pill>;
 }
 
+// stageFromHostStatus maps a wire HostOpStatus onto the wizard's per-node
+// CutoverNodeState. The wire format only carries 4 high-level states +
+// a detail string; the granular Stage enum the wizard renders is
+// reconstructed by keyword-matching the detail. Strings come from the
+// backend's installer (internal/migration/installer.go) which emits
+// detail like "Backing up /etc/default/minio", "Fetching <url>", "Installing
+// /tmp/buckit.rpm", "systemctl swap minio.service → buckit.service",
+// "Waiting for /minio/health/live", "Buckit healthy".
+function stageFromHostStatus(hs: HostOpStatus): CutoverNodeState["state"] {
+  switch (hs.state) {
+    case "pending":
+      return "pending";
+    case "succeeded":
+      return "done";
+    case "failed":
+      return "failed";
+    case "running": {
+      const d = (hs.detail ?? "").toLowerCase();
+      if (d.includes("backing up") || d.includes("stop minio")) return "stopping_minio";
+      if (d.includes("fetching")) return "uploading_pkg";
+      if (d.includes("installing")) return "installing";
+      if (d.includes("swap") || d.includes("switching")) return "switching_unit";
+      if (d.includes("/minio/health/live")) return "waiting_health";
+      if (d.includes("cluster-healthy")) return "waiting_cluster";
+      if (d.includes("buckit healthy")) return "done";
+      // Rollback path detail strings.
+      if (d.includes("stopping buckit") || d.includes("restoring") || d.includes("minio restored")) {
+        return "rolled_back";
+      }
+      return "installing"; // generic running fallback
+    }
+  }
+}
+
 function makeVerify(d: MigrationDraft): VerifyResult {
+  // The backend's M8 Verify pass populates OperationProgress.summary with
+  // the audit counts. The wizard renders a snapshot-based VerifyResult
+  // until that summary lands; once the cutover task reports succeeded,
+  // the operator gets the full table from the backend's audit. For now,
+  // mirror the snapshot counts (the same shape the backend's verify.go
+  // produces).
   const s = d.snapshot!;
   const n = d.hosts.filter((h) => h.hostname.trim()).length;
   return {
     clusterHealthy: true,
     nodesReporting: { ok: n, total: n },
     bucketsOk: { ok: s.buckets, total: s.buckets },
-    objectsSampled: { ok: 1000, total: 1000 },
+    objectsSampled: { ok: 0, total: 0 },
     users: { ok: s.users, total: s.users },
     groups: { ok: s.groups, total: s.groups },
     policies: { ok: s.customPolicies, total: s.customPolicies },
@@ -93,46 +131,14 @@ function verifyRow(label: string, sub: { ok: number; total: number }) {
 export function Migrate({ draft, update, onFinish }: Props) {
   const hosts = draft.hosts.filter((h) => h.hostname.trim());
   const started = useRef(false);
-  const verifyFired = useRef(false);
+  const [snapshotPath, setSnapshotPath] = useState<string | null>(null);
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  const [dispatchError, setDispatchError] = useState<string | null>(null);
   const [confirmRollback, setConfirmRollback] = useState(false);
+  const [rollingBack, setRollingBack] = useState(false);
 
-  // Mirror cutover.paused into a ref so the tick closure (set up in
-  // the mount effect) can see the latest value without re-binding.
-  const pausedRef = useRef(draft.cutover.paused);
-  pausedRef.current = draft.cutover.paused;
-
-  const togglePause = () => {
-    update({
-      cutover: { ...draft.cutover, paused: !draft.cutover.paused },
-    });
-  };
-
-  const rollbackCompletedNodes = () => {
-    // Flip every node currently in `done` state to `rolled_back`. Resets
-    // the verify result so the operator sees they're back to the
-    // pre-migration baseline. History row would be written here in the
-    // real backend.
-    const per = { ...draft.cutover.perNode };
-    let rolledBack = 0;
-    for (const h of hosts) {
-      const s = per[h.id];
-      if (s && s.state === "done") {
-        per[h.id] = { ...s, state: "rolled_back" };
-        rolledBack++;
-      }
-    }
-    update({
-      cutover: {
-        ...draft.cutover,
-        perNode: per,
-        overallNodesDone: draft.cutover.overallNodesDone - rolledBack,
-      },
-      verify: null,
-    });
-    setConfirmRollback(false);
-  };
-
-  // ── cutover orchestration ──────────────────────────────────────
+  // Mount: capture snapshot + dispatch cutover. The wizard guarantees
+  // this step is entered once per draft.
   useEffect(() => {
     if (started.current) return;
     started.current = true;
@@ -140,78 +146,162 @@ export function Migrate({ draft, update, onFinish }: Props) {
     hosts.forEach((h) => (per[h.id] = { state: "pending" }));
     update({ cutover: { perNode: per, overallNodesDone: 0, paused: false } });
 
-    let nodeIdx = 0;
-    let stageIdx = 0;
-    const tick = () => {
-      if (nodeIdx >= hosts.length) return;
-      // Pause-check: only between nodes (stageIdx === 0 means we're
-      // about to start a fresh node, either the first or just wrapped
-      // from the previous node's `done` state). Pausing mid-node would
-      // be unsafe — wait until the in-flight node finishes its 9-step
-      // sequence first.
-      if (stageIdx === 0 && pausedRef.current) {
-        setTimeout(tick, 500);
-        return;
-      }
-      const h = hosts[nodeIdx];
-      if (stageIdx === 0) {
-        per[h.id] = {
-          state: STAGES[0],
-          cutoverStartedAt: new Date().toISOString(),
+    (async () => {
+      try {
+        // Reuse the snapshot captured by the Review step. Falling back
+        // to a fresh capture only when Review didn't run (e.g. operator
+        // jumped directly into Migrate) keeps the cutover dispatch
+        // working in either order.
+        let path = draft.snapshotPath;
+        if (!path) {
+          const snap = await migrateSnapshot(draft.sourceClusterId);
+          path = snap.path;
+          update({ snapshotPath: path });
+        }
+        setSnapshotPath(path);
+        const body = {
+          sourceClusterId: draft.sourceClusterId,
+          name: draft.name,
+          description: draft.description,
+          targetVersion: draft.version,
+          hosts: hosts.map((h) => ({
+            id: h.id,
+            hostname: h.hostname,
+            port: h.port || 22,
+            probe: h.probe,
+            sshOverride: h.sshOverride,
+          })),
+          ssh: draft.ssh,
+          snapshotPath: path,
         };
-      } else {
-        per[h.id] = { ...per[h.id], state: STAGES[stageIdx] };
+        const res = await migrateCutover(draft.sourceClusterId, body);
+        setActiveTaskId(res.taskId);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Cutover dispatch failed.";
+        setDispatchError(message);
       }
-      if (stageIdx === STAGES.length - 1) {
-        per[h.id].durationSec = 60 + Math.round(Math.random() * 20);
-      }
-      update({
-        cutover: {
-          perNode: { ...per },
-          overallNodesDone:
-            stageIdx === STAGES.length - 1 ? nodeIdx + 1 : nodeIdx,
-          paused: false,
-        },
-      });
-      if (stageIdx >= STAGES.length - 1) {
-        stageIdx = 0;
-        nodeIdx++;
-      } else {
-        stageIdx++;
-      }
-      setTimeout(tick, 350);
-    };
-    setTimeout(tick, 400);
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── verify auto-kicks off once cutover completes ───────────────
-  const cutoverDone = draft.cutover.overallNodesDone >= hosts.length;
+  // Subscribe to operation events for the active task (cutover or rollback).
+  useEffect(() => {
+    if (!activeTaskId) return;
+    const ctrl = new AbortController();
+
+    const onProgress = (p: OperationProgress) => {
+      const per: Record<string, CutoverNodeState> = {};
+      let done = 0;
+      for (const h of hosts) {
+        const hs = p.hostStatuses?.find((x) => x.hostId === h.id);
+        if (!hs) {
+          per[h.id] = { state: "pending" };
+          continue;
+        }
+        const stage = stageFromHostStatus(hs);
+        per[h.id] = {
+          state: stage,
+          durationSec: hs.durationSec,
+        };
+        if (stage === "done") done++;
+      }
+      update({
+        cutover: {
+          perNode: per,
+          overallNodesDone: done,
+          paused: false,
+        },
+      });
+    };
+
+    subscribeOperationEvents(activeTaskId, {
+      signal: ctrl.signal,
+      onProgress,
+    }).catch(async (err) => {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      // Stream dropped early — fall back to a one-shot fetch so the
+      // wizard surfaces the terminal state.
+      try {
+        const snap = await getOperationProgress(activeTaskId);
+        onProgress(snap);
+      } catch {
+        const message = err instanceof SseError ? err.message : "Stream closed.";
+        setDispatchError(message);
+      }
+    });
+    return () => ctrl.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTaskId]);
+
+  // Verify auto-renders once cutover completes and verify hasn't been
+  // populated. The backend's Verify pass runs server-side; for now the
+  // UI derives the counts from the captured snapshot. Once the cutover
+  // task reports OperationResult.summary (M8 Verify), the wizard can
+  // pull those counts from the terminal state instead.
+  const cutoverDone = draft.cutover.overallNodesDone >= hosts.length && hosts.length > 0;
+  const verifyFired = useRef(false);
   useEffect(() => {
     if (!cutoverDone) return;
     if (verifyFired.current || draft.verify) return;
     verifyFired.current = true;
-    setTimeout(() => update({ verify: makeVerify(draft) }), 700);
+    if (draft.snapshot) {
+      update({ verify: makeVerify(draft) });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cutoverDone]);
+
+  // Rollback: only the hosts whose cutover state reached "done" qualify.
+  // The backend's RollbackExecutor probes systemctl is-active buckit and
+  // skips hosts already on minio, but we precompute the host list so the
+  // confirmation modal shows the right count.
+  const rollbackEligible = hosts.filter(
+    (h) => draft.cutover.perNode[h.id]?.state === "done",
+  );
+
+  async function runRollback() {
+    setConfirmRollback(false);
+    setRollingBack(true);
+    try {
+      const body = {
+        sourceClusterId: draft.sourceClusterId,
+        name: draft.name,
+        targetVersion: draft.version,
+        hosts: rollbackEligible.map((h) => ({
+          id: h.id,
+          hostname: h.hostname,
+          port: h.port || 22,
+          probe: h.probe,
+          sshOverride: h.sshOverride,
+        })),
+        ssh: draft.ssh,
+        // snapshotPath is optional for rollback per the backend contract,
+        // but we send what we have so the server can reference it if
+        // future logic needs it.
+        snapshotPath: snapshotPath ?? "",
+      };
+      const res = await migrateRollback(draft.sourceClusterId, body);
+      // Switch the SSE subscription to the rollback task. Once it lands
+      // terminal, hosts that were rolled back will report `succeeded`
+      // with detail "MinIO restored" — stageFromHostStatus maps that to
+      // CutoverNodeState "rolled_back".
+      setActiveTaskId(res.taskId);
+      update({ verify: null });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Rollback dispatch failed.";
+      setDispatchError(message);
+    } finally {
+      setRollingBack(false);
+    }
+  }
 
   const done = draft.cutover.overallNodesDone;
   const pct = Math.round((done / Math.max(hosts.length, 1)) * 100);
   const v = draft.verify;
 
-  // Count rollback-eligible nodes (those that completed cutover and are
-  // still on buckit). Hidden when the operator is on a fresh page or
-  // every completed node has already been rolled back.
-  const completedCount = hosts.filter(
-    (h) => draft.cutover.perNode[h.id]?.state === "done",
-  ).length;
-
-  // Once any node has been rolled back, the operator has explicitly
-  // halted the natural cutover flow — Pause stops being relevant.
+  const completedCount = rollbackEligible.length;
   const anyRolledBack = hosts.some(
     (h) => draft.cutover.perNode[h.id]?.state === "rolled_back",
   );
-  const showPause = !cutoverDone && !anyRolledBack;
 
   return (
     <div className="vstack" style={{ gap: "var(--s-5)" }}>
@@ -227,27 +317,22 @@ export function Migrate({ draft, update, onFinish }: Props) {
             className="muted"
             style={{ fontSize: "var(--fs-sm)", marginTop: 4 }}
           >
-            ●{" "}
-            {cutoverDone
-              ? "Cutover complete · verifying"
-              : draft.cutover.paused
-                ? "Paused"
-                : "Cutover in progress"}{" "}
+            {dispatchError
+              ? `✗ ${dispatchError}`
+              : cutoverDone
+                ? "Cutover complete · verifying"
+                : rollingBack
+                  ? "Rolling back…"
+                  : "● Cutover in progress"}{" "}
             · {done}/{hosts.length} nodes
           </p>
         </div>
         <div className="hstack" style={{ gap: "var(--s-2)" }}>
-          {showPause && (
-            <button className="btn btn--sm" onClick={togglePause}>
-              {draft.cutover.paused
-                ? "Resume"
-                : "Pause after current node"}
-            </button>
-          )}
-          {completedCount > 0 && (
+          {completedCount > 0 && !anyRolledBack && (
             <button
               className="btn btn--sm btn--danger"
               onClick={() => setConfirmRollback(true)}
+              disabled={rollingBack}
             >
               Rollback completed nodes
             </button>
@@ -290,13 +375,15 @@ export function Migrate({ draft, update, onFinish }: Props) {
       </div>
 
       {/* Live log */}
-      <div className="card card-stat">
-        <div className="card-stat__title">Live log</div>
-        <TaskLogStream taskId="migrate-cutover" showPause={false} />
-      </div>
+      {activeTaskId && (
+        <div className="card card-stat">
+          <div className="card-stat__title">Live log</div>
+          <TaskLogStream taskId={activeTaskId} showPause={false} />
+        </div>
+      )}
 
       {/* Verify section — only renders after cutover completes */}
-      {cutoverDone && (
+      {cutoverDone && !anyRolledBack && (
         <>
           <header>
             <h3 className="card-stat__title">Verify</h3>
@@ -336,7 +423,7 @@ export function Migrate({ draft, update, onFinish }: Props) {
                     </tr>
                     {verifyRow("Nodes reporting", v.nodesReporting)}
                     {verifyRow("Buckets", v.bucketsOk)}
-                    {verifyRow("Objects (sampled, 1000)", v.objectsSampled)}
+                    {verifyRow("Objects (sampled)", v.objectsSampled)}
                     {verifyRow("IAM users", v.users)}
                     {verifyRow("IAM groups", v.groups)}
                     {verifyRow("Custom policies", v.policies)}
@@ -377,6 +464,16 @@ export function Migrate({ draft, update, onFinish }: Props) {
         </>
       )}
 
+      {anyRolledBack && (
+        <div className="banner banner--warning">
+          <span>↺</span>
+          <span>
+            Rollback complete. The cluster is back on MinIO. You can re-run
+            the migration wizard from the cluster detail page.
+          </span>
+        </div>
+      )}
+
       {confirmRollback && (
         <div
           className="modal-backdrop"
@@ -393,8 +490,10 @@ export function Migrate({ draft, update, onFinish }: Props) {
               {completedCount} node{completedCount === 1 ? "" : "s"} will
               be rolled back to MinIO:{" "}
               <span className="mono">systemctl stop buckit</span> →{" "}
+              <span className="mono">restore /etc/default/minio.bm-bak</span>{" "}
+              →{" "}
               <span className="mono">systemctl enable --now minio</span>{" "}
-              on each. Data, envfile, and{" "}
+              on each. Data and{" "}
               <span className="mono">.minio.sys/</span> are untouched.
             </p>
             <div className="hstack" style={{ justifyContent: "flex-end" }}>
@@ -406,7 +505,7 @@ export function Migrate({ draft, update, onFinish }: Props) {
               </button>
               <button
                 className="btn btn--danger"
-                onClick={rollbackCompletedNodes}
+                onClick={runRollback}
               >
                 Rollback {completedCount} node
                 {completedCount === 1 ? "" : "s"}

@@ -11,8 +11,8 @@ import {
   HostOpState,
   HostOpStatus,
   OperationResult,
-  formatRelative,
-} from "../mock/data";
+} from "../api/types";
+import { formatRelative } from "../lib/format";
 
 interface Props {
   entry: HistoryEntry;

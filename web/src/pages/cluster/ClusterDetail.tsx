@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { useCluster, useNodes } from "../../api/hooks";
+import { useCluster, useNodes, useRefreshCluster } from "../../api/hooks";
 import { Pill } from "../../components/Pill";
-import { Cluster, formatBytes, Node } from "../../mock/data";
+import { Cluster, Node } from "../../api/types";
+import { formatBytes } from "../../lib/format";
 import { OperationDef } from "./operations/defs";
 import { OperationModal } from "./operations/OperationModal";
 import { CLUSTER_OPERATIONS, GROUP_LABELS } from "./operations/catalog";
@@ -78,7 +79,7 @@ function summarizePools(nodes: Node[], parity: number): PoolSummary[] {
     if (n.state === "online") p.nodes.online++;
     else if (n.state === "degraded") p.nodes.degraded++;
     else p.nodes.offline++;
-    for (const d of n.drives) {
+    for (const d of n.drives ?? []) {
       if (d.isBoot) continue;
       p.drives.total++;
       if (d.state === "ready") p.drives.ready++;
@@ -229,6 +230,69 @@ export function ClusterDetailLayout() {
   const qc = useQueryClient();
   const { data: cluster, isLoading } = useCluster(clusterId);
   const { data: nodes } = useNodes(clusterId);
+  const { mutateAsync: refreshClusterAsync } = useRefreshCluster(clusterId);
+  const [initialRefreshDone, setInitialRefreshDone] = useState(false);
+  const refreshRunningRef = useRef(false);
+  const followupTimersRef = useRef<number[]>([]);
+
+  function clearFollowupTimers() {
+    for (const id of followupTimersRef.current) window.clearTimeout(id);
+    followupTimersRef.current = [];
+  }
+
+  function scheduleProbePickup() {
+    if (!clusterId) return;
+    clearFollowupTimers();
+    for (const delayMs of [1000, 3000, 6000]) {
+      const timer = window.setTimeout(() => {
+        qc.invalidateQueries({ queryKey: ["nodes", clusterId] });
+      }, delayMs);
+      followupTimersRef.current.push(timer);
+    }
+  }
+
+  useEffect(() => {
+    if (!clusterId) {
+      setInitialRefreshDone(true);
+      return;
+    }
+    let canceled = false;
+    refreshRunningRef.current = true;
+    setInitialRefreshDone(false);
+    refreshClusterAsync()
+      .then(() => {
+        scheduleProbePickup();
+      })
+      .catch(() => {})
+      .finally(() => {
+        refreshRunningRef.current = false;
+        if (!canceled) setInitialRefreshDone(true);
+      });
+    return () => {
+      canceled = true;
+      clearFollowupTimers();
+    };
+  }, [clusterId, qc, refreshClusterAsync]);
+
+  useEffect(() => {
+    if (!clusterId) return;
+    const id = window.setInterval(() => {
+      if (refreshRunningRef.current) return;
+      refreshRunningRef.current = true;
+      refreshClusterAsync()
+        .then(() => {
+          scheduleProbePickup();
+        })
+        .catch(() => {})
+        .finally(() => {
+          refreshRunningRef.current = false;
+        });
+    }, 30 * 60 * 1000);
+    return () => {
+      window.clearInterval(id);
+      clearFollowupTimers();
+    };
+  }, [clusterId, qc, refreshClusterAsync]);
 
   // ---- selection ----
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -348,7 +412,9 @@ export function ClusterDetailLayout() {
     });
   };
 
-  if (isLoading) return <p className="muted">Loading cluster…</p>;
+  if (isLoading || !initialRefreshDone) {
+    return <p className="muted">Refreshing cluster…</p>;
+  }
   if (!cluster) return <p className="muted">Cluster not found.</p>;
 
   const summary = cluster.healthSummary;
@@ -381,6 +447,14 @@ export function ClusterDetailLayout() {
       {/* ── header ──────────────────────────────────────────────────── */}
       <header className="cdetail__header">
         <div>
+          <div
+            className="subtle"
+            style={{ marginBottom: "var(--s-2)", fontSize: "var(--fs-sm)" }}
+          >
+            <Link to="/clusters">Clusters</Link>
+            <span> / </span>
+            <span>{cluster.name}</span>
+          </div>
           <h1 className="cdetail__name">
             {cluster.name}
             {clusterHealthPill(cluster)}
@@ -393,14 +467,16 @@ export function ClusterDetailLayout() {
           </p>
         </div>
         <div className="hstack">
-          <a
-            className="btn"
-            href={`https://${cluster.id}.example.com:9001`}
-            target="_blank"
-            rel="noreferrer"
-          >
-            ↗ Open {cluster.engine === "minio" ? "MinIO" : "Buckit"} console
-          </a>
+          {cluster.consoleUrl && (
+            <a
+              className="btn"
+              href={cluster.consoleUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
+              ↗ Open {cluster.engine === "minio" ? "MinIO" : "Buckit"} console
+            </a>
+          )}
           {cluster.engine === "minio" && (
             <button
               className="btn btn--primary"

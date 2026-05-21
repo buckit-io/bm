@@ -1,14 +1,14 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import {
-  commitImport,
-  discoverCluster,
+import { commitImport } from "../api/client";
+import { discoverClusterStream, SseError } from "../api/sse";
+import type {
   DiscoveryProgress,
   ImportCandidate,
   ImportError,
-} from "../mock/api";
-import { formatBytes } from "../mock/data";
+} from "../api/types";
+import { formatBytes } from "../lib/format";
 import "./Import.css";
 
 type Phase =
@@ -32,24 +32,61 @@ export function Import() {
   const [password, setPassword] = useState("");
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
 
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Cancel any in-flight discover stream when the page unmounts (e.g. the
+  // operator hits Cancel and navigates back).
+  useEffect(() => {
+    return () => abortRef.current?.abort();
+  }, []);
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setPhase({ kind: "discovering", lines: [] });
-    const result = await discoverCluster({ url, username, password }, (line) => {
-      setPhase((p) =>
-        p.kind === "discovering" ? { ...p, lines: [...p.lines, line] } : p,
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    try {
+      const result = await discoverClusterStream(
+        { url, username, password },
+        {
+          signal: ctrl.signal,
+          onProgress: (line) => {
+            setPhase((p) =>
+              p.kind === "discovering" ? { ...p, lines: [...p.lines, line] } : p,
+            );
+          },
+        },
       );
-    });
-    setPhase((p) => {
-      const lines = p.kind === "discovering" ? p.lines : [];
-      if (!result.ok) return { kind: "error", lines, error: result.error };
-      return {
-        kind: "ready",
-        lines,
-        candidate: result.candidate,
-        chosenName: "",
-      };
-    });
+      setPhase((p) => {
+        const lines = p.kind === "discovering" ? p.lines : [];
+        if (!result.ok) return { kind: "error", lines, error: result.error };
+        return {
+          kind: "ready",
+          lines,
+          candidate: result.candidate,
+          chosenName: "",
+        };
+      });
+    } catch (err) {
+      // Aborted streams (operator navigated away) are silent — the page
+      // is unmounting. Anything else surfaces as a generic error frame.
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      const message =
+        err instanceof SseError
+          ? `${err.message}`
+          : err instanceof Error
+            ? err.message
+            : "Discovery failed.";
+      setPhase((p) => {
+        const lines = p.kind === "discovering" ? p.lines : [];
+        return {
+          kind: "error",
+          lines,
+          error: { kind: "unreachable", message },
+        };
+      });
+    }
   }
 
   async function onSave() {
@@ -57,9 +94,18 @@ export function Import() {
     const candidate = phase.candidate;
     const chosenName = phase.chosenName;
     setPhase({ kind: "saving", candidate, chosenName });
-    const { clusterId } = await commitImport(candidate, chosenName);
-    qc.invalidateQueries({ queryKey: ["clusters"] });
-    navigate(`/clusters/${clusterId}`);
+    try {
+      const { clusterId } = await commitImport({ candidate, chosenName });
+      qc.invalidateQueries({ queryKey: ["clusters"] });
+      navigate(`/clusters/${clusterId}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Save failed.";
+      setPhase({
+        kind: "error",
+        lines: [],
+        error: { kind: "unreachable", message },
+      });
+    }
   }
 
   function onCloseModal() {

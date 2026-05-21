@@ -114,7 +114,7 @@ export function SshOverrideFields({ defaults, value, onChange }: Props) {
       )}
 
       {authMethod === "password" && (
-        <div className="field" style={{ maxWidth: 320 }}>
+        <div className="field" style={{ width: 200 }}>
           <label className="field-label">SSH password</label>
           <input
             type="password"

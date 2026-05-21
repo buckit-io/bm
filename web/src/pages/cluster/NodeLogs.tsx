@@ -1,7 +1,6 @@
 // Live log viewer for a single node, reached from the per-node Actions
 // menu's "View live logs" item. Real backend tails journalctl over the
-// admin API and streams to the browser via SSE. Mock uses the existing
-// TaskLogStream which emits canned lines.
+// admin API and streams to the browser via SSE (endpoint currently 501).
 
 import { Link, useParams } from "react-router-dom";
 import { useCluster, useNode } from "../../api/hooks";

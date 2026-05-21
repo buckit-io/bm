@@ -1,15 +1,29 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCluster, useNode } from "../../api/hooks";
 import { Pill } from "../../components/Pill";
-import { formatBytes, formatDuration } from "../../mock/data";
+import { formatBytes, formatDuration } from "../../lib/format";
 import { OperationDef } from "./operations/defs";
 import { OperationModal } from "./operations/OperationModal";
 import {
   NODE_OPERATIONS,
   NODE_GROUP_LABELS,
 } from "./operations/nodeCatalog";
+
+function statusDot(ok: boolean) {
+  return (
+    <span
+      aria-hidden
+      style={{
+        color: ok ? "var(--c-success)" : "var(--c-danger)",
+        fontSize: "0.9em",
+      }}
+    >
+      ●
+    </span>
+  );
+}
 
 // Ops grouped by NODE_GROUP_LABELS for menu rendering; preserves the
 // catalog's declared order.
@@ -95,6 +109,16 @@ export function NodeDetail() {
         style={{ justifyContent: "space-between", alignItems: "flex-start" }}
       >
         <div>
+          <div
+            className="subtle"
+            style={{ marginBottom: "var(--s-2)", fontSize: "var(--fs-sm)" }}
+          >
+            <Link to="/clusters">Clusters</Link>
+            <span> / </span>
+            <Link to={`/clusters/${clusterId}`}>{cluster?.name ?? clusterId}</Link>
+            <span> / </span>
+            <span>{node.hostname}</span>
+          </div>
           <h1 style={{ fontSize: "var(--fs-2xl)", fontWeight: 600 }}>
             {node.hostname}
           </h1>
@@ -200,24 +224,18 @@ export function NodeDetail() {
           </div>
         </div>
         <div className="card card-stat">
-          <div className="card-stat__title">Service</div>
-          <div className="card-stat__sub"><b>Unit</b> buckit.service (active, enabled)</div>
-          <div className="card-stat__sub"><b>Listen</b> :9000, :9001</div>
-          <div className="card-stat__sub"><b>Last restart</b> 3 days ago</div>
-        </div>
-        <div className="card card-stat">
           <div className="card-stat__title">Connectivity</div>
           <div className="card-stat__sub">
-            <b>Ping</b> {node.pingable ? "● reachable" : "✗ unreachable"}
+            <b>Ping</b> {statusDot(node.pingable)} {node.pingable ? "reachable" : "unreachable"}
           </div>
           <div className="card-stat__sub">
-            <b>SSH</b> {node.sshable ? "● reachable" : "✗ failed"}
+            <b>SSH</b> {statusDot(node.sshable)} {node.sshable ? "reachable" : "failed"}
           </div>
           <div className="card-stat__sub">
-            <b>S3 API</b> {node.apiAccessible ? "● ok" : "✗ down"}
+            <b>S3 API</b> {statusDot(node.apiAccessible)} {node.apiAccessible ? "ok" : "down"}
           </div>
           <div className="card-stat__sub">
-            <b>Console</b> {node.consoleAccessible ? "● ok" : "✗ down"}
+            <b>Console</b> {statusDot(node.consoleAccessible)} {node.consoleAccessible ? "ok" : "down"}
           </div>
         </div>
       </div>
