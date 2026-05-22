@@ -282,6 +282,7 @@ func TestM7RotateRootCredsStub(t *testing.T) {
 
 func TestM7ClusterUpgradeBySystemctlUsesArm64RPM(t *testing.T) {
 	h := newM7Harness(t)
+	h.restartVersion = "RELEASE.2026-06-01T00-00-00Z"
 	artifactLn, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -323,6 +324,8 @@ func TestM7ClusterUpgradeBySystemctlUsesArm64RPM(t *testing.T) {
 		case strings.Contains(cmd, "sha256sum -c -") || strings.Contains(cmd, "shasum -a 256 -c -"):
 			verified = true
 			return "", "", 0, true
+		case strings.Contains(cmd, "rpm -q --qf") && strings.Contains(cmd, "rpm -qp --qf"):
+			return "installed=0:20260501000000.0.0-1.aarch64\ncandidate=0:20260601000000.0.0-1.aarch64\n", "", 0, true
 		case strings.Contains(cmd, "systemctl restart"):
 			restartedBySystemctl = true
 			return "", "", 0, true
@@ -357,5 +360,137 @@ func TestM7ClusterUpgradeBySystemctlUsesArm64RPM(t *testing.T) {
 	}
 	if h.calls.serviceRestart.Load() != 1 {
 		t.Fatalf("expected 1 admin restart call, got %d", h.calls.serviceRestart.Load())
+	}
+}
+
+func TestM7ClusterUpgradeBySystemctlFailsIfVersionUnchanged(t *testing.T) {
+	h := newM7Harness(t)
+	artifactLn, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactSrv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/buckit.sha256":
+			_, _ = w.Write([]byte(strings.Join([]string{
+				"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  buckit-amd64.rpm",
+				"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  buckit-arm64.rpm",
+			}, "\n")))
+		default:
+			_, _ = w.Write([]byte("rpm"))
+		}
+	}))
+	artifactSrv.Listener = artifactLn
+	artifactSrv.Start()
+	defer artifactSrv.Close()
+	restoreVersions := deploy.RestoreVersionsCacheForTest([]domain.BuckitVersion{{
+		Tag:         "RELEASE.2026-06-01T00-00-00Z",
+		Label:       "RELEASE.2026-06-01T00-00-00Z",
+		RpmURL:      artifactSrv.URL + "/buckit-amd64.rpm",
+		RpmURLAmd64: artifactSrv.URL + "/buckit-amd64.rpm",
+		RpmURLArm64: artifactSrv.URL + "/buckit-arm64.rpm",
+		SHA256URL:   artifactSrv.URL + "/buckit.sha256",
+	}})
+	defer restoreVersions()
+
+	h.sshSrv.CmdOverride = func(cmd string) (string, string, int, bool) {
+		switch {
+		case cmd == "uname -m":
+			return "aarch64\n", "", 0, true
+		case strings.HasPrefix(cmd, "curl -fSL -o /tmp/buckit.rpm "):
+			return "", "", 0, true
+		case strings.Contains(cmd, "sha256sum -c -") || strings.Contains(cmd, "shasum -a 256 -c -"):
+			return "", "", 0, true
+		case strings.Contains(cmd, "rpm -q --qf") && strings.Contains(cmd, "rpm -qp --qf"):
+			return "installed=0:20260501000000.0.0-1.aarch64\ncandidate=0:20260601000000.0.0-1.aarch64\n", "", 0, true
+		default:
+			return "", "", 0, false
+		}
+	}
+
+	id, code := dispatch(t, h, tasks.OpClusterUpgradeBySystemctl, nil, map[string]any{
+		"version": "RELEASE.2026-06-01T00-00-00Z",
+	})
+	if code != 202 {
+		t.Fatalf("dispatch: %d", code)
+	}
+	row := waitTermM7(t, h, id, 30*time.Second)
+	if row.Status != tasks.StateFailed {
+		t.Fatalf("cluster_upgrade_by_systemctl: want failed, got %s", row.Status)
+	}
+	if !strings.Contains(row.FailureNote, "still reports") {
+		t.Fatalf("expected unchanged-version failure note, got %q", row.FailureNote)
+	}
+}
+
+func TestM7ClusterUpgradeBySystemctlReinstallsSameInstalledRPM(t *testing.T) {
+	h := newM7Harness(t)
+	h.restartVersion = "RELEASE.2026-05-22T02-20-39Z"
+	artifactLn, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactSrv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/buckit.sha256":
+			_, _ = w.Write([]byte(strings.Join([]string{
+				"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  buckit-amd64.rpm",
+				"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  buckit-arm64.rpm",
+			}, "\n")))
+		default:
+			_, _ = w.Write([]byte("rpm"))
+		}
+	}))
+	artifactSrv.Listener = artifactLn
+	artifactSrv.Start()
+	defer artifactSrv.Close()
+	restoreVersions := deploy.RestoreVersionsCacheForTest([]domain.BuckitVersion{{
+		Tag:         "RELEASE.2026-05-22T02-20-39Z",
+		Label:       "RELEASE.2026-05-22T02-20-39Z",
+		RpmURL:      artifactSrv.URL + "/buckit-amd64.rpm",
+		RpmURLAmd64: artifactSrv.URL + "/buckit-amd64.rpm",
+		RpmURLArm64: artifactSrv.URL + "/buckit-arm64.rpm",
+		SHA256URL:   artifactSrv.URL + "/buckit.sha256",
+	}})
+	defer restoreVersions()
+
+	var usedUpgrade bool
+	var usedReinstall bool
+	h.sshSrv.CmdOverride = func(cmd string) (string, string, int, bool) {
+		switch {
+		case cmd == "uname -m":
+			return "aarch64\n", "", 0, true
+		case strings.HasPrefix(cmd, "curl -fSL -o /tmp/buckit.rpm "):
+			return "", "", 0, true
+		case strings.Contains(cmd, "sha256sum -c -") || strings.Contains(cmd, "shasum -a 256 -c -"):
+			return "", "", 0, true
+		case strings.Contains(cmd, "rpm -q --qf") && strings.Contains(cmd, "rpm -qp --qf"):
+			return "installed=0:20260522022039.0.0-1.aarch64\ncandidate=0:20260522022039.0.0-1.aarch64\n", "", 0, true
+		case strings.Contains(cmd, "dnf upgrade -y /tmp/buckit.rpm"):
+			usedUpgrade = true
+			return "", "", 0, true
+		case strings.Contains(cmd, "dnf reinstall -y /tmp/buckit.rpm"):
+			usedReinstall = true
+			return "", "", 0, true
+		default:
+			return "", "", 0, false
+		}
+	}
+
+	id, code := dispatch(t, h, tasks.OpClusterUpgradeBySystemctl, nil, map[string]any{
+		"version": "RELEASE.2026-05-22T02-20-39Z",
+	})
+	if code != 202 {
+		t.Fatalf("dispatch: %d", code)
+	}
+	row := waitTermM7(t, h, id, 30*time.Second)
+	if row.Status != tasks.StateSucceeded {
+		t.Fatalf("cluster_upgrade_by_systemctl: %s (%s)", row.Status, row.FailureNote)
+	}
+	if usedUpgrade {
+		t.Fatal("did not expect dnf upgrade for same installed rpm identity")
+	}
+	if !usedReinstall {
+		t.Fatal("expected dnf reinstall for same installed rpm identity")
 	}
 }

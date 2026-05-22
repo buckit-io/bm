@@ -28,15 +28,16 @@ import (
 )
 
 type m7Harness struct {
-	server   *httptest.Server
-	store    *store.Store
-	clusters *clusters.Repo
-	nodes    *nodes.Repo
-	admin    *clusteradmin.Repo
-	sshSrv   *sshtest.Server
-	adminSrv *httptest.Server
-	info     madmin.InfoMessage
-	update   madmin.ServerUpdateStatusV2
+	server         *httptest.Server
+	store          *store.Store
+	clusters       *clusters.Repo
+	nodes          *nodes.Repo
+	admin          *clusteradmin.Repo
+	sshSrv         *sshtest.Server
+	adminSrv       *httptest.Server
+	info           madmin.InfoMessage
+	update         madmin.ServerUpdateStatusV2
+	restartVersion string
 
 	// counters so tests can assert which admin verb was hit.
 	calls struct {
@@ -110,6 +111,11 @@ func newM7Harness(t *testing.T) *m7Harness {
 			switch action {
 			case "restart":
 				h.calls.serviceRestart.Add(1)
+				if strings.TrimSpace(h.restartVersion) != "" {
+					for i := range h.info.Servers {
+						h.info.Servers[i].Version = h.restartVersion
+					}
+				}
 			case "stop":
 				h.calls.serviceStop.Add(1)
 			case "freeze":

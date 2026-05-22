@@ -327,6 +327,16 @@ func (e *clusterUpgradeBySystemctlExecutor) Execute(ctx context.Context, run *ta
 	if len(run.Params) > 0 {
 		_ = json.Unmarshal(run.Params, &p)
 	}
+	targetReleaseTime, hasTargetReleaseTime := parseComparableVersionTime(p.Version)
+	if hasTargetReleaseTime {
+		info, err := rc.admin.ServerInfo(ctx)
+		if err != nil {
+			return fmt.Errorf("systemctl upgrade preflight: server info: %w", err)
+		}
+		if err := ensureVersionIsNewer(p.Version, targetReleaseTime, info); err != nil {
+			return fmt.Errorf("systemctl upgrade preflight: %w", err)
+		}
+	}
 	fromVersion := rc.cluster.Version
 	toVersion := p.Version
 	if toVersion == "" || toVersion == "custom" {
@@ -374,10 +384,21 @@ func (e *clusterUpgradeBySystemctlExecutor) Execute(ctx context.Context, run *ta
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
 			return fmt.Errorf("%s checksum: %w", n.Hostname, err)
 		}
-		setHostState(run, i, n, tasks.HostRunning, "dnf upgrade")
-		if _, err := runHostStep(ctx, e.deps, rc, n, sudoBash(rc.sshCreds.User, "dnf upgrade -y /tmp/buckit.rpm")); err != nil {
+		packageAction, err := determineRpmInstallAction(ctx, e.deps, rc, n)
+		if err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
-			return fmt.Errorf("%s upgrade: %w", n.Hostname, err)
+			return fmt.Errorf("%s package inspect: %w", n.Hostname, err)
+		}
+		actionLabel := "dnf upgrade"
+		actionCommand := "dnf upgrade -y /tmp/buckit.rpm"
+		if packageAction == "reinstall" {
+			actionLabel = "dnf reinstall"
+			actionCommand = "dnf reinstall -y /tmp/buckit.rpm"
+		}
+		setHostState(run, i, n, tasks.HostRunning, actionLabel)
+		if _, err := runHostStep(ctx, e.deps, rc, n, sudoBash(rc.sshCreds.User, actionCommand)); err != nil {
+			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			return fmt.Errorf("%s %s: %w", n.Hostname, packageAction, err)
 		}
 		setHostState(run, i, n, tasks.HostRunning, "systemctl daemon-reload")
 		if _, err := runHostStep(ctx, e.deps, rc, n, sudoSystemctl(rc.sshCreds.User, "daemon-reload")); err != nil {
@@ -402,6 +423,15 @@ func (e *clusterUpgradeBySystemctlExecutor) Execute(ctx context.Context, run *ta
 	run.LogOK("Restart request accepted, polling for healthy")
 	if err := waitClusterHealthy(ctx, rc.admin, WaitOptions{Timeout: 2 * time.Minute, Tick: 3 * time.Second}); err != nil {
 		return fmt.Errorf("post-upgrade restart health: %w", err)
+	}
+	if hasTargetReleaseTime {
+		info, err := rc.admin.ServerInfo(ctx)
+		if err != nil {
+			return fmt.Errorf("post-upgrade version check: server info: %w", err)
+		}
+		if err := ensureVersionReachedTarget(targetReleaseTime, p.Version, info); err != nil {
+			return fmt.Errorf("post-upgrade version check: %w", err)
+		}
 	}
 	duration := time.Since(start)
 	run.MutateState(func(s *tasks.OperationProgress) {
@@ -644,6 +674,31 @@ func resolveBinaryUpdateURL(ctx context.Context, rc *runCtx, version string) (st
 		return "", fmt.Errorf("cluster upgrade by admin update: %w", err)
 	}
 	return url, nil
+}
+
+func determineRpmInstallAction(ctx context.Context, deps Deps, rc *runCtx, n domain.Node) (string, error) {
+	const inspectCmd = `installed=$(rpm -q --qf '%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\n' buckit 2>/dev/null || true); candidate=$(rpm -qp --qf '%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\n' /tmp/buckit.rpm); printf 'installed=%s\ncandidate=%s\n' "$installed" "$candidate"`
+	out, err := runHostStep(ctx, deps, rc, n, sudoBash(rc.sshCreds.User, inspectCmd))
+	if err != nil {
+		return "", err
+	}
+	var installed, candidate string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "installed="):
+			installed = strings.TrimSpace(strings.TrimPrefix(line, "installed="))
+		case strings.HasPrefix(line, "candidate="):
+			candidate = strings.TrimSpace(strings.TrimPrefix(line, "candidate="))
+		}
+	}
+	if candidate == "" {
+		return "", errors.New("empty candidate rpm identity")
+	}
+	if installed != "" && installed == candidate {
+		return "reinstall", nil
+	}
+	return "upgrade", nil
 }
 
 func detectNodeArch(ctx context.Context, deps Deps, rc *runCtx, n domain.Node) (string, error) {
