@@ -96,6 +96,7 @@ func runWeb(rawArgs []string) error {
 		Clusters:     clustersRepo,
 		Nodes:        nodesRepo,
 		ClusterAdmin: clusterAdminRepo,
+		SSHConfig:    sshcfgRepo,
 		AfterCommit: func(ctx context.Context, _ string) {
 			syncCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()

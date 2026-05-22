@@ -104,20 +104,21 @@ type ServerInfo struct {
 
 // ServerInfoServer is one host in a ServerInfo response.
 type ServerInfoServer struct {
-	Endpoint    string                  `json:"endpoint"`
-	State       NodeState               `json:"state"`
-	PoolNumber  int                     `json:"poolNumber"`
-	Uptime      *float64                `json:"uptime,omitempty"`
-	Version     string                  `json:"version,omitempty"`
-	Kernel      string                  `json:"kernel,omitempty"`
-	OS          string                  `json:"os,omitempty"`
-	CPUModel    string                  `json:"cpuModel,omitempty"`
-	CPUCores    *int                    `json:"cpuCores,omitempty"`
-	CPUThreads  *int                    `json:"cpuThreads,omitempty"`
-	CPUMaxMHz   *int                    `json:"cpuMaxMHz,omitempty"`
-	RAMBytes    *int64                  `json:"ramBytes,omitempty"`
-	NIC         *NIC                    `json:"nic,omitempty"`
-	Drives      []ServerInfoDrive       `json:"drives"`
+	Endpoint   string            `json:"endpoint"`
+	State      NodeState         `json:"state"`
+	PoolNumber int               `json:"poolNumber"`
+	Uptime     *float64          `json:"uptime,omitempty"`
+	Version    string            `json:"version,omitempty"`
+	Kernel     string            `json:"kernel,omitempty"`
+	OS         string            `json:"os,omitempty"`
+	Arch       string            `json:"arch,omitempty"`
+	CPUModel   string            `json:"cpuModel,omitempty"`
+	CPUCores   *int              `json:"cpuCores,omitempty"`
+	CPUThreads *int              `json:"cpuThreads,omitempty"`
+	CPUMaxMHz  *int              `json:"cpuMaxMHz,omitempty"`
+	RAMBytes   *int64            `json:"ramBytes,omitempty"`
+	NIC        *NIC              `json:"nic,omitempty"`
+	Drives     []ServerInfoDrive `json:"drives"`
 }
 
 // ServerInfoDrive is one drive on a discovered host.

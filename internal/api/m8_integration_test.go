@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/buckit-io/bm/internal/admin"
 	"github.com/buckit-io/bm/internal/clusteradmin"
 	"github.com/buckit-io/bm/internal/clusters"
+	"github.com/buckit-io/bm/internal/deploy"
 	"github.com/buckit-io/bm/internal/domain"
 	"github.com/buckit-io/bm/internal/migration"
 	"github.com/buckit-io/bm/internal/nodes"
@@ -44,6 +46,28 @@ type m8Harness struct {
 
 func newM8Harness(t *testing.T) *m8Harness {
 	t.Helper()
+	artifactLn, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactSrv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/buckit.rpm.sha256":
+			_, _ = w.Write([]byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  buckit.rpm\n"))
+		default:
+			_, _ = w.Write([]byte("rpm"))
+		}
+	}))
+	artifactSrv.Listener = artifactLn
+	artifactSrv.Start()
+	t.Cleanup(artifactSrv.Close)
+	restoreVersions := deploy.RestoreVersionsCacheForTest([]domain.BuckitVersion{{
+		Tag:       "v1.0.0",
+		Label:     "v1.0.0",
+		RpmURL:    artifactSrv.URL + "/buckit.rpm",
+		SHA256URL: artifactSrv.URL + "/buckit.rpm.sha256",
+	}})
+	t.Cleanup(restoreVersions)
 	dir := t.TempDir()
 	key := make([]byte, 32)
 	_, _ = rand.Read(key)

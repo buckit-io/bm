@@ -1,12 +1,12 @@
 // Unified modal for every cluster operation. Lifecycle:
 //
-//   input → dispatching → terminal              (signal flavor)
+//   input → dispatching → running → terminal    (signal flavor)
 //   input → dispatching → running → terminal    (orchestrated flavor)
 //
 // Lock rules:
 //   - input phase: no backdrop/ESC/X close. Cancel button closes.
 //   - dispatching: no close at all.
-//   - running (orchestrated only): no close.
+//   - running: no close.
 //   - terminal: Close button only.
 //
 // Browser tab close triggers a beforeunload warning while a non-
@@ -166,11 +166,13 @@ export function OperationModal({
       });
       setTaskId(res.taskId);
       // Pull the initial snapshot so the modal renders something while
-      // the SSE subscription effect spins up. For signal-flavor ops this
-      // snapshot is already terminal.
+      // the SSE subscription effect spins up.
       const snapshot = await getOperationProgress(res.taskId).catch(() => null);
       if (snapshot) setProgress(snapshot);
-      if (def.flavor === "signal" || (snapshot && snapshot.state !== "running")) {
+      // Signal ops are also executed by the async task manager. Their first
+      // snapshot can still be "running" for a moment, so do not force the
+      // terminal phase until the backend reports a terminal state.
+      if (snapshot && snapshot.state !== "running") {
         setPhase("terminal");
       } else {
         setPhase("running");
@@ -345,7 +347,12 @@ function RunningBody({ progress }: { progress: OperationProgress | null }) {
         </p>
       )}
       <HostStatusList statuses={progress.hostStatuses} />
-      {hasEvents && <EventLog events={progress.events!} />}
+      {hasEvents && (
+        <>
+          <SectionLabel>Live events</SectionLabel>
+          <EventLog events={progress.events!} />
+        </>
+      )}
     </div>
   );
 }
@@ -469,6 +476,7 @@ function TerminalBody({
   const hasHostList = !!progress.hostStatuses && progress.hostStatuses.length > 0;
   const hasSummary = !!progress.summary && progress.summary.length > 0;
   const hasEvents = !!progress.events && progress.events.length > 0;
+  const showSummary = shouldShowSummary(progress);
 
   // Orchestrated success: progress bar at 100% + host list (all
   // green) carries the message. No banner needed.
@@ -476,24 +484,39 @@ function TerminalBody({
     return (
       <div className="vstack" style={{ gap: "var(--s-3)" }}>
         <ProgressBar progress={progress} />
-        {hasSummary && <SummaryTable rows={progress.summary!} />}
+        {hasSummary && showSummary && (
+          <>
+            <SectionLabel>Result</SectionLabel>
+            <SummaryTable rows={progress.summary!} />
+          </>
+        )}
         <HostStatusList statuses={progress.hostStatuses} />
-        {hasEvents && <EventLog events={progress.events!} />}
+        {hasEvents && (
+          <>
+            <SectionLabel>Events</SectionLabel>
+            <EventLog events={progress.events!} />
+          </>
+        )}
       </div>
     );
   }
 
-  // Event-only success (e.g., heal): summary + event log. No banner —
-  // the events tell the story.
+  // Event-only success (e.g., signal ops, heal): keep the outcome visibly
+  // separate from the activity log so fast ops don't look like two logs.
   if (!hasHostList && hasEvents && progress.state === "succeeded") {
     return (
       <div className="vstack" style={{ gap: "var(--s-3)" }}>
-        {progress.detail && (
-          <p className="muted" style={{ fontSize: "var(--fs-sm)" }}>
-            {progress.detail}
-          </p>
+        <div className="banner banner--success">
+          <span>✓</span>
+          <span>{progress.detail ?? "Done."}</span>
+        </div>
+        {hasSummary && showSummary && (
+          <>
+            <SectionLabel>Result</SectionLabel>
+            <SummaryTable rows={progress.summary!} />
+          </>
         )}
-        {hasSummary && <SummaryTable rows={progress.summary!} />}
+        <SectionLabel>Events</SectionLabel>
         <EventLog events={progress.events!} />
       </div>
     );
@@ -521,9 +544,54 @@ function TerminalBody({
     <div className="vstack" style={{ gap: "var(--s-3)" }}>
       {hasHostList && <ProgressBar progress={progress} />}
       {banner}
-      {hasSummary && <SummaryTable rows={progress.summary!} />}
+      {hasSummary && showSummary && (
+        <>
+          <SectionLabel>Result</SectionLabel>
+          <SummaryTable rows={progress.summary!} />
+        </>
+      )}
       <HostStatusList statuses={progress.hostStatuses} />
-      {hasEvents && <EventLog events={progress.events!} />}
+      {hasEvents && (
+        <>
+          <SectionLabel>Events</SectionLabel>
+          <EventLog events={progress.events!} />
+        </>
+      )}
+    </div>
+  );
+}
+
+function shouldShowSummary(progress: OperationProgress): boolean {
+  if (!progress.summary || progress.summary.length === 0) return false;
+  if (progress.summary.length !== 1) return true;
+  const row = progress.summary[0];
+  const detail = progress.detail?.trim().toLowerCase();
+  const label = row.label.trim().toLowerCase();
+  const value = row.value.trim().toLowerCase();
+
+  // Signal-style ops often emit:
+  //   detail: "S3 API unfrozen"
+  //   summary: [{ label: "Result", value: "unfrozen" }]
+  // The banner already communicates the outcome clearly, so the single-row
+  // summary just repeats it.
+  if (label === "result" && detail && detail.includes(value)) {
+    return false;
+  }
+  return true;
+}
+
+function SectionLabel({ children }: { children: string }) {
+  return (
+    <div
+      className="subtle"
+      style={{
+        fontSize: "var(--fs-xs)",
+        fontWeight: 600,
+        letterSpacing: "0.08em",
+        textTransform: "uppercase",
+      }}
+    >
+      {children}
     </div>
   );
 }

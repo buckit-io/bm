@@ -35,9 +35,13 @@ type m7Harness struct {
 	admin    *clusteradmin.Repo
 	sshSrv   *sshtest.Server
 	adminSrv *httptest.Server
+	info     madmin.InfoMessage
+	update   madmin.ServerUpdateStatusV2
 
 	// counters so tests can assert which admin verb was hit.
 	calls struct {
+		serverUpdate    atomic.Int32
+		serverUpdateURL atomic.Value
 		serviceRestart  atomic.Int32
 		serviceStop     atomic.Int32
 		serviceFreeze   atomic.Int32
@@ -58,6 +62,13 @@ func newM7Harness(t *testing.T) *m7Harness {
 	t.Cleanup(func() { _ = st.Close() })
 
 	h := &m7Harness{store: st}
+	h.info = canonicalInfo()
+	h.update = madmin.ServerUpdateStatusV2{
+		Results: []madmin.ServerPeerUpdateStatus{
+			{Host: "node1", CurrentVersion: "2026-05-01T00:00:00Z", UpdatedVersion: "2026-06-01T00:00:00Z"},
+			{Host: "node2", CurrentVersion: "2026-05-01T00:00:00Z", UpdatedVersion: "2026-06-01T00:00:00Z"},
+		},
+	}
 
 	clustersRepo := clusters.New(st)
 	clusterAdminRepo := clusteradmin.New(st)
@@ -110,6 +121,18 @@ func newM7Harness(t *testing.T) *m7Harness {
 			_ = json.NewEncoder(w).Encode(madmin.ServiceActionResult{
 				Action: madmin.ServiceAction(action),
 			})
+		case strings.Contains(path, "/admin/v3/update"):
+			h.calls.serverUpdate.Add(1)
+			h.calls.serverUpdateURL.Store(r.URL.Query().Get("updateURL"))
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(h.update)
+			if len(h.update.Results) > 0 {
+				for i := range h.info.Servers {
+					if i < len(h.update.Results) && strings.TrimSpace(h.update.Results[i].Err) == "" && strings.TrimSpace(h.update.Results[i].UpdatedVersion) != "" {
+						h.info.Servers[i].Version = h.update.Results[i].UpdatedVersion
+					}
+				}
+			}
 		case strings.Contains(path, "/admin/v3/heal"):
 			h.calls.healStart.Add(1)
 			w.Header().Set("Content-Type", "application/json")
@@ -130,7 +153,7 @@ func newM7Harness(t *testing.T) *m7Harness {
 			}
 		default:
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(canonicalInfo())
+			_ = json.NewEncoder(w).Encode(h.info)
 		}
 	}))
 	t.Cleanup(h.adminSrv.Close)
@@ -198,8 +221,8 @@ func canonicalInfo() madmin.InfoMessage {
 	return madmin.InfoMessage{
 		Mode: "online",
 		Servers: []madmin.ServerProperties{
-			{Endpoint: "node1:9000", State: "online", Version: "RELEASE.2026-06-01T00-00-00Z", PoolNumber: 1},
-			{Endpoint: "node2:9000", State: "online", Version: "RELEASE.2026-06-01T00-00-00Z", PoolNumber: 1},
+			{Endpoint: "node1:9000", State: "online", Version: "2026-05-01T00:00:00Z", PoolNumber: 1, OS: "linux", Arch: "amd64"},
+			{Endpoint: "node2:9000", State: "online", Version: "2026-05-01T00:00:00Z", PoolNumber: 1, OS: "linux", Arch: "amd64"},
 		},
 		Backend: madmin.ErasureBackend{Type: "Erasure", StandardSCParity: 2},
 	}

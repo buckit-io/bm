@@ -68,6 +68,8 @@ func mapServer(s madmin.ServerProperties) domain.ServerInfoServer {
 		State:      mapNodeState(s.State),
 		PoolNumber: s.PoolNumber,
 		Version:    s.Version,
+		OS:         s.OS,
+		Arch:       s.Arch,
 		Drives:     make([]domain.ServerInfoDrive, 0, len(s.Disks)),
 	}
 	if s.Uptime > 0 {

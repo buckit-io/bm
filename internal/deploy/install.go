@@ -84,10 +84,33 @@ func (in *Installer) Install(ctx context.Context, host domain.HostRow, params De
 		reportErr(StageFailed, err)
 		return err
 	}
+	artifact := CustomRPMArtifact(url)
+	if params.Version != "custom" {
+		arch, err := params.clusterArch()
+		if err != nil {
+			reportErr(StageFailed, err)
+			return err
+		}
+		artifact, err = ResolveRPMArtifact(params.Version, arch)
+		if err != nil {
+			reportErr(StageFailed, fmt.Errorf("deploy: %w", err))
+			return err
+		}
+	}
+	expectedSHA256, err := FetchRPMChecksum(ctx, artifact)
+	if err != nil {
+		reportErr(StageFailed, fmt.Errorf("checksum: %w", err))
+		return err
+	}
 
 	report(StageDownloading, fmt.Sprintf("Fetching %s", url))
-	if err := runStep(ctx, client, fmt.Sprintf("curl -fSL -o /tmp/buckit.rpm %s", shellEscape(url))); err != nil {
+	if err := runStep(ctx, client, DownloadRPMCommand(url)); err != nil {
 		reportErr(StageFailed, fmt.Errorf("download: %w", err))
+		return err
+	}
+	report(StageDownloading, "Verifying /tmp/buckit.rpm sha256")
+	if err := runStep(ctx, client, VerifyRPMChecksumCommand(expectedSHA256)); err != nil {
+		reportErr(StageFailed, fmt.Errorf("checksum: %w", err))
 		return err
 	}
 

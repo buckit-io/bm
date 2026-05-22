@@ -7,7 +7,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as client from "./client";
 import { ApiError } from "./client";
-import type { Cluster, HistoryEntry, Node, SessionMe } from "./types";
+import type {
+  Cluster,
+  ClusterSshConfig,
+  HistoryEntry,
+  Node,
+  SessionMe,
+} from "./types";
 
 // ---- session ----
 
@@ -116,6 +122,14 @@ export function useCluster(id: string | undefined) {
     queryKey: ["cluster", id],
     queryFn: ({ signal }) => client.getCluster(id!, signal),
     enabled: !!id,
+  });
+}
+
+export function useClusterSshConfig(clusterId: string | undefined) {
+  return useQuery<ClusterSshConfig | null>({
+    queryKey: ["cluster-ssh", clusterId],
+    queryFn: ({ signal }) => client.getClusterSshConfig(clusterId!, signal),
+    enabled: !!clusterId,
   });
 }
 

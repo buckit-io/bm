@@ -1,12 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { useCluster, useNodes, useRefreshCluster } from "../../api/hooks";
+import {
+  useCluster,
+  useClusterSshConfig,
+  useNodes,
+  useRefreshCluster,
+} from "../../api/hooks";
 import { Pill } from "../../components/Pill";
 import { Cluster, Node } from "../../api/types";
 import { formatBytes } from "../../lib/format";
 import { OperationDef } from "./operations/defs";
 import { OperationModal } from "./operations/OperationModal";
+import { SshRequiredDialog } from "./SshRequiredDialog";
 import { CLUSTER_OPERATIONS, GROUP_LABELS } from "./operations/catalog";
 import { BULK_HOST_OPERATIONS } from "./operations/bulkHostCatalog";
 import "./ClusterDetail.css";
@@ -224,11 +230,16 @@ interface ActiveOp {
   scopeLabel?: string;
 }
 
+function clusterOpRequiresSSH(op: OperationDef): boolean {
+  return op.group === "ssh";
+}
+
 export function ClusterDetailLayout() {
   const { clusterId } = useParams();
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { data: cluster, isLoading } = useCluster(clusterId);
+  const { data: sshConfig } = useClusterSshConfig(clusterId);
   const { data: nodes } = useNodes(clusterId);
   const { mutateAsync: refreshClusterAsync } = useRefreshCluster(clusterId);
   const [initialRefreshDone, setInitialRefreshDone] = useState(false);
@@ -249,6 +260,22 @@ export function ClusterDetailLayout() {
       }, delayMs);
       followupTimersRef.current.push(timer);
     }
+  }
+
+  function triggerRefresh() {
+    if (!clusterId || refreshRunningRef.current) return;
+    refreshRunningRef.current = true;
+    refreshClusterAsync()
+      .then(() => {
+        scheduleProbePickup();
+      })
+      .catch(() => {})
+      .finally(() => {
+        refreshRunningRef.current = false;
+        qc.invalidateQueries({ queryKey: ["cluster", clusterId] });
+        qc.invalidateQueries({ queryKey: ["clusters"] });
+        qc.invalidateQueries({ queryKey: ["nodes", clusterId] });
+      });
   }
 
   useEffect(() => {
@@ -398,8 +425,14 @@ export function ClusterDetailLayout() {
     return () => window.removeEventListener("mousedown", onMouseDown);
   }, [actionsOpen]);
   const [activeOp, setActiveOp] = useState<ActiveOp | null>(null);
+  const [showSshRequired, setShowSshRequired] = useState(false);
+  const sshConfigured = !!sshConfig;
   const runHostAction = (op: OperationDef) => {
     if (!cluster || selected.size === 0) return;
+    if (!sshConfigured) {
+      setShowSshRequired(true);
+      return;
+    }
     const selectedNodes = (nodes ?? []).filter((n) => selected.has(n.id));
     const scopeLabel =
       selectedNodes.length === 1
@@ -434,9 +467,9 @@ export function ClusterDetailLayout() {
       ? poolsByPriority.slice(0, POOLS_LIMIT)
       : poolsByPriority;
 
-  const hostActionsEnabled = cluster.sshConfigured && selected.size > 0;
+  const hostSelectionReady = selected.size > 0;
   const hostActionsHint =
-    !cluster.sshConfigured
+    !sshConfigured
       ? "SSH is not configured for this cluster. Set it up in Settings to enable host actions."
       : selected.size === 0
         ? "Select one or more hosts below to enable actions."
@@ -500,6 +533,10 @@ export function ClusterDetailLayout() {
               <div className="cdetail__menu cdetail__menu--wide" role="menu">
                 {renderActionsMenu(cluster, (op) => {
                   setActionsOpen(false);
+                  if (clusterOpRequiresSSH(op) && !sshConfigured) {
+                    setShowSshRequired(true);
+                    return;
+                  }
                   if (op.flavor === "navigate" && op.navigateTo) {
                     navigate(op.navigateTo(cluster));
                     return;
@@ -606,7 +643,7 @@ export function ClusterDetailLayout() {
         {/* always-visible bulk action bar */}
         <div
           className={
-            "cdetail__bulkbar" + (hostActionsEnabled ? " is-enabled" : " is-disabled")
+            "cdetail__bulkbar" + (hostSelectionReady ? " is-enabled" : " is-disabled")
           }
           role="region"
           aria-label="Host actions"
@@ -637,7 +674,7 @@ export function ClusterDetailLayout() {
                 key={op.id}
                 className={"btn btn--sm" + (op.danger ? " btn--danger-ghost" : "")}
                 onClick={() => runHostAction(op)}
-                disabled={!hostActionsEnabled}
+                disabled={!hostSelectionReady}
                 title={hostActionsHint ?? undefined}
               >
                 {op.label.replace(/…$/, "")}
@@ -878,9 +915,9 @@ export function ClusterDetailLayout() {
             const finishedOp = activeOp.op;
             const wasBulk = !!activeOp.targetHostIds;
             setActiveOp(null);
-            // Cluster state may have mutated (freeze, remove, etc.).
-            qc.invalidateQueries({ queryKey: ["cluster", cluster.id] });
-            qc.invalidateQueries({ queryKey: ["clusters"] });
+            // Cluster state may have mutated (freeze, remove, etc.). Trigger a
+            // real refresh so the latest cluster + probe state lands quickly.
+            triggerRefresh();
             qc.invalidateQueries({ queryKey: ["history"] });
             // Clear the row selection after a successful bulk run so
             // the operator isn't sitting with stale checkboxes.
@@ -890,6 +927,16 @@ export function ClusterDetailLayout() {
             if (finishedOp.id === "remove_cluster") {
               navigate("/clusters");
             }
+          }}
+        />
+      )}
+      {showSshRequired && (
+        <SshRequiredDialog
+          clusterName={cluster.name}
+          onClose={() => setShowSshRequired(false)}
+          onConfigure={() => {
+            setShowSshRequired(false);
+            navigate(`/clusters/${cluster.id}/ssh`);
           }}
         />
       )}

@@ -111,8 +111,9 @@ func validateEngineCompat(c domain.Cluster, kind tasks.OpKind) error {
 // Edition is frozen at its last 2025 release; the upgrade path is migrate
 // to Buckit, not bump MinIO.
 var buckitOnly = map[tasks.OpKind]bool{
-	tasks.OpRollingUpgrade:   true,
-	tasks.OpRedeploySoftware: true,
+	tasks.OpClusterUpgradeBySystemctl:   true,
+	tasks.OpClusterUpgradeByAdminUpdate: true,
+	tasks.OpRedeploySoftware:            true,
 }
 
 // validateEngineAtDispatch loads the cluster row and runs the engine check

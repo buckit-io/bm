@@ -95,14 +95,11 @@ func (p CutoverParams) Validate() error {
 // deploy.DeployParams.ArtifactURL so the migration installer can reuse the
 // same install command machinery.
 func (p CutoverParams) ArtifactURL() (string, error) {
-	v := deploy.VersionByTag(p.TargetVersion)
-	if v == nil {
-		return "", errors.New("cutover: unsupported version " + p.TargetVersion)
+	url, err := deploy.ResolveRPMURL(p.TargetVersion, "")
+	if err != nil {
+		return "", errors.New("cutover: " + err.Error())
 	}
-	if v.RpmURL == "" {
-		return "", errors.New("cutover: no rpm URL for " + p.TargetVersion)
-	}
-	return v.RpmURL, nil
+	return url, nil
 }
 
 // FromMigrationBody decodes the wire payload the API handler hands the

@@ -271,38 +271,54 @@ export function ClusterSshSettings() {
           </div>
         )}
 
-        <div className="hstack" style={{ gap: "var(--s-4)", flexWrap: "wrap" }}>
-          <div className="field" style={{ minWidth: 200 }}>
-            <label className="field-label">SSH user</label>
+        <div className="vstack" style={{ gap: "var(--s-2)" }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "minmax(200px, 220px) max-content",
+              gap: "var(--s-2) var(--s-4)",
+              alignItems: "center",
+            }}
+          >
+            <label className="field-label" htmlFor="cluster-ssh-user">
+              SSH user
+            </label>
+            <div />
             <input
+              id="cluster-ssh-user"
               className="input"
               value={ssh.user}
               onChange={(e) => setSsh({ ...ssh, user: e.target.value })}
               placeholder="buckit"
             />
+            <label
+              className="hstack"
+              style={{
+                gap: 6,
+                opacity: ssh.user.trim() === "root" ? 0.55 : 1,
+              }}
+              title={
+                ssh.user.trim() === "root"
+                  ? "Not needed when connecting as root."
+                  : undefined
+              }
+            >
+              <input
+                type="checkbox"
+                checked={ssh.user.trim() === "root" ? false : ssh.sudo}
+                disabled={ssh.user.trim() === "root"}
+                onChange={(e) => setSsh({ ...ssh, sudo: e.target.checked })}
+              />
+              Use sudo (passwordless)
+            </label>
           </div>
-          <label
-            className="hstack"
-            style={{
-              gap: 6,
-              alignSelf: "flex-end",
-              paddingBottom: 6,
-              opacity: ssh.user.trim() === "root" ? 0.55 : 1,
-            }}
-            title={
-              ssh.user.trim() === "root"
-                ? "Not needed when connecting as root."
-                : undefined
-            }
-          >
-            <input
-              type="checkbox"
-              checked={ssh.user.trim() === "root" ? false : ssh.sudo}
-              disabled={ssh.user.trim() === "root"}
-              onChange={(e) => setSsh({ ...ssh, sudo: e.target.checked })}
-            />
-            Use sudo (passwordless)
-          </label>
+          <span className="field-hint">
+            Use <span className="mono">root</span>, or a non-root SSH user
+            with passwordless <span className="mono">sudo</span> that can
+            install packages, write <span className="mono">/etc</span>{" "}
+            config, prepare storage directories, and manage the systemd
+            service.
+          </span>
         </div>
 
         {ssh.authMethod === "password" && (

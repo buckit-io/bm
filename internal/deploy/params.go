@@ -98,20 +98,13 @@ func (p DeployParams) ArtifactURL() (string, error) {
 		}
 		return u, nil
 	}
-	v := VersionByTag(p.Version)
-	if v == nil {
-		return "", errors.New("deploy: unsupported version " + p.Version)
-	}
 	arch, err := p.clusterArch()
 	if err != nil {
 		return "", err
 	}
-	url := RPMURLForArch(v, arch)
-	if url == "" {
-		if arch == "" {
-			return "", errors.New("deploy: no rpm URL for " + p.Version)
-		}
-		return "", errors.New("deploy: no rpm URL for " + p.Version + " on " + arch)
+	url, err := ResolveRPMURL(p.Version, arch)
+	if err != nil {
+		return "", errors.New("deploy: " + err.Error())
 	}
 	return url, nil
 }

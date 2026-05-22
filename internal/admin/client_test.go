@@ -17,7 +17,7 @@ func TestParseEndpoint(t *testing.T) {
 	}{
 		{"https://prod-east:9000", "prod-east:9000", true, true},
 		{"http://localhost:9000", "localhost:9000", false, true},
-		{"prod-east:9000", "prod-east:9000", true, true},   // scheme defaulted
+		{"prod-east:9000", "prod-east:9000", true, true}, // scheme defaulted
 		{"prod-east", "prod-east", true, true},
 		{"  https://example.com  ", "example.com", true, true}, // trimmed
 		{"ftp://nope", "", false, false},
@@ -84,6 +84,27 @@ func TestClassifyError(t *testing.T) {
 			// Round-trip the kind through Error() for sanity.
 			if !strings.Contains(ae.Error(), string(tc.kind)) {
 				t.Fatalf("Error() missing kind: %s", ae.Error())
+			}
+		})
+	}
+}
+
+func TestExpectedServiceInterruption(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "reset", err: errors.New("read tcp 127.0.0.1:1->127.0.0.1:2: read: connection reset by peer"), want: true},
+		{name: "broken pipe", err: errors.New("write tcp: broken pipe"), want: true},
+		{name: "eof", err: errors.New("EOF"), want: true},
+		{name: "unexpected eof", err: errors.New("unexpected EOF"), want: true},
+		{name: "timeout", err: errors.New("context deadline exceeded"), want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isExpectedServiceInterruption(tc.err); got != tc.want {
+				t.Fatalf("got %v, want %v", got, tc.want)
 			}
 		})
 	}

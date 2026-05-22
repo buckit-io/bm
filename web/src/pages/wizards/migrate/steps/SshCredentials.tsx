@@ -196,10 +196,21 @@ export function SshCredentials({ draft, update }: Props) {
           </div>
         )}
 
-        <div className="hstack" style={{ gap: "var(--s-4)", flexWrap: "wrap" }}>
-          <div className="field" style={{ minWidth: 200 }}>
-            <label className="field-label">SSH user</label>
+        <div className="vstack" style={{ gap: "var(--s-2)" }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "minmax(200px, 220px) max-content",
+              gap: "var(--s-2) var(--s-4)",
+              alignItems: "center",
+            }}
+          >
+            <label className="field-label" htmlFor="migrate-ssh-user">
+              SSH user
+            </label>
+            <div />
             <input
+              id="migrate-ssh-user"
               className="input"
               value={draft.ssh.user}
               onChange={(e) =>
@@ -207,31 +218,36 @@ export function SshCredentials({ draft, update }: Props) {
               }
               placeholder="buckit"
             />
-          </div>
-          <label
-            className="hstack"
-            style={{
-              gap: 6,
-              alignSelf: "flex-end",
-              paddingBottom: 6,
-              opacity: draft.ssh.user.trim() === "root" ? 0.55 : 1,
-            }}
-            title={
-              draft.ssh.user.trim() === "root"
-                ? "Not needed when connecting as root."
-                : undefined
-            }
-          >
-            <input
-              type="checkbox"
-              checked={draft.ssh.user.trim() === "root" ? false : draft.ssh.sudo}
-              disabled={draft.ssh.user.trim() === "root"}
-              onChange={(e) =>
-                update({ ssh: { ...draft.ssh, sudo: e.target.checked } })
+            <label
+              className="hstack"
+              style={{
+                gap: 6,
+                opacity: draft.ssh.user.trim() === "root" ? 0.55 : 1,
+              }}
+              title={
+                draft.ssh.user.trim() === "root"
+                  ? "Not needed when connecting as root."
+                  : undefined
               }
-            />
-            Use sudo (passwordless)
-          </label>
+            >
+              <input
+                type="checkbox"
+                checked={draft.ssh.user.trim() === "root" ? false : draft.ssh.sudo}
+                disabled={draft.ssh.user.trim() === "root"}
+                onChange={(e) =>
+                  update({ ssh: { ...draft.ssh, sudo: e.target.checked } })
+                }
+              />
+              Use sudo (passwordless)
+            </label>
+          </div>
+          <span className="field-hint">
+            Use <span className="mono">root</span>, or a non-root SSH user
+            with passwordless <span className="mono">sudo</span> that can
+            install packages, write <span className="mono">/etc</span>{" "}
+            config, prepare storage directories, and manage the systemd
+            service.
+          </span>
         </div>
 
         {draft.ssh.authMethod === "password" && (

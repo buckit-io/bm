@@ -3,10 +3,16 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	madmin "github.com/buckit-io/madmin-go/v3"
+
+	"github.com/buckit-io/bm/internal/deploy"
 	"github.com/buckit-io/bm/internal/domain"
 	"github.com/buckit-io/bm/internal/tasks"
 )
@@ -96,6 +102,100 @@ func TestM7RestartCluster(t *testing.T) {
 	}
 }
 
+func TestM7ClusterUpgradeByAdminUpdate(t *testing.T) {
+	h := newM7Harness(t)
+	restoreVersions := deploy.RestoreVersionsCacheForTest([]domain.BuckitVersion{{
+		Tag:   "RELEASE.2026-06-01T00-00-00Z",
+		Label: "RELEASE.2026-06-01T00-00-00Z",
+		Artifacts: []domain.BuckitArtifact{
+			{Kind: "binary", OS: "linux", Arch: "amd64", URL: "https://example.test/buckit-linux-amd64"},
+			{Kind: "binary", OS: "linux", Arch: "arm64", URL: "https://example.test/buckit-linux-arm64"},
+		},
+	}})
+	defer restoreVersions()
+	id, code := dispatch(t, h, tasks.OpClusterUpgradeByAdminUpdate, nil, map[string]any{
+		"version": "RELEASE.2026-06-01T00-00-00Z",
+	})
+	if code != 202 {
+		t.Fatalf("dispatch: %d", code)
+	}
+	row := waitTermM7(t, h, id, 10*time.Second)
+	if row.Status != tasks.StateSucceeded {
+		t.Fatalf("cluster_upgrade_by_admin_update: %s (%s)", row.Status, row.FailureNote)
+	}
+	if h.calls.serverUpdate.Load() != 1 {
+		t.Fatalf("expected 1 server update call, got %d", h.calls.serverUpdate.Load())
+	}
+	if got, _ := h.calls.serverUpdateURL.Load().(string); got != "https://example.test/buckit-linux-amd64" {
+		t.Fatalf("expected amd64 binary update URL, got %q", got)
+	}
+	if h.calls.serviceRestart.Load() != 0 {
+		t.Fatalf("did not expect explicit service restart call, got %d", h.calls.serviceRestart.Load())
+	}
+}
+
+func TestM7ClusterUpgradeByAdminUpdateRejectsNonNewerVersion(t *testing.T) {
+	h := newM7Harness(t)
+	restoreVersions := deploy.RestoreVersionsCacheForTest([]domain.BuckitVersion{{
+		Tag:   "RELEASE.2026-05-01T00-00-00Z",
+		Label: "RELEASE.2026-05-01T00-00-00Z",
+		Artifacts: []domain.BuckitArtifact{
+			{Kind: "binary", OS: "linux", Arch: "amd64", URL: "https://example.test/buckit-linux-amd64"},
+		},
+	}})
+	defer restoreVersions()
+	id, code := dispatch(t, h, tasks.OpClusterUpgradeByAdminUpdate, nil, map[string]any{
+		"version": "RELEASE.2026-05-01T00-00-00Z",
+	})
+	if code != 202 {
+		t.Fatalf("dispatch: %d", code)
+	}
+	row := waitTermM7(t, h, id, 10*time.Second)
+	if row.Status != tasks.StateFailed {
+		t.Fatalf("cluster_upgrade_by_admin_update: want failed, got %s", row.Status)
+	}
+	if !strings.Contains(row.FailureNote, "not newer") {
+		t.Fatalf("expected non-newer failure note, got %q", row.FailureNote)
+	}
+	if h.calls.serverUpdate.Load() != 0 {
+		t.Fatalf("did not expect server update call, got %d", h.calls.serverUpdate.Load())
+	}
+}
+
+func TestM7ClusterUpgradeByAdminUpdateFailsOnServerReportedError(t *testing.T) {
+	h := newM7Harness(t)
+	h.update = madmin.ServerUpdateStatusV2{
+		Results: []madmin.ServerPeerUpdateStatus{
+			{Host: "node1", CurrentVersion: "2026-05-01T00:00:00Z", Err: "permission denied"},
+			{Host: "node2", CurrentVersion: "2026-05-01T00:00:00Z", UpdatedVersion: "2026-06-01T00:00:00Z"},
+		},
+	}
+	restoreVersions := deploy.RestoreVersionsCacheForTest([]domain.BuckitVersion{{
+		Tag:   "RELEASE.2026-06-01T00-00-00Z",
+		Label: "RELEASE.2026-06-01T00-00-00Z",
+		Artifacts: []domain.BuckitArtifact{
+			{Kind: "binary", OS: "linux", Arch: "amd64", URL: "https://example.test/buckit-linux-amd64"},
+		},
+	}})
+	defer restoreVersions()
+	id, code := dispatch(t, h, tasks.OpClusterUpgradeByAdminUpdate, nil, map[string]any{
+		"version": "RELEASE.2026-06-01T00-00-00Z",
+	})
+	if code != 202 {
+		t.Fatalf("dispatch: %d", code)
+	}
+	row := waitTermM7(t, h, id, 10*time.Second)
+	if row.Status != tasks.StateFailed {
+		t.Fatalf("cluster_upgrade_by_admin_update: want failed, got %s", row.Status)
+	}
+	if !strings.Contains(row.FailureNote, "permission denied") {
+		t.Fatalf("expected server-reported error, got %q", row.FailureNote)
+	}
+	if row.Result == nil || len(row.Result.HostStatuses) != 2 {
+		t.Fatalf("expected 2 host statuses, got %+v", row.Result)
+	}
+}
+
 func TestM7RollingRestart(t *testing.T) {
 	h := newM7Harness(t)
 	id, code := dispatch(t, h, tasks.OpRollingRestart, nil, nil)
@@ -162,9 +262,13 @@ func TestM7EngineMismatch(t *testing.T) {
 	_ = h.clusters.Put(context.Background(), c)
 
 	// Buckit-only op against a MinIO cluster → 400.
-	_, code := dispatch(t, h, tasks.OpRollingUpgrade, nil, nil)
+	_, code := dispatch(t, h, tasks.OpClusterUpgradeBySystemctl, nil, nil)
 	if code != 400 {
-		t.Fatalf("rolling_upgrade against MinIO: want 400, got %d", code)
+		t.Fatalf("cluster_upgrade_by_systemctl against MinIO: want 400, got %d", code)
+	}
+	_, code = dispatch(t, h, tasks.OpClusterUpgradeByAdminUpdate, nil, nil)
+	if code != 400 {
+		t.Fatalf("cluster_upgrade_by_admin_update against MinIO: want 400, got %d", code)
 	}
 }
 
@@ -173,5 +277,85 @@ func TestM7RotateRootCredsStub(t *testing.T) {
 	_, code := dispatch(t, h, tasks.OpRotateRootCreds, nil, nil)
 	if code != 400 {
 		t.Fatalf("rotate_root_creds stub: want 400, got %d", code)
+	}
+}
+
+func TestM7ClusterUpgradeBySystemctlUsesArm64RPM(t *testing.T) {
+	h := newM7Harness(t)
+	artifactLn, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactSrv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/buckit.sha256":
+			_, _ = w.Write([]byte(strings.Join([]string{
+				"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  buckit-amd64.rpm",
+				"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  buckit-arm64.rpm",
+			}, "\n")))
+		default:
+			_, _ = w.Write([]byte("rpm"))
+		}
+	}))
+	artifactSrv.Listener = artifactLn
+	artifactSrv.Start()
+	defer artifactSrv.Close()
+	restoreVersions := deploy.RestoreVersionsCacheForTest([]domain.BuckitVersion{{
+		Tag:         "v1.0.0",
+		Label:       "v1.0.0",
+		RpmURL:      artifactSrv.URL + "/buckit-amd64.rpm",
+		RpmURLAmd64: artifactSrv.URL + "/buckit-amd64.rpm",
+		RpmURLArm64: artifactSrv.URL + "/buckit-arm64.rpm",
+		SHA256URL:   artifactSrv.URL + "/buckit.sha256",
+	}})
+	defer restoreVersions()
+
+	var downloaded []string
+	var verified bool
+	var restartedBySystemctl bool
+	h.sshSrv.CmdOverride = func(cmd string) (string, string, int, bool) {
+		switch {
+		case cmd == "uname -m":
+			return "aarch64\n", "", 0, true
+		case strings.HasPrefix(cmd, "curl -fSL -o /tmp/buckit.rpm "):
+			downloaded = append(downloaded, strings.TrimPrefix(cmd, "curl -fSL -o /tmp/buckit.rpm "))
+			return "", "", 0, true
+		case strings.Contains(cmd, "sha256sum -c -") || strings.Contains(cmd, "shasum -a 256 -c -"):
+			verified = true
+			return "", "", 0, true
+		case strings.Contains(cmd, "systemctl restart"):
+			restartedBySystemctl = true
+			return "", "", 0, true
+		default:
+			return "", "", 0, false
+		}
+	}
+
+	id, code := dispatch(t, h, tasks.OpClusterUpgradeBySystemctl, nil, map[string]any{
+		"version": "v1.0.0",
+	})
+	if code != 202 {
+		t.Fatalf("dispatch: %d", code)
+	}
+	row := waitTermM7(t, h, id, 30*time.Second)
+	if row.Status != tasks.StateSucceeded {
+		t.Fatalf("cluster_upgrade_by_systemctl: %s (%s)", row.Status, row.FailureNote)
+	}
+	if len(downloaded) == 0 {
+		t.Fatal("expected at least one download URL")
+	}
+	for _, url := range downloaded {
+		if strings.Trim(url, "'") != artifactSrv.URL+"/buckit-arm64.rpm" {
+			t.Fatalf("want arm64 rpm URL, got %q", url)
+		}
+	}
+	if !verified {
+		t.Fatal("expected checksum verification command")
+	}
+	if restartedBySystemctl {
+		t.Fatal("did not expect per-host systemctl restart during cluster upgrade")
+	}
+	if h.calls.serviceRestart.Load() != 1 {
+		t.Fatalf("expected 1 admin restart call, got %d", h.calls.serviceRestart.Load())
 	}
 }

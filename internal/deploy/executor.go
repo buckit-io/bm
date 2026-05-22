@@ -13,6 +13,7 @@ import (
 	"github.com/buckit-io/bm/internal/clusters"
 	"github.com/buckit-io/bm/internal/domain"
 	"github.com/buckit-io/bm/internal/nodes"
+	"github.com/buckit-io/bm/internal/sshconfig"
 	"github.com/buckit-io/bm/internal/tasks"
 )
 
@@ -22,6 +23,8 @@ type Executor struct {
 	Clusters     *clusters.Repo
 	Nodes        *nodes.Repo
 	ClusterAdmin *clusteradmin.Repo
+	SSHConfig    *sshconfig.Repo
+	Verify       func(context.Context, DeployParams) (VerifyResult, error)
 	// AfterCommit is called once the cluster commit succeeds. Production wires
 	// this to alias.Sync so bm-cli verbs see the new cluster.
 	AfterCommit func(ctx context.Context, clusterID string)
@@ -36,7 +39,7 @@ func Register(e *Executor) {
 // Validate decodes the params and runs invariant checks. Called synchronously
 // during Dispatch so the operator gets a 400 for bad input.
 func (e *Executor) Validate(req tasks.DispatchRequest) error {
-	if e.Clusters == nil || e.Nodes == nil || e.ClusterAdmin == nil {
+	if e.Clusters == nil || e.Nodes == nil || e.ClusterAdmin == nil || e.SSHConfig == nil {
 		return errors.New("deploy executor: repos not wired")
 	}
 	if len(req.Params) == 0 {
@@ -167,7 +170,11 @@ func (e *Executor) Execute(ctx context.Context, run *tasks.Run) error {
 	}
 
 	run.LogInfo("verify: checking cluster status")
-	verify, err := verifyCluster(ctx, params)
+	verifyFn := e.Verify
+	if verifyFn == nil {
+		verifyFn = verifyCluster
+	}
+	verify, err := verifyFn(ctx, params)
 	if err != nil {
 		run.LogError("verify: %v", err)
 		return err
@@ -199,8 +206,8 @@ func (e *Executor) Execute(ctx context.Context, run *tasks.Run) error {
 	return nil
 }
 
-// commit persists cluster + node rows + admin creds. Mirrors M4 import-commit
-// with the fields the wizard populates.
+// commit persists cluster + node rows + admin creds + SSH config. Mirrors M4
+// import-commit with the fields the wizard populates.
 func (e *Executor) commit(ctx context.Context, p DeployParams, verify VerifyResult) (string, error) {
 	clusterID := slugify(p.Name)
 	exists, err := e.Clusters.Exists(ctx, clusterID)
@@ -257,7 +264,25 @@ func (e *Executor) commit(ctx context.Context, p DeployParams, verify VerifyResu
 	}); err != nil {
 		return "", err
 	}
+	if err := e.SSHConfig.Put(ctx, clusterID, sshConfigFromParams(clusterID, p)); err != nil {
+		return "", err
+	}
 	return clusterID, nil
+}
+
+func sshConfigFromParams(clusterID string, p DeployParams) domain.ClusterSshConfig {
+	overrides := make(map[string]domain.SshOverrides)
+	for i, h := range p.Hosts {
+		if h.SSHOverride == nil {
+			continue
+		}
+		hostID := fmt.Sprintf("%s-n%d", clusterID, i+1)
+		overrides[hostID] = *h.SSHOverride
+	}
+	return domain.ClusterSshConfig{
+		SSH:       p.SSH,
+		Overrides: overrides,
+	}
 }
 
 func stageToHostState(s Stage) tasks.HostOpState {

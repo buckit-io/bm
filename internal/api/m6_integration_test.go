@@ -6,10 +6,13 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,16 +29,41 @@ import (
 )
 
 type m6Harness struct {
-	server   *httptest.Server
-	store    *store.Store
-	mgr      *tasks.Manager
-	clusters *clusters.Repo
-	nodes    *nodes.Repo
-	sshSrv   *sshtest.Server
+	server      *httptest.Server
+	store       *store.Store
+	mgr         *tasks.Manager
+	clusters    *clusters.Repo
+	nodes       *nodes.Repo
+	sshcfg      *sshconfig.Repo
+	sshSrv      *sshtest.Server
+	svcSrv      *httptest.Server
+	artifactURL string
 }
 
 func newM6Harness(t *testing.T) *m6Harness {
 	t.Helper()
+	artifactLn, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactSrv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/buckit.rpm.sha256":
+			_, _ = w.Write([]byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  buckit.rpm\n"))
+		default:
+			_, _ = w.Write([]byte("rpm"))
+		}
+	}))
+	artifactSrv.Listener = artifactLn
+	artifactSrv.Start()
+	t.Cleanup(artifactSrv.Close)
+	restoreVersions := deploy.RestoreVersionsCacheForTest([]domain.BuckitVersion{{
+		Tag:       "v1.0.0",
+		Label:     "v1.0.0",
+		RpmURL:    artifactSrv.URL + "/buckit.rpm",
+		SHA256URL: artifactSrv.URL + "/buckit.rpm.sha256",
+	}})
+	t.Cleanup(restoreVersions)
 	dir := t.TempDir()
 	key := make([]byte, 32)
 	_, _ = rand.Read(key)
@@ -62,11 +90,106 @@ func newM6Harness(t *testing.T) *m6Harness {
 	sshPool := bmssh.NewPool(nil)
 	t.Cleanup(sshPool.Close)
 
+	var (
+		svcMu        sync.Mutex
+		buckets      = map[string]map[string][]byte{}
+		smokePayload = []byte("bm deploy smoke test\n")
+	)
+	svcSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/admin/v3/info") {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"mode": "online",
+				"servers": []map[string]any{
+					{"endpoint": "node1:9000", "state": "online", "version": "RELEASE.2026-06-01T00-00-00Z", "poolNumber": 1},
+					{"endpoint": "node2:9000", "state": "online", "version": "RELEASE.2026-06-01T00-00-00Z", "poolNumber": 1},
+				},
+				"backend": map[string]any{"type": "Erasure", "standardSCParity": 2},
+			})
+			return
+		}
+
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		parts := strings.SplitN(path, "/", 2)
+		if len(parts) == 0 || parts[0] == "" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		bucket := parts[0]
+		object := ""
+		if len(parts) == 2 {
+			object = parts[1]
+		}
+
+		svcMu.Lock()
+		defer svcMu.Unlock()
+
+		switch r.Method {
+		case http.MethodPut:
+			if object == "" {
+				if _, ok := buckets[bucket]; !ok {
+					buckets[bucket] = map[string][]byte{}
+				}
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			if _, ok := buckets[bucket]; !ok {
+				buckets[bucket] = map[string][]byte{}
+			}
+			body, _ := io.ReadAll(r.Body)
+			buckets[bucket][object] = body
+			w.Header().Set("ETag", `"test-etag"`)
+			w.WriteHeader(http.StatusOK)
+		case http.MethodGet, http.MethodHead:
+			if objects, ok := buckets[bucket]; ok {
+				if _, ok := objects[object]; ok {
+					obj := smokePayload
+					w.Header().Set("ETag", `"test-etag"`)
+					w.Header().Set("Last-Modified", time.Now().UTC().Format(http.TimeFormat))
+					w.Header().Set("Content-Length", strconv.Itoa(len(obj)))
+					w.WriteHeader(http.StatusOK)
+					if r.Method == http.MethodGet {
+						_, _ = w.Write(obj)
+					}
+					return
+				}
+			}
+			w.WriteHeader(http.StatusNotFound)
+		case http.MethodDelete:
+			if object == "" {
+				delete(buckets, bucket)
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			if _, ok := buckets[bucket]; ok {
+				delete(buckets[bucket], object)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(svcSrv.Close)
+
 	deploy.Register(&deploy.Executor{
 		Installer:    deploy.NewInstaller(sshPool),
 		Clusters:     clustersRepo,
 		Nodes:        nodesRepo,
 		ClusterAdmin: clusterAdminRepo,
+		SSHConfig:    sshcfgRepo,
+		Verify: func(context.Context, deploy.DeployParams) (deploy.VerifyResult, error) {
+			return deploy.VerifyResult{
+				ConsoleURL:      svcSrv.URL,
+				Version:         "RELEASE.2026-06-01T00-00-00Z",
+				RawBytes:        400,
+				UsedBytes:       100,
+				UsableBytes:     300,
+				NodesHealthy:    2,
+				NodesTotal:      2,
+				PoolsOnline:     1,
+				SmokeTestPassed: true,
+			}, nil
+		},
 	})
 
 	handler := New(Options{
@@ -80,7 +203,17 @@ func newM6Harness(t *testing.T) *m6Harness {
 	})
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
-	return &m6Harness{server: ts, store: st, mgr: mgr, clusters: clustersRepo, nodes: nodesRepo, sshSrv: sshSrv}
+	return &m6Harness{
+		server:      ts,
+		store:       st,
+		mgr:         mgr,
+		clusters:    clustersRepo,
+		nodes:       nodesRepo,
+		sshcfg:      sshcfgRepo,
+		sshSrv:      sshSrv,
+		svcSrv:      svcSrv,
+		artifactURL: artifactSrv.URL + "/buckit.rpm",
+	}
 }
 
 func TestM6DeployHappyPath(t *testing.T) {
@@ -92,10 +225,12 @@ func TestM6DeployHappyPath(t *testing.T) {
 	host, port := h.sshSrv.HostPort()
 
 	draft := domain.NewClusterDraft{
-		Name:    "test-deploy",
-		Version: "v1.0.0",
-		API:     domain.APIPorts{Port: 9000, ConsolePort: 9001},
-		Region:  "us-east-1",
+		Name:      "test-deploy",
+		Version:   "custom",
+		CustomURL: h.artifactURL,
+		ServerURL: h.svcSrv.URL,
+		API:       domain.APIPorts{Port: 9000, ConsolePort: 9001},
+		Region:    "us-east-1",
 		Credentials: domain.Credentials{
 			RootUser: "rootuser", RootPassword: "supersecret",
 		},
@@ -103,7 +238,7 @@ func TestM6DeployHappyPath(t *testing.T) {
 			{ID: "h1", Hostname: host, Port: port, Probe: domain.HostProbeReachable},
 			{ID: "h2", Hostname: host, Port: port, Probe: domain.HostProbeReachable},
 		},
-		SSH:      domain.SshCreds{AuthMethod: domain.AuthPassword, User: h.sshSrv.User(), Password: h.sshSrv.Password()},
+		SSH:      domain.SshCreds{AuthMethod: domain.AuthPassword, User: h.sshSrv.User(), Password: h.sshSrv.Password(), Sudo: true},
 		Topology: domain.Topology{SetSize: 4, Parity: 2, SelectedMounts: []string{"/data/disk1", "/data/disk2"}},
 	}
 	body, _ := json.Marshal(draft)
@@ -141,6 +276,17 @@ func TestM6DeployHappyPath(t *testing.T) {
 	if len(nodeRows) != 2 {
 		t.Fatalf("expected 2 nodes, got %d", len(nodeRows))
 	}
+
+	cfg, err := h.sshcfg.Get(context.Background(), "test-deploy")
+	if err != nil {
+		t.Fatalf("expected persisted ssh config: %v", err)
+	}
+	if cfg.SSH.User != h.sshSrv.User() {
+		t.Fatalf("ssh user: want %q, got %q", h.sshSrv.User(), cfg.SSH.User)
+	}
+	if cfg.SSH.Password != h.sshSrv.Password() {
+		t.Fatalf("ssh password: want persisted wizard password")
+	}
 }
 
 func TestM6DeploySlugCollision(t *testing.T) {
@@ -151,7 +297,8 @@ func TestM6DeploySlugCollision(t *testing.T) {
 	}
 	draft := domain.NewClusterDraft{
 		Name:        "test",
-		Version:     "v1.0.0",
+		Version:     "custom",
+		CustomURL:   "https://example.test/buckit.rpm",
 		API:         domain.APIPorts{Port: 9000, ConsolePort: 9001},
 		Region:      "us-east-1",
 		Credentials: domain.Credentials{RootUser: "u", RootPassword: "p"},
@@ -172,10 +319,10 @@ func TestM6DeployValidationFailures(t *testing.T) {
 		name  string
 		draft domain.NewClusterDraft
 	}{
-		{"no name", domain.NewClusterDraft{Version: "v1.0.0", Credentials: domain.Credentials{RootUser: "u", RootPassword: "p"}, Hosts: []domain.HostRow{{ID: "h1", Hostname: "x"}}, SSH: domain.SshCreds{AuthMethod: domain.AuthAgent, User: "ops"}, Topology: domain.Topology{SelectedMounts: []string{"/data/d1"}}}},
-		{"no creds", domain.NewClusterDraft{Name: "x", Version: "v1.0.0", Hosts: []domain.HostRow{{ID: "h1", Hostname: "x"}}, SSH: domain.SshCreds{AuthMethod: domain.AuthAgent, User: "ops"}, Topology: domain.Topology{SelectedMounts: []string{"/data/d1"}}}},
-		{"no hosts", domain.NewClusterDraft{Name: "x", Version: "v1.0.0", Credentials: domain.Credentials{RootUser: "u", RootPassword: "p"}, SSH: domain.SshCreds{AuthMethod: domain.AuthAgent, User: "ops"}, Topology: domain.Topology{SelectedMounts: []string{"/data/d1"}}}},
-		{"no mounts", domain.NewClusterDraft{Name: "x", Version: "v1.0.0", Credentials: domain.Credentials{RootUser: "u", RootPassword: "p"}, Hosts: []domain.HostRow{{ID: "h1", Hostname: "x"}}, SSH: domain.SshCreds{AuthMethod: domain.AuthAgent, User: "ops"}}},
+		{"no name", domain.NewClusterDraft{Version: "custom", CustomURL: "https://example.test/buckit.rpm", Credentials: domain.Credentials{RootUser: "u", RootPassword: "p"}, Hosts: []domain.HostRow{{ID: "h1", Hostname: "x"}}, SSH: domain.SshCreds{AuthMethod: domain.AuthAgent, User: "ops"}, Topology: domain.Topology{SelectedMounts: []string{"/data/d1"}}}},
+		{"no creds", domain.NewClusterDraft{Name: "x", Version: "custom", CustomURL: "https://example.test/buckit.rpm", Hosts: []domain.HostRow{{ID: "h1", Hostname: "x"}}, SSH: domain.SshCreds{AuthMethod: domain.AuthAgent, User: "ops"}, Topology: domain.Topology{SelectedMounts: []string{"/data/d1"}}}},
+		{"no hosts", domain.NewClusterDraft{Name: "x", Version: "custom", CustomURL: "https://example.test/buckit.rpm", Credentials: domain.Credentials{RootUser: "u", RootPassword: "p"}, SSH: domain.SshCreds{AuthMethod: domain.AuthAgent, User: "ops"}, Topology: domain.Topology{SelectedMounts: []string{"/data/d1"}}}},
+		{"no mounts", domain.NewClusterDraft{Name: "x", Version: "custom", CustomURL: "https://example.test/buckit.rpm", Credentials: domain.Credentials{RootUser: "u", RootPassword: "p"}, Hosts: []domain.HostRow{{ID: "h1", Hostname: "x"}}, SSH: domain.SshCreds{AuthMethod: domain.AuthAgent, User: "ops"}}},
 		{"bad version", domain.NewClusterDraft{Name: "x", Version: "nope", Credentials: domain.Credentials{RootUser: "u", RootPassword: "p"}, Hosts: []domain.HostRow{{ID: "h1", Hostname: "x"}}, SSH: domain.SshCreds{AuthMethod: domain.AuthAgent, User: "ops"}, Topology: domain.Topology{SelectedMounts: []string{"/data/d1"}}}},
 	}
 	for _, tc := range cases {

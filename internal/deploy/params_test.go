@@ -2,18 +2,18 @@ package deploy
 
 import (
 	"testing"
-	"time"
 
 	"github.com/buckit-io/bm/internal/domain"
 )
 
 func TestDeployArtifactURLUsesArm64RPM(t *testing.T) {
-	restore := restoreVersionsCache([]domain.BuckitVersion{{
+	restore := RestoreVersionsCacheForTest([]domain.BuckitVersion{{
 		Tag:         "v1.0.0",
 		Label:       "v1.0.0",
 		RpmURL:      "https://example.com/buckit-amd64.rpm",
 		RpmURLAmd64: "https://example.com/buckit-amd64.rpm",
 		RpmURLArm64: "https://example.com/buckit-arm64.rpm",
+		SHA256URL:   "https://example.com/buckit.sha256",
 	}})
 	defer restore()
 
@@ -35,12 +35,13 @@ func TestDeployArtifactURLUsesArm64RPM(t *testing.T) {
 }
 
 func TestDeployArtifactURLUsesAmd64RPM(t *testing.T) {
-	restore := restoreVersionsCache([]domain.BuckitVersion{{
+	restore := RestoreVersionsCacheForTest([]domain.BuckitVersion{{
 		Tag:         "v1.0.0",
 		Label:       "v1.0.0",
 		RpmURL:      "https://example.com/buckit-amd64.rpm",
 		RpmURLAmd64: "https://example.com/buckit-amd64.rpm",
 		RpmURLArm64: "https://example.com/buckit-arm64.rpm",
+		SHA256URL:   "https://example.com/buckit.sha256",
 	}})
 	defer restore()
 
@@ -58,20 +59,5 @@ func TestDeployArtifactURLUsesAmd64RPM(t *testing.T) {
 	}
 	if got != "https://example.com/buckit-amd64.rpm" {
 		t.Fatalf("want amd64 rpm, got %q", got)
-	}
-}
-
-func restoreVersionsCache(versions []domain.BuckitVersion) func() {
-	cacheMu.Lock()
-	oldAt := cachedAt
-	oldResult := cachedResult
-	cachedAt = time.Now()
-	cachedResult = versions
-	cacheMu.Unlock()
-	return func() {
-		cacheMu.Lock()
-		cachedAt = oldAt
-		cachedResult = oldResult
-		cacheMu.Unlock()
 	}
 }

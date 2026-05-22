@@ -18,11 +18,12 @@ func RegisterAll(deps Deps) {
 	// Admin w/ progression
 	tasks.OverwriteRegister(tasks.OpRestartCluster, &restartClusterExecutor{deps: deps})
 	tasks.OverwriteRegister(tasks.OpStartHeal, &startHealExecutor{deps: deps})
+	tasks.OverwriteRegister(tasks.OpClusterUpgradeByAdminUpdate, &clusterUpgradeByAdminUpdateExecutor{deps: deps})
 
 	// Orchestrated (cluster-wide)
 	tasks.OverwriteRegister(tasks.OpStartCluster, &startClusterExecutor{deps: deps})
 	tasks.OverwriteRegister(tasks.OpRollingRestart, &rollingRestartExecutor{deps: deps})
-	tasks.OverwriteRegister(tasks.OpRollingUpgrade, &rollingUpgradeExecutor{deps: deps})
+	tasks.OverwriteRegister(tasks.OpClusterUpgradeBySystemctl, &clusterUpgradeBySystemctlExecutor{deps: deps})
 	tasks.OverwriteRegister(tasks.OpRedeploySoftware, &redeployExecutor{deps: deps})
 
 	// Host-scoped service ops

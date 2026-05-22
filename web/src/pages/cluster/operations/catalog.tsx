@@ -1,6 +1,9 @@
 // The concrete operation definitions, one per Cluster Actions menu
 // item. Grouped by transport (admin / ssh / manager) for menu display.
 
+import { useEffect, useState } from "react";
+import { listVersions } from "../../../api/client";
+import type { BuckitVersion } from "../../../api/types";
 import { OperationDef } from "./defs";
 
 // Simple one-line confirmation step shared by ops that just need
@@ -13,6 +16,48 @@ function confirmStep(message: string, nextLabel: string, danger?: boolean) {
     nextLabel,
     danger,
   };
+}
+
+function VersionSelectStep({
+  params,
+  setParams,
+  intro,
+}: {
+  params: { version: string };
+  setParams: (next: { version: string }) => void;
+  intro: string;
+}) {
+  const [versions, setVersions] = useState<BuckitVersion[]>([]);
+
+  useEffect(() => {
+    listVersions().then(setVersions).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (versions.length === 0) return;
+    if (versions.some((v) => v.tag === params.version)) return;
+    setParams({ version: versions[0].tag });
+  }, [versions, params.version, setParams]);
+
+  return (
+    <>
+      <p style={{ fontSize: "var(--fs-sm)" }}>{intro}</p>
+      <div className="field">
+        <label className="field-label">Target version</label>
+        <select
+          className="select"
+          value={params.version}
+          onChange={(e) => setParams({ version: e.target.value })}
+        >
+          {versions.map((v) => (
+            <option key={v.tag} value={v.tag}>
+              {v.label}
+            </option>
+          ))}
+        </select>
+      </div>
+    </>
+  );
 }
 
 // ── Admin API ─────────────────────────────────────────────────────
@@ -103,6 +148,30 @@ const START_HEAL: OperationDef<Record<string, never>> = {
   ],
 };
 
+const CLUSTER_UPGRADE_BY_ADMIN_UPDATE: OperationDef<{ version: string }> = {
+  id: "cluster_upgrade_by_admin_update",
+  group: "admin",
+  label: "Upgrade cluster via Admin API",
+  description: "Native self-update path. Downloads the new binary and restarts all nodes together.",
+  flavor: "orchestrated",
+  opKind: "cluster_upgrade_by_admin_update",
+  initialParams: { version: "v1.0.0" },
+  inputSteps: [
+    {
+      id: "version",
+      render: ({ params, setParams }) => (
+        <VersionSelectStep
+          params={params}
+          setParams={setParams}
+          intro="Calls the Buckit Admin API update flow. Use this for clusters not managed by systemd. The selected release binary is applied cluster-wide and every node restarts together."
+        />
+      ),
+      canAdvance: (p) => p.version.length > 0,
+      nextLabel: "Start upgrade",
+    },
+  ],
+};
+
 // ── SSH ───────────────────────────────────────────────────────────
 
 const ROLLING_RESTART: OperationDef<Record<string, never>> = {
@@ -122,36 +191,23 @@ const ROLLING_RESTART: OperationDef<Record<string, never>> = {
   ],
 };
 
-const ROLLING_UPGRADE: OperationDef<{ version: string }> = {
-  id: "rolling_upgrade",
+const CLUSTER_UPGRADE_BY_SYSTEMCTL: OperationDef<{ version: string }> = {
+  id: "cluster_upgrade_by_systemctl",
   group: "ssh",
-  label: "Rolling upgrade…",
-  description: "Upgrade Buckit version one node at a time.",
+  label: "Upgrade systemd-managed cluster…",
+  description: "Stage the upgrade on all nodes, then restart the cluster once.",
   flavor: "orchestrated",
-  opKind: "rolling_upgrade",
+  opKind: "cluster_upgrade_by_systemctl",
   initialParams: { version: "v1.0.0" },
   inputSteps: [
     {
       id: "version",
       render: ({ params, setParams }) => (
-        <>
-          <p style={{ fontSize: "var(--fs-sm)" }}>
-            bm will scp the new package to each node, install it, then
-            rolling-restart with health-wait between nodes.
-          </p>
-          <div className="field">
-            <label className="field-label">Target version</label>
-            <select
-              className="select"
-              value={params.version}
-              onChange={(e) => setParams({ version: e.target.value })}
-            >
-              <option value="v1.0.1">v1.0.1 (latest stable)</option>
-              <option value="v1.0.0">v1.0.0</option>
-              <option value="v0.99.0">v0.99.0</option>
-            </select>
-          </div>
-        </>
+        <VersionSelectStep
+          params={params}
+          setParams={setParams}
+          intro="Installs the new package on every node without restarting, then restarts the cluster once via the Admin API after all nodes are updated."
+        />
       ),
       canAdvance: (p) => p.version.length > 0,
       nextLabel: "Start upgrade",
@@ -355,9 +411,10 @@ export const CLUSTER_OPERATIONS: OperationDef[] = [
   FREEZE_API,
   UNFREEZE_API,
   START_HEAL,
+  CLUSTER_UPGRADE_BY_ADMIN_UPDATE,
   // SSH
   ROLLING_RESTART,
-  ROLLING_UPGRADE,
+  CLUSTER_UPGRADE_BY_SYSTEMCTL,
   START_CLUSTER,
   ROTATE_ROOT_CREDS,
   // ADD_POOL,  // hidden — pool-add wizard not yet shipped

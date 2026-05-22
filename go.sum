@@ -17,8 +17,8 @@ github.com/buckit-io/cli v0.0.0-20260518233613-5dda929c1041 h1:R+0Z838XfQ+8gbig4
 github.com/buckit-io/cli v0.0.0-20260518233613-5dda929c1041/go.mod h1:tUiDk42u9ZL1iH6RxZ8ExkdIHhBQVttb6H4urqHJMxs=
 github.com/buckit-io/colorjson v0.0.0-20260519005530-c81238859ccf h1:1Zty11wLDCM0u9su6QuBlvWmxL2c/CEFqbuOcMU+MCA=
 github.com/buckit-io/colorjson v0.0.0-20260519005530-c81238859ccf/go.mod h1:B0jQ3tbSKcvQ57cVfcn4Bl7DPB4z/RjMGFoe8g2BT14=
-github.com/buckit-io/madmin-go/v3 v3.0.0-20260519013355-e1469cfe717a h1:ErKn5jOWHth6KsJApjn2DAhZiPUPOCmhNefIghW9qKI=
-github.com/buckit-io/madmin-go/v3 v3.0.0-20260519013355-e1469cfe717a/go.mod h1:ZlUSfGY7ftzLbs44+SFFxO1EjOerkvpOsIms8KYpw/Y=
+github.com/buckit-io/madmin-go/v3 v3.0.0-20260522015421-d3ce3b5623dd h1:y0upUBPrm+m6pfjNUpX2jLoXuf9OLq4cvzxopRl9yfk=
+github.com/buckit-io/madmin-go/v3 v3.0.0-20260522015421-d3ce3b5623dd/go.mod h1:ZlUSfGY7ftzLbs44+SFFxO1EjOerkvpOsIms8KYpw/Y=
 github.com/buckit-io/minio-go/v7 v7.0.0-20260518233947-e88e1acf1753 h1:YFtyExFNjiy/6XadzLpFQhtNs/+0Wg5fMvkmAUsbGDc=
 github.com/buckit-io/minio-go/v7 v7.0.0-20260518233947-e88e1acf1753/go.mod h1:BUumMMePR4aDa45CPH58IDH3oVJFNBr6s+Afk6zkLFA=
 github.com/buckit-io/pkg/v3 v3.0.0-20260518235113-81b0390d37a9 h1:Q0+NX1vgqpCoIsmPJQr83GN1kDXNKywMJFrqECLI1/8=

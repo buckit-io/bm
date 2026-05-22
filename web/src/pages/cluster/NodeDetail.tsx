@@ -1,11 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { useCluster, useNode } from "../../api/hooks";
+import {
+  useCluster,
+  useClusterSshConfig,
+  useNode,
+  useRefreshCluster,
+} from "../../api/hooks";
 import { Pill } from "../../components/Pill";
 import { formatBytes, formatDuration } from "../../lib/format";
 import { OperationDef } from "./operations/defs";
 import { OperationModal } from "./operations/OperationModal";
+import { SshRequiredDialog } from "./SshRequiredDialog";
 import {
   NODE_OPERATIONS,
   NODE_GROUP_LABELS,
@@ -52,10 +58,13 @@ export function NodeDetail() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const { data: cluster } = useCluster(clusterId);
+  const { data: sshConfig } = useClusterSshConfig(clusterId);
   const { data: node, isLoading } = useNode(clusterId, nodeId);
+  const { mutateAsync: refreshClusterAsync } = useRefreshCluster(clusterId);
 
   const [actionsOpen, setActionsOpen] = useState(false);
   const [activeOp, setActiveOp] = useState<OperationDef | null>(null);
+  const [showSshRequired, setShowSshRequired] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const groups = useMemo(() => groupedNodeOps(), []);
 
@@ -75,13 +84,8 @@ export function NodeDetail() {
 
   const dataDrives = node.drives.filter((d) => !d.isBoot);
 
-  const sshOk = cluster?.sshConfigured ?? false;
+  const sshOk = !!sshConfig;
   const apiOk = node.apiAccessible;
-
-  const isDisabled = (op: OperationDef) => {
-    const r = opRequires(op);
-    return (r === "ssh" && !sshOk) || (r === "api" && !apiOk);
-  };
 
   const disabledHint = (op: OperationDef) => {
     const r = opRequires(op);
@@ -95,6 +99,11 @@ export function NodeDetail() {
   const onPick = (op: OperationDef) => {
     if (!cluster) return;
     setActionsOpen(false);
+    const requirement = opRequires(op);
+    if (requirement === "ssh" && !sshOk) {
+      setShowSshRequired(true);
+      return;
+    }
     if (op.flavor === "navigate" && op.navigateTo) {
       navigate(op.navigateTo(cluster, { nodeId: node.id }));
       return;
@@ -153,8 +162,12 @@ export function NodeDetail() {
                         (op.danger ? " is-danger" : "")
                       }
                       onClick={() => onPick(op)}
-                      disabled={isDisabled(op)}
-                      title={disabledHint(op)}
+                      disabled={opRequires(op) === "api" && !apiOk}
+                      title={
+                        opRequires(op) === "api" && !apiOk
+                          ? disabledHint(op)
+                          : undefined
+                      }
                       role="menuitem"
                     >
                       <span>{op.label}</span>
@@ -294,9 +307,27 @@ export function NodeDetail() {
           scopeLabel={`on ${node.hostname}`}
           onClose={() => {
             setActiveOp(null);
-            qc.invalidateQueries({ queryKey: ["node", clusterId, nodeId] });
-            qc.invalidateQueries({ queryKey: ["cluster", clusterId] });
+            refreshClusterAsync()
+              .then(() => {
+                qc.invalidateQueries({ queryKey: ["nodes", clusterId] });
+              })
+              .catch(() => {})
+              .finally(() => {
+                qc.invalidateQueries({ queryKey: ["node", clusterId, nodeId] });
+                qc.invalidateQueries({ queryKey: ["cluster", clusterId] });
+                qc.invalidateQueries({ queryKey: ["clusters"] });
+              });
             qc.invalidateQueries({ queryKey: ["history"] });
+          }}
+        />
+      )}
+      {showSshRequired && cluster && (
+        <SshRequiredDialog
+          clusterName={cluster.name}
+          onClose={() => setShowSshRequired(false)}
+          onConfigure={() => {
+            setShowSshRequired(false);
+            navigate(`/clusters/${cluster.id}/ssh`);
           }}
         />
       )}

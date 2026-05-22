@@ -22,16 +22,17 @@ const (
 	OpClusterDeploy OpKind = "cluster_deploy"
 
 	// Cluster-wide (M7)
-	OpRestartCluster   OpKind = "restart_cluster"
-	OpStopCluster      OpKind = "stop_cluster"
-	OpFreezeAPI        OpKind = "freeze_api"
-	OpUnfreezeAPI      OpKind = "unfreeze_api"
-	OpStartHeal        OpKind = "start_heal"
-	OpRollingRestart   OpKind = "rolling_restart"
-	OpRollingUpgrade   OpKind = "rolling_upgrade"
-	OpStartCluster     OpKind = "start_cluster"
-	OpRotateRootCreds  OpKind = "rotate_root_creds"
-	OpAddPool          OpKind = "add_pool"
+	OpRestartCluster              OpKind = "restart_cluster"
+	OpStopCluster                 OpKind = "stop_cluster"
+	OpFreezeAPI                   OpKind = "freeze_api"
+	OpUnfreezeAPI                 OpKind = "unfreeze_api"
+	OpStartHeal                   OpKind = "start_heal"
+	OpRollingRestart              OpKind = "rolling_restart"
+	OpClusterUpgradeBySystemctl   OpKind = "cluster_upgrade_by_systemctl"
+	OpClusterUpgradeByAdminUpdate OpKind = "cluster_upgrade_by_admin_update"
+	OpStartCluster                OpKind = "start_cluster"
+	OpRotateRootCreds             OpKind = "rotate_root_creds"
+	OpAddPool                     OpKind = "add_pool"
 
 	// Host-scoped (M3/M7)
 	OpSystemctlRestart OpKind = "systemctl_restart"

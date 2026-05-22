@@ -4,14 +4,29 @@ import "time"
 
 // BuckitVersion is one selectable entry on the new-cluster wizard's Basics
 // step. Returned by GET /artifacts/versions.
+type BuckitArtifact struct {
+	Kind      string `json:"kind,omitempty"`
+	OS        string `json:"os,omitempty"`
+	Arch      string `json:"arch,omitempty"`
+	URL       string `json:"url,omitempty"`
+	SHA256URL string `json:"sha256Url,omitempty"`
+	SHA256    string `json:"-"`
+}
+
 type BuckitVersion struct {
-	Tag         string `json:"tag"`
-	Label       string `json:"label"`
-	RpmURL      string `json:"rpmUrl,omitempty"`
-	RpmURLAmd64 string `json:"rpmUrlAmd64,omitempty"`
-	RpmURLArm64 string `json:"rpmUrlArm64,omitempty"`
-	DebURL      string `json:"debUrl,omitempty"`
-	SHA256URL   string `json:"sha256Url,omitempty"`
+	Tag            string           `json:"tag"`
+	Label          string           `json:"label"`
+	RpmURL         string           `json:"rpmUrl,omitempty"`
+	RpmURLAmd64    string           `json:"rpmUrlAmd64,omitempty"`
+	RpmURLArm64    string           `json:"rpmUrlArm64,omitempty"`
+	DebURL         string           `json:"debUrl,omitempty"`
+	Artifacts      []BuckitArtifact `json:"-"`
+	SHA256URL      string           `json:"sha256Url,omitempty"`
+	SHA256URLAmd64 string           `json:"-"`
+	SHA256URLArm64 string           `json:"-"`
+	SHA256         string           `json:"-"`
+	SHA256Amd64    string           `json:"-"`
+	SHA256Arm64    string           `json:"-"`
 }
 
 // CustomUrlCheckState matches web/src/pages/wizards/new/state.ts:CustomUrlCheck.state.

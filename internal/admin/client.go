@@ -20,6 +20,18 @@ type Client struct {
 	adm *madmin.AdminClient
 }
 
+type ServerUpdateStatus struct {
+	DryRun  bool
+	Results []ServerUpdateResult
+}
+
+type ServerUpdateResult struct {
+	Host           string
+	CurrentVersion string
+	UpdatedVersion string
+	Error          string
+}
+
 // New builds a Client from cred-pack. The URL may be scheme-qualified
 // (http:// or https://); when omitted, https:// is assumed. creds.Insecure
 // disables certificate verification — required for self-signed admin
@@ -71,6 +83,9 @@ func (c *Client) ServiceRestart(ctx context.Context) error {
 		return errors.New("admin: nil client")
 	}
 	if err := c.adm.ServiceRestartV2(ctx); err != nil {
+		if isExpectedServiceInterruption(err) {
+			return nil
+		}
 		return classifyError(err)
 	}
 	return nil
@@ -84,6 +99,9 @@ func (c *Client) ServiceStop(ctx context.Context) error {
 		return errors.New("admin: nil client")
 	}
 	if err := c.adm.ServiceStopV2(ctx); err != nil {
+		if isExpectedServiceInterruption(err) {
+			return nil
+		}
 		return classifyError(err)
 	}
 	return nil
@@ -110,6 +128,34 @@ func (c *Client) ServiceUnfreeze(ctx context.Context) error {
 		return classifyError(err)
 	}
 	return nil
+}
+
+// ServerUpdate issues the native Admin API cluster update flow. An empty
+// updateURL lets the server use its configured default release channel.
+func (c *Client) ServerUpdate(ctx context.Context, updateURL string) (ServerUpdateStatus, error) {
+	if c == nil || c.adm == nil {
+		return ServerUpdateStatus{}, errors.New("admin: nil client")
+	}
+	resp, err := c.adm.ServerUpdateV2(ctx, madmin.ServerUpdateOpts{
+		UpdateURL: updateURL,
+		DryRun:    false,
+	})
+	if err != nil {
+		return ServerUpdateStatus{}, classifyError(err)
+	}
+	out := ServerUpdateStatus{
+		DryRun:  resp.DryRun,
+		Results: make([]ServerUpdateResult, 0, len(resp.Results)),
+	}
+	for _, r := range resp.Results {
+		out.Results = append(out.Results, ServerUpdateResult{
+			Host:           r.Host,
+			CurrentVersion: r.CurrentVersion,
+			UpdatedVersion: r.UpdatedVersion,
+			Error:          r.Err,
+		})
+	}
+	return out, nil
 }
 
 // AccountInfo fetches /minio/admin/v3/info-account.
@@ -182,6 +228,18 @@ func classifyError(err error) error {
 	default:
 		return &Error{Kind: ErrOther, Cause: err}
 	}
+}
+
+func isExpectedServiceInterruption(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "connection reset by peer") ||
+		strings.Contains(lower, "broken pipe") ||
+		strings.Contains(lower, "unexpected eof") ||
+		strings.HasSuffix(lower, ": eof") ||
+		lower == "eof"
 }
 
 // keepaliveBudget caps the longest single admin call to avoid hanging the

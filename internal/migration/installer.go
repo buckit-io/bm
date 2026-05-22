@@ -94,9 +94,19 @@ func (in *Installer) Install(ctx context.Context, host domain.HostRow, params Cu
 		reportErr(StageFailed, err)
 		return err
 	}
+	expectedSHA256, err := deploy.FetchRPMChecksum(ctx, deploy.CustomRPMArtifact(url))
+	if err != nil {
+		reportErr(StageFailed, fmt.Errorf("checksum: %w", err))
+		return err
+	}
 	report(StageUploadingPkg, "Fetching "+url)
-	if err := deploy.RunStep(ctx, client, fmt.Sprintf("curl -fSL -o /tmp/buckit.rpm %s", deploy.ShellEscape(url))); err != nil {
+	if err := deploy.RunStep(ctx, client, deploy.DownloadRPMCommand(url)); err != nil {
 		reportErr(StageFailed, fmt.Errorf("download: %w", err))
+		return err
+	}
+	report(StageUploadingPkg, "Verifying /tmp/buckit.rpm sha256")
+	if err := deploy.RunStep(ctx, client, deploy.VerifyRPMChecksumCommand(expectedSHA256)); err != nil {
+		reportErr(StageFailed, fmt.Errorf("checksum: %w", err))
 		return err
 	}
 

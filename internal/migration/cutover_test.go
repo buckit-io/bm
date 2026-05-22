@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/buckit-io/bm/internal/admin"
 	"github.com/buckit-io/bm/internal/clusteradmin"
 	"github.com/buckit-io/bm/internal/clusters"
+	"github.com/buckit-io/bm/internal/deploy"
 	"github.com/buckit-io/bm/internal/domain"
 	bmssh "github.com/buckit-io/bm/internal/ssh"
 	"github.com/buckit-io/bm/internal/sshtest"
@@ -27,9 +29,9 @@ import (
 // TestCutoverExecutorOneHost exercises CutoverExecutor.Execute against the
 // in-memory SSH test server. Confirms:
 //
-//	1. Per-host install pipeline runs to StageDone.
-//	2. The persisted Cluster row's Engine flips minio → buckit.
-//	3. Version is updated and MigratedFrom is stamped.
+//  1. Per-host install pipeline runs to StageDone.
+//  2. The persisted Cluster row's Engine flips minio → buckit.
+//  3. Version is updated and MigratedFrom is stamped.
 //
 // The single-host case skips waitClusterHealthy entirely (it's only invoked
 // between hosts), so we don't need an admin server that speaks ServerInfo.
@@ -223,6 +225,28 @@ func (f *cutoverFixture) body() MigrationBody {
 
 func newCutoverFixture(t *testing.T, hostCount int) *cutoverFixture {
 	t.Helper()
+	artifactLn, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactSrv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/buckit.rpm.sha256":
+			_, _ = w.Write([]byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  buckit.rpm\n"))
+		default:
+			_, _ = w.Write([]byte("rpm"))
+		}
+	}))
+	artifactSrv.Listener = artifactLn
+	artifactSrv.Start()
+	t.Cleanup(artifactSrv.Close)
+	restoreVersions := deploy.RestoreVersionsCacheForTest([]domain.BuckitVersion{{
+		Tag:       "v1.0.0",
+		Label:     "v1.0.0",
+		RpmURL:    artifactSrv.URL + "/buckit.rpm",
+		SHA256URL: artifactSrv.URL + "/buckit.rpm.sha256",
+	}})
+	t.Cleanup(restoreVersions)
 	dir := t.TempDir()
 	key := make([]byte, 32)
 	_, _ = rand.Read(key)

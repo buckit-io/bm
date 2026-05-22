@@ -4,9 +4,12 @@ go 1.25.0
 
 require (
 	github.com/buckit-io/bm-cli v0.0.0-20260519014110-3be3c85fe120
+	github.com/buckit-io/madmin-go/v3 v3.0.0-20260522015421-d3ce3b5623dd
+	github.com/buckit-io/minio-go/v7 v7.0.0-20260518233947-e88e1acf1753
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/oklog/ulid/v2 v2.1.0
 	go.etcd.io/bbolt v1.4.3
+	golang.org/x/crypto v0.51.0
 )
 
 require (
@@ -17,8 +20,6 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/buckit-io/cli v0.0.0-20260518233613-5dda929c1041 // indirect
 	github.com/buckit-io/colorjson v0.0.0-20260519005530-c81238859ccf // indirect
-	github.com/buckit-io/madmin-go/v3 v3.0.0-20260519013355-e1469cfe717a // indirect
-	github.com/buckit-io/minio-go/v7 v7.0.0-20260518233947-e88e1acf1753 // indirect
 	github.com/buckit-io/pkg/v3 v3.0.0-20260518235113-81b0390d37a9 // indirect
 	github.com/buckit-io/selfupdate v0.0.0-20260518233624-b264e5557082 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -117,7 +118,6 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.1 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/crypto v0.51.0 // indirect
 	golang.org/x/net v0.54.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.44.0 // indirect

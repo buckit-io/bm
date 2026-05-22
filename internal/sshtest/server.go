@@ -273,6 +273,8 @@ func runFakeCommand(cmd string, stdout io.Writer, stderr io.Writer) int {
 	case strings.HasPrefix(cmd, "curl -fSL"):
 		// Artifact download success.
 		return 0
+	case strings.Contains(cmd, "sha256sum -c -") || strings.Contains(cmd, "shasum -a 256 -c -"):
+		return 0
 	case strings.HasPrefix(cmd, "curl -fsS"):
 		// Health endpoint probe success.
 		return 0
@@ -320,6 +322,9 @@ func runFakeCommand(cmd string, stdout io.Writer, stderr io.Writer) int {
 		// Pretend buckit isn't installed yet.
 		fmt.Fprintln(stderr, "Unit buckit.service could not be found.")
 		return 4
+	case strings.Contains(cmd, "systemctl show -p LoadState --value buckit.service"):
+		fmt.Fprint(stdout, "loaded")
+		return 0
 	case strings.HasPrefix(cmd, "systemctl status minio"):
 		fmt.Fprintln(stderr, "Unit minio.service could not be found.")
 		return 4
