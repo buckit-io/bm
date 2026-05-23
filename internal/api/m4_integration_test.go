@@ -29,6 +29,7 @@ type m4Harness struct {
 	store      *store.Store
 	mgr        *tasks.Manager
 	adminSrv   *httptest.Server
+	admin      *clusteradmin.Repo
 	aliasCalls int
 }
 
@@ -53,7 +54,7 @@ func newM4Harness(t *testing.T) *m4Harness {
 	adminSrv := fakeAdminHTTPServer()
 	t.Cleanup(adminSrv.Close)
 
-	h := &m4Harness{store: st, mgr: mgr, adminSrv: adminSrv}
+	h := &m4Harness{store: st, mgr: mgr, adminSrv: adminSrv, admin: clusterAdminRepo}
 
 	handler := New(Options{
 		Store:        st,
@@ -178,6 +179,32 @@ func TestM4FullImportFlow(t *testing.T) {
 	_ = json.Unmarshal(ns.body, &nodeRows)
 	if len(nodeRows) != 2 {
 		t.Fatalf("want 2 node rows, got %d", len(nodeRows))
+	}
+
+	// Admin creds are configurable without exposing the stored secret.
+	adminGet := doRequest(t, h, http.MethodGet, "/api/v1/clusters/prod-east/admin-creds", nil)
+	if adminGet.code != 200 {
+		t.Fatalf("get admin creds: %d %s", adminGet.code, adminGet.body)
+	}
+	if strings.Contains(string(adminGet.body), `"secretKey"`) || strings.Contains(string(adminGet.body), `"sk"`) {
+		t.Fatalf("admin creds response exposed secret: %s", adminGet.body)
+	}
+	adminBody, _ := json.Marshal(map[string]any{
+		"url":       h.adminSrv.URL,
+		"accessKey": "ak",
+		"secretKey": "correct-password",
+		"insecure":  true,
+	})
+	adminPut := doRequest(t, h, http.MethodPut, "/api/v1/clusters/prod-east/admin-creds", adminBody)
+	if adminPut.code != 204 {
+		t.Fatalf("put admin creds: %d %s", adminPut.code, adminPut.body)
+	}
+	storedAdmin, err := h.admin.Get(context.Background(), "prod-east")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedAdmin.SecretKey != "correct-password" {
+		t.Fatalf("admin creds not updated: %+v", storedAdmin)
 	}
 
 	// Refresh single

@@ -24,6 +24,7 @@ func RegisterAll(deps Deps) {
 	tasks.OverwriteRegister(tasks.OpStartCluster, &startClusterExecutor{deps: deps})
 	tasks.OverwriteRegister(tasks.OpRollingRestart, &rollingRestartExecutor{deps: deps})
 	tasks.OverwriteRegister(tasks.OpClusterUpgradeBySystemctl, &clusterUpgradeBySystemctlExecutor{deps: deps})
+	tasks.OverwriteRegister(tasks.OpRotateRootCreds, &rotateRootCredsExecutor{deps: deps})
 	tasks.OverwriteRegister(tasks.OpRedeploySoftware, &redeployExecutor{deps: deps})
 
 	// Host-scoped service ops
@@ -36,7 +37,6 @@ func RegisterAll(deps Deps) {
 	tasks.OverwriteRegister(tasks.OpShutdownHost, &shutdownHostExecutor{deps: deps})
 
 	// M7.5 stubs — registered so dispatch returns a clean 400, not 404.
-	tasks.OverwriteRegister(tasks.OpRotateRootCreds, &notImplementedExecutor{kind: "rotate_root_creds"})
 	tasks.OverwriteRegister(tasks.OpAddPool, &notImplementedExecutor{kind: "add_pool"})
 }
 

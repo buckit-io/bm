@@ -21,8 +21,8 @@ import (
 	"github.com/buckit-io/bm/internal/alias"
 	"github.com/buckit-io/bm/internal/clusteradmin"
 	"github.com/buckit-io/bm/internal/clusters"
-	"github.com/buckit-io/bm/internal/nodes"
 	"github.com/buckit-io/bm/internal/deploy"
+	"github.com/buckit-io/bm/internal/nodes"
 	"github.com/buckit-io/bm/internal/preflight"
 	bmssh "github.com/buckit-io/bm/internal/ssh"
 	"github.com/buckit-io/bm/internal/sshconfig"
@@ -118,6 +118,8 @@ func New(opts Options) http.Handler {
 		// M3: SSH layer + node CRUD.
 		r.Get("/clusters/{id}/nodes", listNodes(opts.Nodes))
 		r.Get("/clusters/{id}/nodes/{nodeId}", getNode(opts.Nodes))
+		r.Get("/clusters/{id}/admin-creds", getAdminCreds(opts.ClusterAdmin))
+		r.Put("/clusters/{id}/admin-creds", putAdminCreds(opts.ClusterAdmin, opts.AdminPool))
 		r.Get("/clusters/{id}/ssh", getSSHConfig(opts.SSHConfig))
 		r.Put("/clusters/{id}/ssh", putSSHConfig(opts.SSHConfig, opts.SSHPool))
 		r.Post("/clusters/{id}/ssh/test", testSSHConfig())

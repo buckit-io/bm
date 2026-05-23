@@ -10,6 +10,8 @@
 
 import type {
   ApiErrorBody,
+  AdminCreds,
+  AdminCredsView,
   ArtifactCheck,
   BuckitVersion,
   Cluster,
@@ -136,6 +138,27 @@ export const refreshOneCluster = (id: string, signal?: AbortSignal) =>
 
 export const deleteCluster = (id: string, signal?: AbortSignal) =>
   del<void>(`/clusters/${encodeURIComponent(id)}`, signal);
+
+export async function getClusterAdminCreds(
+  clusterId: string,
+  signal?: AbortSignal,
+): Promise<AdminCredsView | null> {
+  try {
+    return await get<AdminCredsView>(
+      `/clusters/${encodeURIComponent(clusterId)}/admin-creds`,
+      signal,
+    );
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+export const saveClusterAdminCreds = (
+  clusterId: string,
+  creds: AdminCreds,
+  signal?: AbortSignal,
+) => put<void>(`/clusters/${encodeURIComponent(clusterId)}/admin-creds`, creds, signal);
 
 // commitImport — the second leg of the import flow. The streaming
 // discover step is in api/sse.ts (POST + SSE on the same response).

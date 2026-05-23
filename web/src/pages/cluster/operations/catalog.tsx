@@ -233,19 +233,17 @@ const START_CLUSTER: OperationDef<Record<string, never>> = {
 };
 
 const ROTATE_ROOT_CREDS: OperationDef<{
-  newUser: string;
   newPassword: string;
   typedName: string;
   showPass: boolean;
 }> = {
   id: "rotate_root_creds",
   group: "ssh",
-  label: "Rotate root credentials…",
-  description: "Set a new root user / password across all nodes.",
+  label: "Rotate root password…",
+  description: "Rewrite the cluster root password on every node, then restart the cluster.",
   flavor: "orchestrated",
   opKind: "rotate_root_creds",
   initialParams: {
-    newUser: "",
     newPassword: "",
     typedName: "",
     showPass: false,
@@ -256,25 +254,18 @@ const ROTATE_ROOT_CREDS: OperationDef<{
       render: ({ params, setParams, cluster }) => (
         <div className="vstack" style={{ gap: "var(--s-3)" }}>
           <p style={{ fontSize: "var(--fs-sm)" }}>
-            bm rewrites <span className="mono">/etc/default/minio</span>{" "}
-            on every node and runs a two-pass rolling restart so the
-            cluster transitions from the old credentials to the new
-            without losing quorum.
+            1. Moves current password into reloadable env file{" "}
+            <span className="mono">/etc/minio/config.env</span> if it's
+            not there on each node, does a rolling systemctl restart.
+            <br />
+            2. Writes the new password to the env file on each node.
+            <br />
+            3. Restarts the cluster through the admin API.
+            <br />
+            4. Waits for the cluster to become healthy.
+            <br />
+            5. Rolls back the changes if a step fails.
           </p>
-          <div className="field">
-            <label className="field-label">New root user</label>
-            <input
-              className="input"
-              value={params.newUser}
-              onChange={(e) =>
-                setParams({
-                  ...params,
-                  newUser: e.target.value.replace(/[^a-zA-Z0-9_-]/g, ""),
-                })
-              }
-              placeholder="admin"
-            />
-          </div>
           <div className="field">
             <label className="field-label">New root password</label>
             <div className="hstack" style={{ gap: "var(--s-2)" }}>
@@ -297,7 +288,9 @@ const ROTATE_ROOT_CREDS: OperationDef<{
                 {params.showPass ? "Hide" : "Show"}
               </button>
             </div>
-            <span className="field-hint">Min 8 characters.</span>
+            <span className="field-hint">
+              8-40 printable ASCII characters, no spaces.
+            </span>
           </div>
           <div className="banner banner--warning">
             <span>⚠</span>
@@ -323,10 +316,11 @@ const ROTATE_ROOT_CREDS: OperationDef<{
         </div>
       ),
       canAdvance: (p, c) =>
-        p.newUser.length >= 3 &&
         p.newPassword.length >= 8 &&
+        p.newPassword.length <= 40 &&
+        /^[!-~]+$/.test(p.newPassword) &&
         p.typedName === c.name,
-      nextLabel: "Rotate",
+      nextLabel: "Rotate password",
       danger: true,
     },
   ],
@@ -360,6 +354,17 @@ const CONFIGURE_SSH: OperationDef<Record<string, never>> = {
   initialParams: {},
   inputSteps: [],
   navigateTo: (c) => `/clusters/${c.id}/ssh`,
+};
+
+const CONFIGURE_ADMIN_CREDS: OperationDef<Record<string, never>> = {
+  id: "configure_admin_creds",
+  group: "manager",
+  label: "Configure admin credentials",
+  description: "Set the root credentials bm uses for admin API calls.",
+  flavor: "navigate",
+  initialParams: {},
+  inputSteps: [],
+  navigateTo: (c) => `/clusters/${c.id}/settings`,
 };
 
 const REMOVE_CLUSTER: OperationDef<{ typedName: string }> = {
@@ -419,6 +424,7 @@ export const CLUSTER_OPERATIONS: OperationDef[] = [
   ROTATE_ROOT_CREDS,
   // ADD_POOL,  // hidden — pool-add wizard not yet shipped
   // Manager
+  CONFIGURE_ADMIN_CREDS,
   CONFIGURE_SSH,
   REMOVE_CLUSTER,
 ];

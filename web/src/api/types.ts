@@ -145,6 +145,13 @@ export interface AdminCreds {
   insecure?: boolean;
 }
 
+export interface AdminCredsView {
+  url: string;
+  accessKey: string;
+  insecure: boolean;
+  secretConfigured: boolean;
+}
+
 // ---- import (discover + commit) ----
 
 export type ImportErrorKind = "unreachable" | "auth" | "invalid_url";

@@ -113,6 +113,7 @@ func validateEngineCompat(c domain.Cluster, kind tasks.OpKind) error {
 var buckitOnly = map[tasks.OpKind]bool{
 	tasks.OpClusterUpgradeBySystemctl:   true,
 	tasks.OpClusterUpgradeByAdminUpdate: true,
+	tasks.OpRotateRootCreds:             true,
 	tasks.OpRedeploySoftware:            true,
 }
 
