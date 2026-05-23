@@ -63,7 +63,7 @@ func TestRenderConfigEnvFallsBackToExplicitHostsWhenHostnamePatternDoesNotFit(t 
 }
 
 func TestPrepareStorageCmdTargetsManagedStorageSubdirs(t *testing.T) {
-	got := prepareStorageCmd([]string{"/data/drive0"})
+	got := prepareStorageCmd([]string{"/data/drive0"}, "buckit", "buckit")
 	if !strings.Contains(got, "mkdir -p /data/drive0/buckit\n") {
 		t.Fatalf("prepareStorageCmd() missing managed subdir mkdir:\n%s", got)
 	}
@@ -72,5 +72,48 @@ func TestPrepareStorageCmdTargetsManagedStorageSubdirs(t *testing.T) {
 	}
 	if !strings.Contains(got, "chown buckit:buckit /data/drive0/buckit\n") {
 		t.Fatalf("prepareStorageCmd() missing subdir chown:\n%s", got)
+	}
+}
+
+func TestPrepareStorageCmdHonoursDetectedServiceUserGroup(t *testing.T) {
+	got := prepareStorageCmd([]string{"/data/drive0"}, "minio-user", "minio-grp")
+	if !strings.Contains(got, "chown minio-user:minio-grp /data/drive0/buckit\n") {
+		t.Fatalf("prepareStorageCmd() did not honour detected user/group:\n%s", got)
+	}
+}
+
+func TestRenderConfigEnvOmitsRootCredsAndPointsAtSecondary(t *testing.T) {
+	params := DeployParams{
+		Credentials: domain.Credentials{RootUser: "root", RootPassword: "secret"},
+		API:         domain.APIPorts{Port: 9000, ConsolePort: 9001},
+		Region:      "us-east-1",
+		Hosts:       []domain.HostRow{{Hostname: "node1"}},
+		Topology:    domain.Topology{SelectedMounts: []string{"/data/drive0"}},
+	}
+	got := renderConfigEnv(params, domain.HostRow{Hostname: "node1"})
+	if strings.Contains(got, "MINIO_ROOT_USER=") {
+		t.Fatalf("renderConfigEnv() must not embed MINIO_ROOT_USER:\n%s", got)
+	}
+	if strings.Contains(got, "MINIO_ROOT_PASSWORD=") {
+		t.Fatalf("renderConfigEnv() must not embed MINIO_ROOT_PASSWORD:\n%s", got)
+	}
+	if !strings.Contains(got, `MINIO_CONFIG_ENV_FILE="/etc/minio/config.env"`) {
+		t.Fatalf("renderConfigEnv() missing MINIO_CONFIG_ENV_FILE pointer:\n%s", got)
+	}
+}
+
+func TestRenderSecondaryConfigEnvCarriesRootCreds(t *testing.T) {
+	params := DeployParams{
+		Credentials: domain.Credentials{RootUser: "admin", RootPassword: "hunter2"},
+	}
+	got := renderSecondaryConfigEnv(params)
+	if !strings.Contains(got, `MINIO_ROOT_USER="admin"`) {
+		t.Fatalf("renderSecondaryConfigEnv() missing MINIO_ROOT_USER:\n%s", got)
+	}
+	if !strings.Contains(got, `MINIO_ROOT_PASSWORD="hunter2"`) {
+		t.Fatalf("renderSecondaryConfigEnv() missing MINIO_ROOT_PASSWORD:\n%s", got)
+	}
+	if strings.Contains(got, "MINIO_VOLUMES") || strings.Contains(got, "MINIO_REGION") {
+		t.Fatalf("renderSecondaryConfigEnv() should only carry root creds:\n%s", got)
 	}
 }

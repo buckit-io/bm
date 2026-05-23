@@ -2,8 +2,10 @@ package deploy
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
+	"github.com/buckit-io/bm/internal/credentials"
 	"github.com/buckit-io/bm/internal/domain"
 )
 
@@ -73,6 +75,12 @@ func (p DeployParams) Validate() error {
 	}
 	if p.Credentials.RootUser == "" || p.Credentials.RootPassword == "" {
 		return errors.New("deploy: root user + password required")
+	}
+	if err := credentials.ValidateRootUser(p.Credentials.RootUser); err != nil {
+		return fmt.Errorf("deploy: %w", err)
+	}
+	if err := credentials.ValidateRootPassword(p.Credentials.RootPassword); err != nil {
+		return fmt.Errorf("deploy: %w", err)
 	}
 	if len(p.Hosts) == 0 {
 		return errors.New("deploy: at least one host required")

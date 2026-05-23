@@ -121,9 +121,35 @@ func (in *Installer) Install(ctx context.Context, host domain.HostRow, params De
 		return err
 	}
 
+	serviceUser, serviceGroup, err := detectServiceUserGroup(ctx, client, creds)
+	if err != nil {
+		reportErr(StageFailed, fmt.Errorf("detect service user/group: %w", err))
+		return err
+	}
+
 	report(StageWritingConfig, "Preparing storage directories")
-	if err := runStep(ctx, client, sudoWrap(creds, prepareStorageCmd(params.Topology.SelectedMounts))); err != nil {
+	if err := runStep(ctx, client, sudoWrap(creds, prepareStorageCmd(params.Topology.SelectedMounts, serviceUser, serviceGroup))); err != nil {
 		reportErr(StageFailed, fmt.Errorf("storage permissions: %w", err))
+		return err
+	}
+
+	// Write the secondary env file first so that if its write fails the
+	// primary file still has no MINIO_CONFIG_ENV_FILE pointing at a missing
+	// target. Mirrors applyRotateRootCredsTarget ordering.
+	report(StageWritingConfig, "Writing "+secondaryEnvFile)
+	secondaryBody := renderSecondaryConfigEnv(params)
+	secondaryCmd := fmt.Sprintf(
+		"install -d /etc/minio"+
+			" && install -o %s -g %s -m 600 /dev/null %s"+
+			" && tee %s > /dev/null <<'BMCFG'\n%sBMCFG",
+		ShellEscape(serviceUser),
+		ShellEscape(serviceGroup),
+		ShellEscape(secondaryEnvFile),
+		ShellEscape(secondaryEnvFile),
+		secondaryBody,
+	)
+	if err := runStep(ctx, client, sudoWrap(creds, secondaryCmd)); err != nil {
+		reportErr(StageFailed, fmt.Errorf("config secondary: %w", err))
 		return err
 	}
 
@@ -198,6 +224,42 @@ func (in *Installer) waitHealthy(ctx context.Context, client *ssh.Client, port i
 	}
 }
 
+// detectServiceUserGroup reads User= and Group= from the installed
+// buckit.service unit via `systemctl show`. This mirrors the probe in
+// internal/operations/rotate_root_creds.go and avoids hardcoding
+// buckit:buckit in the deploy flow, so any future RPM that renames the
+// service user is honoured. systemd's own default of root:root applies when
+// the unit specifies neither field; we mirror that fallback here.
+func detectServiceUserGroup(ctx context.Context, client *ssh.Client, creds bmssh.Resolved) (string, string, error) {
+	cmd := "systemctl show buckit.service -p User -p Group"
+	r, err := bmssh.Run(ctx, client, sudoWrap(creds, cmd))
+	if err != nil {
+		return "", "", err
+	}
+	if r.ExitCode != 0 {
+		stderr := strings.TrimSpace(r.Stderr)
+		if stderr == "" {
+			stderr = fmt.Sprintf("exit %d", r.ExitCode)
+		}
+		return "", "", fmt.Errorf("systemctl show: %s", stderr)
+	}
+	user, group := "root", "root"
+	for _, line := range strings.Split(r.Stdout, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "User="):
+			if v := strings.TrimSpace(strings.TrimPrefix(line, "User=")); v != "" {
+				user = v
+			}
+		case strings.HasPrefix(line, "Group="):
+			if v := strings.TrimSpace(strings.TrimPrefix(line, "Group=")); v != "" {
+				group = v
+			}
+		}
+	}
+	return user, group, nil
+}
+
 // pickInstallCmd picks the right package manager by probing for one.
 func pickInstallCmd(ctx context.Context, client *ssh.Client) string {
 	return PickInstallCmd(ctx, client)
@@ -222,8 +284,16 @@ func PickInstallCmd(ctx context.Context, client *ssh.Client) string {
 	return "dnf install -y /tmp/buckit.rpm"
 }
 
-// renderConfigEnv writes the /etc/default/minio body with operator-supplied
-// root user/password, region, listen ports, and the selected MINIO_VOLUMES.
+// secondaryEnvFile is the canonical path for the secondary env file that
+// holds MINIO_ROOT_USER / MINIO_ROOT_PASSWORD. Kept in sync with
+// buckitSecondaryEnvFile in internal/operations/rotate_root_creds.go so that
+// rotate's NeedsNormalization check returns false for freshly deployed
+// clusters.
+const secondaryEnvFile = "/etc/minio/config.env"
+
+// renderConfigEnv writes the /etc/default/minio body with the path to the
+// secondary env file (which carries the root credentials), region, listen
+// ports, and the selected MINIO_VOLUMES.
 func renderConfigEnv(p DeployParams, host domain.HostRow) string {
 	volumes := renderVolumes(p)
 	serverURL := strings.TrimSpace(p.ServerURL)
@@ -231,8 +301,7 @@ func renderConfigEnv(p DeployParams, host domain.HostRow) string {
 		serverURL = fmt.Sprintf("http://%s:%d", host.Hostname, p.API.Port)
 	}
 	var b strings.Builder
-	b.WriteString(formatEnv("MINIO_ROOT_USER", p.Credentials.RootUser))
-	b.WriteString(formatEnv("MINIO_ROOT_PASSWORD", p.Credentials.RootPassword))
+	b.WriteString(formatEnv("MINIO_CONFIG_ENV_FILE", secondaryEnvFile))
 	b.WriteString(formatEnv("MINIO_VOLUMES", volumes))
 	b.WriteString(formatEnv("MINIO_REGION", p.Region))
 	b.WriteString(formatEnv("MINIO_OPTS", fmt.Sprintf("--address :%d --console-address :%d", p.API.Port, p.API.ConsolePort)))
@@ -240,15 +309,27 @@ func renderConfigEnv(p DeployParams, host domain.HostRow) string {
 	return b.String()
 }
 
+// renderSecondaryConfigEnv writes the /etc/minio/config.env body. This file
+// holds the root credentials so they can be rotated in place without
+// rewriting /etc/default/minio. The two-file layout mirrors what the
+// rotate_root_creds operation expects.
+func renderSecondaryConfigEnv(p DeployParams) string {
+	var b strings.Builder
+	b.WriteString(formatEnv("MINIO_ROOT_USER", p.Credentials.RootUser))
+	b.WriteString(formatEnv("MINIO_ROOT_PASSWORD", p.Credentials.RootPassword))
+	return b.String()
+}
+
 func formatEnv(k, v string) string { return fmt.Sprintf("%s=%q\n", k, v) }
 
-func prepareStorageCmd(mounts []string) string {
+func prepareStorageCmd(mounts []string, user, group string) string {
+	owner := ShellEscape(user) + ":" + ShellEscape(group)
 	var b strings.Builder
 	b.WriteString("set -e\n")
 	for _, m := range mounts {
 		quoted := ShellEscape(storagePathForMount(m))
 		b.WriteString("mkdir -p " + quoted + "\n")
-		b.WriteString("chown buckit:buckit " + quoted + "\n")
+		b.WriteString("chown " + owner + " " + quoted + "\n")
 		b.WriteString("chmod 755 " + quoted + "\n")
 	}
 	return b.String()

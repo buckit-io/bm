@@ -109,12 +109,13 @@ export function Review({ draft }: Props) {
   const storageMounts =
     t.selectedMounts.length > 0 ? t.selectedMounts : ["/data/disk1"];
   const volumes = renderVolumes(nodes.map((h) => h.hostname.trim()), storageMounts, draft.api.port);
-  const envFile = `MINIO_ROOT_USER=${draft.credentials.rootUser}
-MINIO_ROOT_PASSWORD=********    # the password you set in Basics
+  const primaryEnvFile = `MINIO_CONFIG_ENV_FILE="/etc/minio/config.env"
 MINIO_VOLUMES="${volumes}"
 MINIO_OPTS="--address :${draft.api.port} --console-address :${draft.api.consolePort}"
 MINIO_REGION=${draft.region}
 MINIO_SERVER_URL=${serverUrl}`;
+  const secondaryEnvFile = `MINIO_ROOT_USER=${draft.credentials.rootUser}
+MINIO_ROOT_PASSWORD=********    # the password you set in Basics`;
 
   return (
     <div className="vstack" style={{ gap: "var(--s-5)" }}>
@@ -147,11 +148,25 @@ MINIO_SERVER_URL=${serverUrl}`;
       </div>
 
       <div className="card vstack" style={{ gap: "var(--s-2)" }}>
-        <h3 className="card-stat__title">Environment file</h3>
+        <h3 className="card-stat__title">Environment files</h3>
         <p className="subtle" style={{ fontSize: "var(--fs-xs)" }}>
-          Filename: <span className="mono">/etc/default/minio</span>
+          Root credentials live in a separate reloadable file so they can be
+          rotated in place without rewriting the cluster config.
         </p>
-        <pre className="codeblock">{envFile}</pre>
+        <div className="vstack" style={{ gap: "var(--s-2)" }}>
+          <p className="subtle" style={{ fontSize: "var(--fs-xs)" }}>
+            Filename: <span className="mono">/etc/default/minio</span>{" "}
+            <span className="subtle">(cluster config, mode 600)</span>
+          </p>
+          <pre className="codeblock">{primaryEnvFile}</pre>
+        </div>
+        <div className="vstack" style={{ gap: "var(--s-2)" }}>
+          <p className="subtle" style={{ fontSize: "var(--fs-xs)" }}>
+            Filename: <span className="mono">/etc/minio/config.env</span>{" "}
+            <span className="subtle">(root credentials, mode 600, owned by the service user)</span>
+          </p>
+          <pre className="codeblock">{secondaryEnvFile}</pre>
+        </div>
       </div>
 
       <div className="card vstack" style={{ gap: "var(--s-2)" }}>
@@ -160,8 +175,10 @@ MINIO_SERVER_URL=${serverUrl}`;
           <li>Fetch <span className="mono">buckit-{draft.version}.rpm</span> from GitHub Release (one-time, cached).</li>
           <li>scp the rpm to each node.</li>
           <li><span className="mono">dnf install -y /tmp/buckit-{draft.version}.rpm</span></li>
+          <li>Detect the service user/group from <span className="mono">buckit.service</span>.</li>
           <li>Create a managed <span className="mono">buckit/</span> subdirectory inside each selected drive.</li>
-          <li>Write <span className="mono">/etc/default/minio</span> with cluster values.</li>
+          <li>Write <span className="mono">/etc/minio/config.env</span> with the root credentials (mode 600).</li>
+          <li>Write <span className="mono">/etc/default/minio</span> with cluster values, pointing at the credentials file.</li>
           <li><span className="mono">systemctl daemon-reload && enable --now buckit</span></li>
           <li>Wait for cluster health-ready (timeout 5m).</li>
         </ol>

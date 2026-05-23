@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/buckit-io/bm/internal/admin"
+	"github.com/buckit-io/bm/internal/credentials"
 	"github.com/buckit-io/bm/internal/domain"
 	"github.com/buckit-io/bm/internal/tasks"
 )
@@ -18,8 +19,6 @@ import (
 const (
 	buckitPrimaryEnvFile   = "/etc/default/minio"
 	buckitSecondaryEnvFile = "/etc/minio/config.env"
-	rootPasswordMinLen     = 8
-	rootPasswordMaxLen     = 40
 )
 
 var rotateRootCredsPostRestartWait = WaitOptions{Timeout: 2 * time.Minute, Tick: 3 * time.Second}
@@ -246,13 +245,8 @@ func (e *rotateRootCredsExecutor) Execute(ctx context.Context, run *tasks.Run) (
 }
 
 func validateRotateRootCredsParams(p rotateRootCredsParams) error {
-	if len(p.NewPassword) < rootPasswordMinLen || len(p.NewPassword) > rootPasswordMaxLen {
-		return fmt.Errorf("rotate_root_creds: newPassword must be %d-%d characters", rootPasswordMinLen, rootPasswordMaxLen)
-	}
-	for _, r := range p.NewPassword {
-		if r < 0x21 || r > 0x7e {
-			return errors.New("rotate_root_creds: newPassword must use printable ASCII characters without spaces")
-		}
+	if err := credentials.ValidateRootPassword(p.NewPassword); err != nil {
+		return fmt.Errorf("rotate_root_creds: %w", err)
 	}
 	return nil
 }

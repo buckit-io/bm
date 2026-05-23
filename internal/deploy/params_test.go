@@ -1,10 +1,59 @@
 package deploy
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/buckit-io/bm/internal/domain"
 )
+
+func validParams() DeployParams {
+	return DeployParams{
+		Name: "prod-east",
+		Credentials: domain.Credentials{
+			RootUser:     "admin",
+			RootPassword: "supersecret",
+		},
+		Hosts:    []domain.HostRow{{ID: "h1", Hostname: "node1"}},
+		Topology: domain.Topology{SelectedMounts: []string{"/data/disk1"}},
+		SSH:      domain.SshCreds{User: "ops"},
+		Version:  "custom",
+		CustomURL: "https://example.com/buckit.rpm",
+	}
+}
+
+func TestDeployValidateAcceptsHealthyCredentials(t *testing.T) {
+	if err := validParams().Validate(); err != nil {
+		t.Fatalf("Validate() returned %v, want nil", err)
+	}
+}
+
+func TestDeployValidateRejectsShortPassword(t *testing.T) {
+	p := validParams()
+	p.Credentials.RootPassword = "short"
+	err := p.Validate()
+	if err == nil || !strings.Contains(err.Error(), "8-40") {
+		t.Fatalf("Validate() = %v, want length error", err)
+	}
+}
+
+func TestDeployValidateRejectsBadUsername(t *testing.T) {
+	p := validParams()
+	p.Credentials.RootUser = "a b"
+	err := p.Validate()
+	if err == nil || !strings.Contains(err.Error(), "letters, digits") {
+		t.Fatalf("Validate() = %v, want charset error", err)
+	}
+}
+
+func TestDeployValidateRejectsPasswordWithSpaces(t *testing.T) {
+	p := validParams()
+	p.Credentials.RootPassword = "with space here"
+	err := p.Validate()
+	if err == nil || !strings.Contains(err.Error(), "printable ASCII") {
+		t.Fatalf("Validate() = %v, want printable-ASCII error", err)
+	}
+}
 
 func TestDeployArtifactURLUsesArm64RPM(t *testing.T) {
 	restore := RestoreVersionsCacheForTest([]domain.BuckitVersion{{

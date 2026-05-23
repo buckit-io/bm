@@ -1,6 +1,10 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { WizardShell } from "../../../layouts/WizardShell";
+import {
+  validateRootPassword,
+  validateRootUser,
+} from "../../../lib/credentials";
 import { CUSTOM_VERSION, emptyDraft, NewClusterDraft, STEPS } from "./state";
 import { topologyErrors } from "./steps/topologyValidation";
 import { Basics } from "./steps/Basics";
@@ -37,10 +41,10 @@ export function NewClusterWizard() {
         const s = draft.customUrlCheck.state;
         if (s !== "valid" && s !== "warn") return true;
       }
-      // Root credentials: user is alphanumeric ≥ 3 chars (MinIO's
-      // minimum), password ≥ 8 chars.
-      if (draft.credentials.rootUser.length < 3) return true;
-      if (draft.credentials.rootPassword.length < 8) return true;
+      // Root credentials: same rules as the rotate_root_creds operation —
+      // see web/src/lib/credentials.ts.
+      if (!validateRootUser(draft.credentials.rootUser).ok) return true;
+      if (!validateRootPassword(draft.credentials.rootPassword).ok) return true;
       // Ports: valid 1-65535 and not equal to each other.
       const p = draft.api.port;
       const c = draft.api.consolePort;

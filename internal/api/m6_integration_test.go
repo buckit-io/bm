@@ -301,7 +301,7 @@ func TestM6DeploySlugCollision(t *testing.T) {
 		CustomURL:   "https://example.test/buckit.rpm",
 		API:         domain.APIPorts{Port: 9000, ConsolePort: 9001},
 		Region:      "us-east-1",
-		Credentials: domain.Credentials{RootUser: "u", RootPassword: "p"},
+		Credentials: domain.Credentials{RootUser: "rootuser", RootPassword: "supersecret"},
 		Hosts:       []domain.HostRow{{ID: "h1", Hostname: "node1", Port: 22, Probe: domain.HostProbeReachable}},
 		SSH:         domain.SshCreds{AuthMethod: domain.AuthAgent, User: "ops"},
 		Topology:    domain.Topology{SetSize: 4, Parity: 2, SelectedMounts: []string{"/data/disk1"}},
@@ -319,11 +319,11 @@ func TestM6DeployValidationFailures(t *testing.T) {
 		name  string
 		draft domain.NewClusterDraft
 	}{
-		{"no name", domain.NewClusterDraft{Version: "custom", CustomURL: "https://example.test/buckit.rpm", Credentials: domain.Credentials{RootUser: "u", RootPassword: "p"}, Hosts: []domain.HostRow{{ID: "h1", Hostname: "x"}}, SSH: domain.SshCreds{AuthMethod: domain.AuthAgent, User: "ops"}, Topology: domain.Topology{SelectedMounts: []string{"/data/d1"}}}},
+		{"no name", domain.NewClusterDraft{Version: "custom", CustomURL: "https://example.test/buckit.rpm", Credentials: domain.Credentials{RootUser: "rootuser", RootPassword: "supersecret"}, Hosts: []domain.HostRow{{ID: "h1", Hostname: "x"}}, SSH: domain.SshCreds{AuthMethod: domain.AuthAgent, User: "ops"}, Topology: domain.Topology{SelectedMounts: []string{"/data/d1"}}}},
 		{"no creds", domain.NewClusterDraft{Name: "x", Version: "custom", CustomURL: "https://example.test/buckit.rpm", Hosts: []domain.HostRow{{ID: "h1", Hostname: "x"}}, SSH: domain.SshCreds{AuthMethod: domain.AuthAgent, User: "ops"}, Topology: domain.Topology{SelectedMounts: []string{"/data/d1"}}}},
-		{"no hosts", domain.NewClusterDraft{Name: "x", Version: "custom", CustomURL: "https://example.test/buckit.rpm", Credentials: domain.Credentials{RootUser: "u", RootPassword: "p"}, SSH: domain.SshCreds{AuthMethod: domain.AuthAgent, User: "ops"}, Topology: domain.Topology{SelectedMounts: []string{"/data/d1"}}}},
-		{"no mounts", domain.NewClusterDraft{Name: "x", Version: "custom", CustomURL: "https://example.test/buckit.rpm", Credentials: domain.Credentials{RootUser: "u", RootPassword: "p"}, Hosts: []domain.HostRow{{ID: "h1", Hostname: "x"}}, SSH: domain.SshCreds{AuthMethod: domain.AuthAgent, User: "ops"}}},
-		{"bad version", domain.NewClusterDraft{Name: "x", Version: "nope", Credentials: domain.Credentials{RootUser: "u", RootPassword: "p"}, Hosts: []domain.HostRow{{ID: "h1", Hostname: "x"}}, SSH: domain.SshCreds{AuthMethod: domain.AuthAgent, User: "ops"}, Topology: domain.Topology{SelectedMounts: []string{"/data/d1"}}}},
+		{"no hosts", domain.NewClusterDraft{Name: "x", Version: "custom", CustomURL: "https://example.test/buckit.rpm", Credentials: domain.Credentials{RootUser: "rootuser", RootPassword: "supersecret"}, SSH: domain.SshCreds{AuthMethod: domain.AuthAgent, User: "ops"}, Topology: domain.Topology{SelectedMounts: []string{"/data/d1"}}}},
+		{"no mounts", domain.NewClusterDraft{Name: "x", Version: "custom", CustomURL: "https://example.test/buckit.rpm", Credentials: domain.Credentials{RootUser: "rootuser", RootPassword: "supersecret"}, Hosts: []domain.HostRow{{ID: "h1", Hostname: "x"}}, SSH: domain.SshCreds{AuthMethod: domain.AuthAgent, User: "ops"}}},
+		{"bad version", domain.NewClusterDraft{Name: "x", Version: "nope", Credentials: domain.Credentials{RootUser: "rootuser", RootPassword: "supersecret"}, Hosts: []domain.HostRow{{ID: "h1", Hostname: "x"}}, SSH: domain.SshCreds{AuthMethod: domain.AuthAgent, User: "ops"}, Topology: domain.Topology{SelectedMounts: []string{"/data/d1"}}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

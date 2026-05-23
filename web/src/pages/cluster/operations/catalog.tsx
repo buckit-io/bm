@@ -4,6 +4,10 @@
 import { useEffect, useState } from "react";
 import { listVersions } from "../../../api/client";
 import type { BuckitVersion } from "../../../api/types";
+import {
+  ROOT_PASSWORD_HINT,
+  validateRootPassword,
+} from "../../../lib/credentials";
 import { OperationDef } from "./defs";
 
 // Simple one-line confirmation step shared by ops that just need
@@ -288,9 +292,7 @@ const ROTATE_ROOT_CREDS: OperationDef<{
                 {params.showPass ? "Hide" : "Show"}
               </button>
             </div>
-            <span className="field-hint">
-              8-40 printable ASCII characters, no spaces.
-            </span>
+            <span className="field-hint">{ROOT_PASSWORD_HINT}</span>
           </div>
           <div className="banner banner--warning">
             <span>⚠</span>
@@ -316,10 +318,7 @@ const ROTATE_ROOT_CREDS: OperationDef<{
         </div>
       ),
       canAdvance: (p, c) =>
-        p.newPassword.length >= 8 &&
-        p.newPassword.length <= 40 &&
-        /^[!-~]+$/.test(p.newPassword) &&
-        p.typedName === c.name,
+        validateRootPassword(p.newPassword).ok && p.typedName === c.name,
       nextLabel: "Rotate password",
       danger: true,
     },

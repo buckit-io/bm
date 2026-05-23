@@ -41,9 +41,12 @@ export interface NewClusterDraft {
   customUrlCheck: CustomUrlCheck;
 
   // Root credentials the operator chooses on the Basics step. The
-  // deploy step writes these verbatim into MINIO_ROOT_USER and
-  // MINIO_ROOT_PASSWORD on every node. No auto-generation — operators
-  // can pre-stage in a password manager.
+  // deploy step writes these into MINIO_ROOT_USER and MINIO_ROOT_PASSWORD
+  // inside /etc/minio/config.env on every node (the primary
+  // /etc/default/minio just points at that secondary file via
+  // MINIO_CONFIG_ENV_FILE, so future rotations don't have to rewrite
+  // cluster config). No auto-generation — operators can pre-stage in a
+  // password manager.
   credentials: { rootUser: string; rootPassword: string };
   // Listen ports for the S3 API and the console. Default 9000/9001;
   // change when ports collide or corp policy requires specific values.

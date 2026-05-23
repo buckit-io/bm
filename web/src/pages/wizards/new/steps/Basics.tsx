@@ -2,6 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { listVersions, validateCustomArtifact } from "../../../../api/client";
 import type { BuckitVersion } from "../../../../api/types";
 import {
+  ROOT_PASSWORD_HINT,
+  ROOT_USER_HINT,
+  validateRootPassword,
+  validateRootUser,
+} from "../../../../lib/credentials";
+import {
   CUSTOM_VERSION,
   CustomUrlCheck,
   NewClusterDraft,
@@ -43,8 +49,15 @@ export function Basics({ draft, update }: Props) {
       },
     });
   };
-  const passLen = draft.credentials.rootPassword.length;
-  const passWeak = passLen > 0 && passLen < 8;
+  // Re-run shared validators on every render so the hint text reflects the
+  // exact reason a value is currently invalid. Empty values are treated as
+  // pristine (no red hint) so the operator isn't yelled at before they type.
+  const userValidation = draft.credentials.rootUser.length > 0
+    ? validateRootUser(draft.credentials.rootUser)
+    : { ok: true as const };
+  const passValidation = draft.credentials.rootPassword.length > 0
+    ? validateRootPassword(draft.credentials.rootPassword)
+    : { ok: true as const };
   const portsClash = draft.api.port === draft.api.consolePort;
 
   // Debounced validation: re-run whenever customUrl changes, but only
@@ -159,10 +172,7 @@ export function Basics({ draft, update }: Props) {
               update({
                 credentials: {
                   ...draft.credentials,
-                  // Strip any disallowed keystrokes on input. Letters,
-                  // digits, underscores, and dashes only. The operator
-                  // sees only valid characters land in the field.
-                  rootUser: e.target.value.replace(/[^a-zA-Z0-9_-]/g, ""),
+                  rootUser: e.target.value,
                 },
               })
             }
@@ -170,9 +180,11 @@ export function Basics({ draft, update }: Props) {
             autoComplete="off"
             inputMode="text"
           />
-          <span className="field-hint">
-            Letters, digits, <span className="mono">_</span> and{" "}
-            <span className="mono">-</span> only. Min 3 characters.
+          <span
+            className="field-hint"
+            style={!userValidation.ok ? { color: "var(--c-danger)" } : undefined}
+          >
+            {userValidation.ok ? ROOT_USER_HINT : userValidation.error}
           </span>
         </div>
         <div className="field">
@@ -204,11 +216,9 @@ export function Basics({ draft, update }: Props) {
           </div>
           <span
             className="field-hint"
-            style={passWeak ? { color: "var(--c-danger)" } : undefined}
+            style={!passValidation.ok ? { color: "var(--c-danger)" } : undefined}
           >
-            {passWeak
-              ? `Min 8 characters (currently ${passLen}).`
-              : "Min 8 characters. 16+ recommended."}
+            {passValidation.ok ? ROOT_PASSWORD_HINT : passValidation.error}
           </span>
         </div>
       </div>
