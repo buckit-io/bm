@@ -16,6 +16,7 @@ const (
 type SshCreds struct {
 	AuthMethod    AuthMethod `json:"authMethod"`
 	User          string     `json:"user"`
+	Port          int        `json:"port,omitempty"`
 	KeyPath       string     `json:"keyPath,omitempty"`
 	KeyPassphrase string     `json:"keyPassphrase,omitempty"`
 	Password      string     `json:"password,omitempty"`
@@ -46,6 +47,7 @@ const (
 	DriveReady   DriveState = "ready"
 	DriveHealing DriveState = "healing"
 	DriveFailed  DriveState = "failed"
+	DriveUnknown DriveState = "unknown"
 )
 
 // Drive mirrors web/src/mock/data.ts:Drive.
@@ -69,10 +71,11 @@ type NIC struct {
 type NodeState string
 
 const (
-	NodeOnline   NodeState = "online"
-	NodeOffline  NodeState = "offline"
-	NodeDegraded NodeState = "degraded"
-	NodeUnknown  NodeState = "unknown"
+	NodeOnline      NodeState = "online"
+	NodeOffline     NodeState = "offline"
+	NodeDegraded    NodeState = "degraded"
+	NodeUnknown     NodeState = "unknown"
+	NodeUnreachable NodeState = "unreachable"
 )
 
 // Node mirrors web/src/mock/data.ts:Node.

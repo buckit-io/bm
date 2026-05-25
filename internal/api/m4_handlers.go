@@ -340,10 +340,15 @@ func refreshOneCluster(opts Options) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "get_failed", err.Error())
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		refreshCtx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 		defer cancel()
-		refreshConcurrently(ctx, opts, []domain.Cluster{c}, true)
-		updated, err := opts.Clusters.Get(ctx, id)
+		refreshConcurrently(refreshCtx, opts, []domain.Cluster{c}, true)
+		// Read the post-refresh row off the original request context, not
+		// refreshCtx. When the cluster's admin API hangs until refreshCtx's
+		// deadline (TCP retransmit on a dead host), the cheap local bbolt
+		// read below would otherwise inherit a drained context and return
+		// "context deadline exceeded" even though the row is right there.
+		updated, err := opts.Clusters.Get(r.Context(), id)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "get_failed", err.Error())
 			return
@@ -388,7 +393,55 @@ func refreshOne(ctx context.Context, opts Options, c domain.Cluster, includeProb
 	}
 	info, err := client.ServerInfo(ctx)
 	if err != nil {
-		markUnreachable(ctx, opts, c, err)
+		// The admin call typically returns only after the parent
+		// ctx's deadline expires (TCP retransmit on a dead host), so
+		// ctx is effectively drained at this point. The local bbolt
+		// writes below would silently no-op against the drained ctx
+		// — and worse, the cluster row would never get its
+		// UnreachableSince stamp. Detach onto a fresh short-timeout
+		// context for the recovery writes.
+		recCtx, recCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer recCancel()
+		markUnreachable(recCtx, opts, c, err)
+		// Admin API is down → the cluster can no longer
+		// authoritatively report whether a server is online, so the
+		// per-node State pill would otherwise stay "Online" forever.
+		// Flip each row to "unreachable" and kick off per-node
+		// probes — the probes independently tell the operator which
+		// host stopped responding (Ping/SSH/S3 API/Console dots),
+		// even though we can't query the admin API for the
+		// cluster-level state.
+		if opts.Nodes != nil {
+			nodeList, listErr := opts.Nodes.List(recCtx, c.ID)
+			if listErr == nil {
+				for i := range nodeList {
+					changed := false
+					if nodeList[i].State != domain.NodeUnreachable {
+						nodeList[i].State = domain.NodeUnreachable
+						changed = true
+					}
+					// Admin API is down, so the last-reported drive
+					// state is no longer trustworthy. Flip data drives
+					// to Unknown so the node detail page stops claiming
+					// they're Ready.
+					for di := range nodeList[i].Drives {
+						if nodeList[i].Drives[di].IsBoot {
+							continue
+						}
+						if nodeList[i].Drives[di].State != domain.DriveUnknown {
+							nodeList[i].Drives[di].State = domain.DriveUnknown
+							changed = true
+						}
+					}
+					if changed {
+						_ = opts.Nodes.Put(recCtx, nodeList[i])
+					}
+				}
+				if includeProbes && len(nodeList) > 0 {
+					startAsyncNodeProbeRefresh(opts, c.ID, nodeList, creds)
+				}
+			}
+		}
 		return
 	}
 

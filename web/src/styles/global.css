@@ -80,6 +80,7 @@ p {
 }
 .btn:hover {
   background: var(--c-surface-2);
+  text-decoration: none;
 }
 .btn:disabled {
   opacity: 0.5;
@@ -151,6 +152,18 @@ p {
   outline: none;
   border-color: var(--c-accent);
   box-shadow: 0 0 0 3px var(--c-accent-soft);
+}
+
+/* Textareas need to honor their `rows` attribute, not the 36px fixed height
+   above (which is for single-line inputs). They also benefit from a slight
+   line-height bump and vertical-only resize handle. */
+textarea.input {
+  height: auto;
+  min-height: 36px;
+  padding: var(--s-2) var(--s-3);
+  line-height: 1.4;
+  resize: vertical;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
 }
 
 .field {

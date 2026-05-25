@@ -204,7 +204,7 @@ function HostStatusList({ statuses }: { statuses: HostOpStatus[] }) {
 
 function hostStatePill(s: HostOpState) {
   const map: Record<HostOpState, { tone: PillTone; icon: string; label: string }> = {
-    pending: { tone: "neutral", icon: "·", label: "Pending" },
+    pending: { tone: "neutral", icon: "●", label: "Pending" },
     running: { tone: "info", icon: "⟳", label: "Running" },
     succeeded: { tone: "success", icon: "✓", label: "Succeeded" },
     failed: { tone: "danger", icon: "✗", label: "Failed" },

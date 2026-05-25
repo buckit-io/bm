@@ -44,7 +44,7 @@ const STAGE_LABEL: Record<CutoverNodeState["state"], string> = {
 
 function stagePill(s: CutoverNodeState["state"]) {
   if (s === "done") return <Pill tone="success" icon="✓">{STAGE_LABEL[s]}</Pill>;
-  if (s === "pending") return <Pill tone="neutral" icon="·">{STAGE_LABEL[s]}</Pill>;
+  if (s === "pending") return <Pill tone="neutral" icon="●">{STAGE_LABEL[s]}</Pill>;
   if (s === "rolled_back") return <Pill tone="warning" icon="↺">{STAGE_LABEL[s]}</Pill>;
   if (s === "failed") return <Pill tone="danger" icon="✗">{STAGE_LABEL[s]}</Pill>;
   return <Pill tone="info" icon="⟳">{STAGE_LABEL[s]}</Pill>;

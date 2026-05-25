@@ -4,6 +4,7 @@
 // targetHostIds prop (set from the row checkboxes).
 
 import { OperationDef } from "./defs";
+import { VersionSelectStep } from "./catalog";
 
 function confirmStep(message: string, nextLabel: string, danger?: boolean) {
   return {
@@ -73,24 +74,11 @@ const REDEPLOY_SOFTWARE: OperationDef<{ version: string }> = {
     {
       id: "version",
       render: ({ params, setParams }) => (
-        <>
-          <p style={{ fontSize: "var(--fs-sm)" }}>
-            bm will scp the package to each selected host, install it,
-            then restart buckit.service with health-wait between hosts.
-          </p>
-          <div className="field">
-            <label className="field-label">Target version</label>
-            <select
-              className="select"
-              value={params.version}
-              onChange={(e) => setParams({ version: e.target.value })}
-            >
-              <option value="v1.0.1">v1.0.1 (latest stable)</option>
-              <option value="v1.0.0">v1.0.0</option>
-              <option value="v0.99.0">v0.99.0</option>
-            </select>
-          </div>
-        </>
+        <VersionSelectStep
+          params={params}
+          setParams={setParams}
+          intro="bm will scp the package to each selected host, install it, then restart buckit.service with health-wait between hosts."
+        />
       ),
       canAdvance: (p) => p.version.length > 0,
       nextLabel: "Start redeploy",

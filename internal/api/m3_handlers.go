@@ -74,7 +74,7 @@ func getSSHConfig(repo *sshconfig.Repo) http.HandlerFunc {
 }
 
 // putSSHConfig serves PUT /clusters/:id/ssh.
-func putSSHConfig(repo *sshconfig.Repo, pool *bmssh.Pool) http.HandlerFunc {
+func putSSHConfig(repo *sshconfig.Repo, nodeRepo *nodes.Repo, pool *bmssh.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if repo == nil {
 			writeError(w, http.StatusServiceUnavailable, "no_repo", "ssh config repo not configured")
@@ -89,9 +89,31 @@ func putSSHConfig(repo *sshconfig.Repo, pool *bmssh.Pool) http.HandlerFunc {
 		if cfg.Overrides == nil {
 			cfg.Overrides = map[string]domain.SshOverrides{}
 		}
+		if cfg.SSH.Port != 0 && (cfg.SSH.Port < 1 || cfg.SSH.Port > 65535) {
+			writeError(w, http.StatusBadRequest, "validation_failed", "port must be between 1 and 65535")
+			return
+		}
 		if err := repo.Put(r.Context(), clusterID, cfg); err != nil {
 			writeError(w, http.StatusBadRequest, "validation_failed", err.Error())
 			return
+		}
+		// Propagate the cluster-wide SSH port to each node so the periodic
+		// TCP probe and any SSH op that reads node.SSHPort use the new
+		// value. Port 0 means "leave nodes alone" (legacy clients).
+		if cfg.SSH.Port > 0 && nodeRepo != nil {
+			list, err := nodeRepo.List(r.Context(), clusterID)
+			if err == nil {
+				for _, n := range list {
+					if n.SSHPort == cfg.SSH.Port {
+						continue
+					}
+					n.SSHPort = cfg.SSH.Port
+					if err := nodeRepo.Put(r.Context(), n); err != nil {
+						writeError(w, http.StatusInternalServerError, "put_node_failed", err.Error())
+						return
+					}
+				}
+			}
 		}
 		// Drop any cached SSH clients for this cluster — the creds may have changed.
 		if pool != nil {

@@ -22,7 +22,7 @@ function confirmStep(message: string, nextLabel: string, danger?: boolean) {
   };
 }
 
-function VersionSelectStep({
+export function VersionSelectStep({
   params,
   setParams,
   intro,
@@ -198,7 +198,7 @@ const ROLLING_RESTART: OperationDef<Record<string, never>> = {
 const CLUSTER_UPGRADE_BY_SYSTEMCTL: OperationDef<{ version: string }> = {
   id: "cluster_upgrade_by_systemctl",
   group: "ssh",
-  label: "Upgrade systemd-managed cluster…",
+  label: "Upgrade Buckit systemd service…",
   description: "Stage the upgrade on all nodes, then restart the cluster once.",
   flavor: "orchestrated",
   opKind: "cluster_upgrade_by_systemctl",
@@ -358,8 +358,8 @@ const CONFIGURE_SSH: OperationDef<Record<string, never>> = {
 const CONFIGURE_ADMIN_CREDS: OperationDef<Record<string, never>> = {
   id: "configure_admin_creds",
   group: "manager",
-  label: "Configure admin credentials",
-  description: "Set the root credentials bm uses for admin API calls.",
+  label: "Set admin credentials",
+  description: "Set the root credentials bm uses for talking to cluster nodes.",
   flavor: "navigate",
   initialParams: {},
   inputSteps: [],
@@ -423,8 +423,8 @@ export const CLUSTER_OPERATIONS: OperationDef[] = [
   ROTATE_ROOT_CREDS,
   // ADD_POOL,  // hidden — pool-add wizard not yet shipped
   // Manager
-  CONFIGURE_ADMIN_CREDS,
   CONFIGURE_SSH,
+  CONFIGURE_ADMIN_CREDS,
   REMOVE_CLUSTER,
 ];
 

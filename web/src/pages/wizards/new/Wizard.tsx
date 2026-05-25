@@ -5,6 +5,7 @@ import {
   validateRootPassword,
   validateRootUser,
 } from "../../../lib/credentials";
+import { looksLikePemCert, looksLikePemKey } from "../../../lib/tls";
 import { CUSTOM_VERSION, emptyDraft, NewClusterDraft, STEPS } from "./state";
 import { topologyErrors } from "./steps/topologyValidation";
 import { Basics } from "./steps/Basics";
@@ -51,6 +52,17 @@ export function NewClusterWizard() {
       if (!Number.isInteger(p) || p < 1 || p > 65535) return true;
       if (!Number.isInteger(c) || c < 1 || c > 65535) return true;
       if (p === c) return true;
+      // TLS (when BYO selected): require PEM cert + key that at least
+      // look like PEM blocks. Backend re-validates parse / pairing /
+      // expiry / SAN coverage in preflight.
+      if (draft.tls.mode === "byo") {
+        if (!looksLikePemCert(draft.tls.certPem)) return true;
+        if (!looksLikePemKey(draft.tls.keyPem)) return true;
+        // If the operator typed a serverUrl, it must use https when TLS
+        // is on (otherwise MinIO advertises a URL it doesn't actually serve).
+        const u = draft.serverUrl.trim();
+        if (u && !/^https:\/\//i.test(u)) return true;
+      }
       return false;
     }
     if (index === 1) {

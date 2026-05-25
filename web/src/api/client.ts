@@ -18,7 +18,10 @@ import type {
   ClusterSshConfig,
   DispatchRequest,
   DispatchResponse,
+  HealthInfo,
   HistoryEntry,
+  NodeLogsRange,
+  NodeLogsResponse,
   ImportCandidate,
   ManagerSettings,
   MinioSnapshot,
@@ -160,10 +163,31 @@ export const saveClusterAdminCreds = (
   signal?: AbortSignal,
 ) => put<void>(`/clusters/${encodeURIComponent(clusterId)}/admin-creds`, creds, signal);
 
+// getClusterHealthInfo fetches the admin /healthinfo bundle (kernel/CPU/RAM/
+// NIC) for every host in the cluster. Returns null when the cluster has no
+// admin creds configured (424) — callers render the cards as "—" in that
+// case instead of treating it as an error.
+export async function getClusterHealthInfo(
+  clusterId: string,
+  signal?: AbortSignal,
+): Promise<HealthInfo | null> {
+  try {
+    return await get<HealthInfo>(
+      `/clusters/${encodeURIComponent(clusterId)}/healthinfo`,
+      signal,
+    );
+  } catch (err) {
+    if (err instanceof ApiError && (err.status === 404 || err.status === 424)) {
+      return null;
+    }
+    throw err;
+  }
+}
+
 // commitImport — the second leg of the import flow. The streaming
 // discover step is in api/sse.ts (POST + SSE on the same response).
 export const commitImport = (
-  body: { candidate: ImportCandidate; chosenName: string },
+  body: { candidate: ImportCandidate; chosenName: string; insecure?: boolean },
   signal?: AbortSignal,
 ) => post<{ clusterId: string }>("/clusters/import/commit", body, signal);
 
@@ -187,6 +211,24 @@ export async function getNode(
     throw err;
   }
 }
+
+// getNodeLogs runs `journalctl -u <unit> --since=<range>` over SSH on the
+// node and returns the captured lines. One-shot — callers re-invoke to
+// refresh. `since` is a server-validated preset, not arbitrary text.
+export const getNodeLogs = (
+  clusterId: string,
+  nodeId: string,
+  params: { since: NodeLogsRange; unit?: string; limit?: number },
+  signal?: AbortSignal,
+) => {
+  const qs = new URLSearchParams({ since: params.since });
+  if (params.unit) qs.set("unit", params.unit);
+  if (params.limit) qs.set("limit", String(params.limit));
+  return get<NodeLogsResponse>(
+    `/clusters/${encodeURIComponent(clusterId)}/nodes/${encodeURIComponent(nodeId)}/logs?${qs.toString()}`,
+    signal,
+  );
+};
 
 // ---- ssh config ----
 

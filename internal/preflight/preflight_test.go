@@ -367,6 +367,128 @@ func TestHostnamePattern(t *testing.T) {
 	}
 }
 
+func TestCheckPkgMgrDetectsKindAndRejectsMixed(t *testing.T) {
+	t.Run("rpm-only cluster passes with kind in detail", func(t *testing.T) {
+		conn := newFakeConn()
+		conn.fallback = func(cmd string) cannedResp {
+			if cmd == "command -v dnf" {
+				return cannedResp{stdout: "/usr/bin/dnf\n", exit: 0}
+			}
+			return cannedResp{exit: 1}
+		}
+		out := checkPkgMgr(context.Background(), conn, basicDraft())
+		if len(out.HostStatuses) == 0 {
+			t.Fatal("expected host statuses")
+		}
+		for _, s := range out.HostStatuses {
+			if s.Status != domain.PreflightPass {
+				t.Errorf("%s: want pass, got %s (%s)", s.Hostname, s.Status, s.Message)
+			}
+			if !strings.Contains(s.Message, "rpm") {
+				t.Errorf("%s: detail should mention rpm kind, got %q", s.Hostname, s.Message)
+			}
+		}
+	})
+
+	t.Run("apt-only cluster passes with deb in detail", func(t *testing.T) {
+		conn := newFakeConn()
+		conn.fallback = func(cmd string) cannedResp {
+			if cmd == "command -v apt-get" {
+				return cannedResp{stdout: "/usr/bin/apt-get\n", exit: 0}
+			}
+			return cannedResp{exit: 1}
+		}
+		out := checkPkgMgr(context.Background(), conn, basicDraft())
+		for _, s := range out.HostStatuses {
+			if s.Status != domain.PreflightPass {
+				t.Errorf("%s: want pass, got %s (%s)", s.Hostname, s.Status, s.Message)
+			}
+			if !strings.Contains(s.Message, "deb") {
+				t.Errorf("%s: detail should mention deb kind, got %q", s.Hostname, s.Message)
+			}
+		}
+	})
+
+	t.Run("none found fails", func(t *testing.T) {
+		conn := newFakeConn()
+		conn.fallback = func(cmd string) cannedResp {
+			return cannedResp{exit: 1}
+		}
+		out := checkPkgMgr(context.Background(), conn, basicDraft())
+		for _, s := range out.HostStatuses {
+			if s.Status != domain.PreflightFail {
+				t.Errorf("%s: want fail, got %s", s.Hostname, s.Status)
+			}
+		}
+	})
+
+	t.Run("mixed managers fails every host with one consistent message", func(t *testing.T) {
+		conn := newFakeConn()
+		// node1 returns dnf, node3 returns apt-get only.
+		conn.commands = map[string]cannedResp{}
+		conn.fallback = func(cmd string) cannedResp {
+			return cannedResp{exit: 1}
+		}
+		runs := map[string]int{}
+		original := conn.fallback
+		conn.fallback = func(cmd string) cannedResp {
+			runs[cmd]++
+			return original(cmd)
+		}
+		// Use commands map to dispatch per-host doesn't work with fakeConn
+		// (it ignores HostRow). Instead, inject host-keyed Run wrapper.
+		hostConn := &hostKeyedConn{base: conn, per: map[string]map[string]cannedResp{
+			"node1": {"command -v dnf": cannedResp{stdout: "/usr/bin/dnf\n"}},
+			"node2": {"command -v dnf": cannedResp{stdout: "/usr/bin/dnf\n"}},
+			"node3": {"command -v apt-get": cannedResp{stdout: "/usr/bin/apt-get\n"}},
+		}}
+		out := checkPkgMgr(context.Background(), hostConn, basicDraft())
+		failures := 0
+		var msg string
+		for _, s := range out.HostStatuses {
+			if s.Status == domain.PreflightFail {
+				failures++
+				if msg == "" {
+					msg = s.Message
+				} else if s.Message != msg {
+					t.Errorf("inconsistent mixed-cluster messages: %q vs %q", msg, s.Message)
+				}
+			}
+		}
+		if failures != len(out.HostStatuses) {
+			t.Errorf("expected all hosts to fail, got %d/%d", failures, len(out.HostStatuses))
+		}
+		if !strings.Contains(msg, "mixed package managers") {
+			t.Errorf("expected mixed-cluster message, got %q", msg)
+		}
+	})
+}
+
+// hostKeyedConn is a HostConn that dispatches Run by hostname so a
+// single test can simulate two different hosts reporting different
+// command -v results.
+type hostKeyedConn struct {
+	base *fakeConn
+	per  map[string]map[string]cannedResp
+}
+
+func (c *hostKeyedConn) Run(ctx context.Context, h domain.HostRow, cmd string) (string, string, int, error) {
+	if hm, ok := c.per[h.Hostname]; ok {
+		if r, ok := hm[cmd]; ok {
+			return r.stdout, r.stderr, r.exit, r.err
+		}
+		return "", "", 1, nil
+	}
+	return c.base.Run(ctx, h, cmd)
+}
+
+func (c *hostKeyedConn) HEAD(ctx context.Context, url string) (int, int64, error) {
+	return c.base.HEAD(ctx, url)
+}
+
+// silence unused import in test helpers when fmt is no longer used.
+var _ = fmt.Sprintf
+
 func findResult(rs []domain.PreflightResult, id string) domain.PreflightResult {
 	for _, r := range rs {
 		if r.ID == id {

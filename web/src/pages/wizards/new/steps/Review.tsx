@@ -71,7 +71,7 @@ function longestCommonSuffix(values: string[]): string {
   return suffix;
 }
 
-function renderVolumes(hosts: string[], mounts: string[], port: number): string {
+function renderVolumes(hosts: string[], mounts: string[], port: number, scheme: "http" | "https"): string {
   const storagePaths = mounts.map(storagePathForMount);
   const drivePattern = detectNumericPattern(storagePaths);
   if (hosts.length <= 1) {
@@ -80,15 +80,15 @@ function renderVolumes(hosts: string[], mounts: string[], port: number): string 
 
   const hostPattern = detectHostnamePattern(hosts);
   if (hostPattern.fits && drivePattern) {
-    return `http://${hostPattern.pattern}:${port}${drivePattern}`;
+    return `${scheme}://${hostPattern.pattern}:${port}${drivePattern}`;
   }
   if (hostPattern.fits) {
-    return storagePaths.map((path) => `http://${hostPattern.pattern}:${port}${path}`).join(" ");
+    return storagePaths.map((path) => `${scheme}://${hostPattern.pattern}:${port}${path}`).join(" ");
   }
   if (drivePattern) {
-    return hosts.map((host) => `http://${host}:${port}${drivePattern}`).join(" ");
+    return hosts.map((host) => `${scheme}://${host}:${port}${drivePattern}`).join(" ");
   }
-  return hosts.flatMap((host) => storagePaths.map((path) => `http://${host}:${port}${path}`)).join(" ");
+  return hosts.flatMap((host) => storagePaths.map((path) => `${scheme}://${host}:${port}${path}`)).join(" ");
 }
 
 export function Review({ draft }: Props) {
@@ -104,14 +104,19 @@ export function Review({ draft }: Props) {
       .find((d) => !d.isBoot && d.sizeBytes > 0)?.sizeBytes ?? 0;
   const rawBytes = totalDrives * sampleSize;
   const usableBytes = rawBytes - rawBytes * (t.parity / Math.max(t.setSize, 1));
+  const tlsOn = draft.tls.mode === "byo";
+  const scheme: "http" | "https" = tlsOn ? "https" : "http";
   const hostname = nodes[0]?.hostname || "node1";
-  const serverUrl = draft.serverUrl.trim() || `http://${hostname}:${draft.api.port}`;
+  const serverUrl = draft.serverUrl.trim() || `${scheme}://${hostname}:${draft.api.port}`;
   const storageMounts =
     t.selectedMounts.length > 0 ? t.selectedMounts : ["/data/disk1"];
-  const volumes = renderVolumes(nodes.map((h) => h.hostname.trim()), storageMounts, draft.api.port);
+  const volumes = renderVolumes(nodes.map((h) => h.hostname.trim()), storageMounts, draft.api.port, scheme);
+  const minioOpts = tlsOn
+    ? `--address :${draft.api.port} --console-address :${draft.api.consolePort} --certs-dir /etc/minio/certs`
+    : `--address :${draft.api.port} --console-address :${draft.api.consolePort}`;
   const primaryEnvFile = `MINIO_CONFIG_ENV_FILE="/etc/minio/config.env"
 MINIO_VOLUMES="${volumes}"
-MINIO_OPTS="--address :${draft.api.port} --console-address :${draft.api.consolePort}"
+MINIO_OPTS="${minioOpts}"
 MINIO_REGION=${draft.region}
 MINIO_SERVER_URL=${serverUrl}`;
   const secondaryEnvFile = `MINIO_ROOT_USER=${draft.credentials.rootUser}
@@ -136,6 +141,10 @@ MINIO_ROOT_PASSWORD=********    # the password you set in Basics`;
           <div><div className="field-label">Parity</div><div>EC:{t.parity}</div></div>
           <div><div className="field-label">Drives / node</div><div>{drivesPerNode || "—"}</div></div>
           <div><div className="field-label">Usable / Raw</div><div>~{humanSize(usableBytes)} / {humanSize(rawBytes)}</div></div>
+          <div>
+            <div className="field-label">TLS</div>
+            <div>{tlsOn ? "Enabled (HTTPS)" : "Disabled (HTTP)"}</div>
+          </div>
         </div>
       </div>
 
@@ -172,11 +181,17 @@ MINIO_ROOT_PASSWORD=********    # the password you set in Basics`;
       <div className="card vstack" style={{ gap: "var(--s-2)" }}>
         <h3 className="card-stat__title">What will happen</h3>
         <ol style={{ paddingLeft: "1.2em", fontSize: "var(--fs-sm)" }}>
-          <li>Fetch <span className="mono">buckit-{draft.version}.rpm</span> from GitHub Release (one-time, cached).</li>
-          <li>scp the rpm to each node.</li>
-          <li><span className="mono">dnf install -y /tmp/buckit-{draft.version}.rpm</span></li>
+          <li>On each node, download <span className="mono">buckit-{draft.version}.rpm</span> from the GitHub Release to <span className="mono">/tmp/buckit.rpm</span> and verify its sha256.</li>
+          <li><span className="mono">dnf install -y /tmp/buckit.rpm</span></li>
           <li>Detect the service user/group from <span className="mono">buckit.service</span>.</li>
           <li>Create a managed <span className="mono">buckit/</span> subdirectory inside each selected drive.</li>
+          {tlsOn && (
+            <li>
+              Write <span className="mono">/etc/minio/certs/public.crt</span> and{" "}
+              <span className="mono">/etc/minio/certs/private.key</span> (mode 600,
+              owned by the service user).
+            </li>
+          )}
           <li>Write <span className="mono">/etc/minio/config.env</span> with the root credentials (mode 600).</li>
           <li>Write <span className="mono">/etc/default/minio</span> with cluster values, pointing at the credentials file.</li>
           <li><span className="mono">systemctl daemon-reload && enable --now buckit</span></li>

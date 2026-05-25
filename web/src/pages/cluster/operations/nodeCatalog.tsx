@@ -2,10 +2,11 @@
 // Each entry is scoped to a single host at dispatch time via
 // OperationModal's targetHostIds prop (the one node being viewed).
 //
-// Diagnostics (logs/trace) are navigate-flavor: streaming viewers
-// belong on their own page, not in a locked-until-done modal.
+// Diagnostics (logs) are navigate-flavor: the viewer page owns the
+// fetch + controls, not a locked-until-done modal.
 
 import { OperationDef } from "./defs";
+import { VersionSelectStep } from "./catalog";
 
 function confirmStep(message: string, nextLabel: string, danger?: boolean) {
   return {
@@ -83,24 +84,11 @@ const REDEPLOY_SOFTWARE: OperationDef<{ version: string }> = {
     {
       id: "version",
       render: ({ params, setParams }) => (
-        <>
-          <p style={{ fontSize: "var(--fs-sm)" }}>
-            bm scp's the package to this host, installs it, then restarts
-            buckit.service.
-          </p>
-          <div className="field">
-            <label className="field-label">Target version</label>
-            <select
-              className="select"
-              value={params.version}
-              onChange={(e) => setParams({ version: e.target.value })}
-            >
-              <option value="v1.0.1">v1.0.1 (latest stable)</option>
-              <option value="v1.0.0">v1.0.0</option>
-              <option value="v0.99.0">v0.99.0</option>
-            </select>
-          </div>
-        </>
+        <VersionSelectStep
+          params={params}
+          setParams={setParams}
+          intro="bm scp's the package to this host, installs it, then restarts buckit.service."
+        />
       ),
       canAdvance: (p) => p.version.length > 0,
       nextLabel: "Start redeploy",
@@ -113,25 +101,14 @@ const REDEPLOY_SOFTWARE: OperationDef<{ version: string }> = {
 const VIEW_LIVE_LOGS: OperationDef<Record<string, never>> = {
   id: "node_view_live_logs",
   group: "diagnostics",
-  label: "View live logs",
-  description: "Tail journalctl on this node in a live viewer.",
+  label: "View service log",
+  description: "Fetch recent journalctl output from this node.",
   flavor: "navigate",
   initialParams: {},
   inputSteps: [],
   // The cluster id is the cluster currently in view; the node id is
   // appended by NodeDetail when constructing the modal mount.
   navigateTo: (c, ctx) => `/clusters/${c.id}/nodes/${ctx?.nodeId ?? ""}/logs`,
-};
-
-const RUN_TRACE: OperationDef<Record<string, never>> = {
-  id: "node_run_trace",
-  group: "diagnostics",
-  label: "Run trace",
-  description: "Stream the S3 API trace for this node.",
-  flavor: "navigate",
-  initialParams: {},
-  inputSteps: [],
-  navigateTo: (c, ctx) => `/clusters/${c.id}/nodes/${ctx?.nodeId ?? ""}/trace`,
 };
 
 // ── Host ─────────────────────────────────────────────────────────
@@ -223,7 +200,6 @@ export const NODE_OPERATIONS: OperationDef[] = [
   REDEPLOY_SOFTWARE,
   // Diagnostics
   VIEW_LIVE_LOGS,
-  RUN_TRACE,
   // Host
   REBOOT_HOST,
   SHUTDOWN_HOST,

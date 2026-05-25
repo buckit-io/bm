@@ -93,6 +93,7 @@ func New(opts Options) http.Handler {
 		r.Delete("/clusters/{id}", deleteCluster(opts))
 		r.Post("/clusters/refresh", refreshAllClusters(opts))
 		r.Post("/clusters/{id}/refresh", refreshOneCluster(opts))
+		r.Get("/clusters/{id}/healthinfo", getClusterHealthInfo(opts))
 
 		// M5: new-cluster + migration preflight + artifact helpers.
 		r.Get("/artifacts/versions", listVersions())
@@ -118,10 +119,11 @@ func New(opts Options) http.Handler {
 		// M3: SSH layer + node CRUD.
 		r.Get("/clusters/{id}/nodes", listNodes(opts.Nodes))
 		r.Get("/clusters/{id}/nodes/{nodeId}", getNode(opts.Nodes))
+		r.Get("/clusters/{id}/nodes/{nodeId}/logs", getNodeLogs(opts))
 		r.Get("/clusters/{id}/admin-creds", getAdminCreds(opts.ClusterAdmin))
 		r.Put("/clusters/{id}/admin-creds", putAdminCreds(opts.ClusterAdmin, opts.AdminPool))
 		r.Get("/clusters/{id}/ssh", getSSHConfig(opts.SSHConfig))
-		r.Put("/clusters/{id}/ssh", putSSHConfig(opts.SSHConfig, opts.SSHPool))
+		r.Put("/clusters/{id}/ssh", putSSHConfig(opts.SSHConfig, opts.Nodes, opts.SSHPool))
 		r.Post("/clusters/{id}/ssh/test", testSSHConfig())
 
 		// Everything else: shape-correct 501 with the milestone tag so the

@@ -29,7 +29,7 @@ func NewClusterCatalog() []Check {
 		{ID: "rpm", Label: "Package URL reachable from this host", Severity: domain.PreflightBlocking, Eval: checkArtifactBM},
 		{ID: "artifact_reachable", Label: "Package URL reachable from each host", Severity: domain.PreflightBlocking, Eval: checkArtifactPerHost},
 		{ID: "free", Label: "Free space on selected drives", Severity: domain.PreflightBlocking, Eval: checkFreeSpace},
-		{ID: "stale_format", Label: "No stale .minio.sys/format.json", Severity: domain.PreflightBlocking, Eval: checkStaleFormat},
+		{ID: "stale_format", Label: "No existing .minio.sys/format.json file on data drive", Severity: domain.PreflightBlocking, Eval: checkStaleFormat},
 		{ID: "dns", Label: "DNS / hostname resolution", Severity: domain.PreflightBlocking, Eval: checkDNS},
 		{ID: "ports", Label: "Inter-node port reachability (9000, 9001)", Severity: domain.PreflightBlocking, Eval: checkPortsReachable},
 		{ID: "ports_conflict", Label: "Conflicting listeners on 9000/9001", Severity: domain.PreflightBlocking, Eval: checkPortsConflict},
@@ -75,16 +75,57 @@ func checkSudo(ctx context.Context, conn HostConn, draft domain.NewClusterDraft)
 	})}
 }
 
+// checkPkgMgr probes each host for a supported package manager (dnf,
+// yum, or apt-get) and surfaces the result in two ways:
+//
+//  1. Per host: which manager was found, or fail when none match.
+//  2. Across hosts: if managers disagree (e.g. dnf on host-a, apt-get
+//     on host-b), every host is downgraded to fail. bm only supports
+//     uniform-package-format clusters today — the install pipeline
+//     picks one artifact kind for the whole deploy.
 func checkPkgMgr(ctx context.Context, conn HostConn, draft domain.NewClusterDraft) Outcome {
-	return Outcome{HostStatuses: perHost(ctx, draft, func(ctx context.Context, h domain.HostRow) domain.PreflightHostStatus {
+	statuses := perHost(ctx, draft, func(ctx context.Context, h domain.HostRow) domain.PreflightHostStatus {
 		for _, mgr := range []string{"dnf", "yum", "apt-get"} {
 			_, _, exit, err := runHostCommand(ctx, conn, h, "command -v "+mgr)
 			if err == nil && exit == 0 {
-				return passStatus(h, mgr+" detected")
+				kind := "rpm"
+				if mgr == "apt-get" {
+					kind = "deb"
+				}
+				return passStatus(h, fmt.Sprintf("%s (%s)", mgr, kind))
 			}
 		}
 		return failStatus(h, "none of dnf, yum, apt-get found in PATH")
-	})}
+	})
+	kinds := map[string]string{} // hostname -> kind
+	for _, s := range statuses {
+		if s.Status != domain.PreflightPass {
+			continue
+		}
+		// Detail looks like "dnf (rpm)" / "apt-get (deb)" — pull the
+		// parenthesised kind out without re-running the probe.
+		if l := strings.Index(s.Message, "("); l >= 0 {
+			if r := strings.Index(s.Message[l:], ")"); r > 0 {
+				kinds[s.Hostname] = s.Message[l+1 : l+r]
+			}
+		}
+	}
+	uniq := map[string]bool{}
+	for _, k := range kinds {
+		uniq[k] = true
+	}
+	if len(uniq) > 1 {
+		mixed := make([]string, 0, len(kinds))
+		for host, k := range kinds {
+			mixed = append(mixed, host+":"+k)
+		}
+		msg := "mixed package managers across hosts (" + formatList(mixed) + ") — bm requires uniform package format"
+		for i := range statuses {
+			statuses[i].Status = domain.PreflightFail
+			statuses[i].Message = msg
+		}
+	}
+	return Outcome{HostStatuses: statuses}
 }
 
 func checkFreeSpace(ctx context.Context, conn HostConn, draft domain.NewClusterDraft) Outcome {
@@ -135,7 +176,7 @@ func checkStaleFormat(ctx context.Context, conn HostConn, draft domain.NewCluste
 			}
 		}
 		if len(stale) > 0 {
-			return failStatus(h, "stale format on "+formatList(stale))
+			return failStatus(h, "existing .minio.sys/format.json found on "+formatList(stale)+" — drive belongs to another cluster; erase or pick a different mount")
 		}
 		return passStatus(h, "")
 	})}
@@ -144,9 +185,23 @@ func checkStaleFormat(ctx context.Context, conn HostConn, draft domain.NewCluste
 func checkDNS(ctx context.Context, conn HostConn, draft domain.NewClusterDraft) Outcome {
 	hosts := applicableHosts(draft)
 	peerNames := make([]string, len(hosts))
+	peerSet := make(map[string]bool, len(hosts))
 	for i, h := range hosts {
 		peerNames[i] = h.Hostname
+		peerSet[h.Hostname] = true
 	}
+
+	// If a custom ServerURL is set and its hostname differs from every node
+	// hostname, also check that each node can resolve it — the console backend
+	// calls that hostname at runtime and will fail if it only exists in the
+	// operator's local /etc/hosts.
+	var serverURLHost string
+	if raw := strings.TrimSpace(draft.ServerURL); raw != "" {
+		if u, err := url.Parse(raw); err == nil && u.Hostname() != "" && !peerSet[u.Hostname()] {
+			serverURLHost = u.Hostname()
+		}
+	}
+
 	return Outcome{HostStatuses: perHost(ctx, draft, func(ctx context.Context, h domain.HostRow) domain.PreflightHostStatus {
 		var failed []string
 		for _, peer := range peerNames {
@@ -160,6 +215,18 @@ func checkDNS(ctx context.Context, conn HostConn, draft domain.NewClusterDraft) 
 		}
 		if len(failed) > 0 {
 			return failStatus(h, "cannot resolve "+formatList(failed))
+		}
+		if serverURLHost != "" {
+			// shellEscape: url.Hostname() permits $() and ; in the host
+			// component, so an attacker-controlled or typo'd ServerURL could
+			// otherwise inject shell here.
+			_, _, exit, err := runHostCommand(ctx, conn, h, "getent hosts "+shellEscape(serverURLHost))
+			if err != nil || exit != 0 {
+				return failStatus(h, fmt.Sprintf(
+					"cannot resolve Server URL host %q — add it to /etc/hosts on each node or use a DNS-resolvable name",
+					serverURLHost,
+				))
+			}
 		}
 		return passStatus(h, "")
 	})}

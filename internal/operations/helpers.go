@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/buckit-io/bm/internal/admin"
 	"github.com/buckit-io/bm/internal/clusteradmin"
 	"github.com/buckit-io/bm/internal/clusters"
+	"github.com/buckit-io/bm/internal/deploy"
 	"github.com/buckit-io/bm/internal/domain"
 	"github.com/buckit-io/bm/internal/nodes"
 	bmssh "github.com/buckit-io/bm/internal/ssh"
@@ -43,6 +45,31 @@ type runCtx struct {
 	sshCreds     domain.SshCreds
 	sshOverrides map[string]domain.SshOverrides
 	admin        *admin.Client
+
+	// pkgManagers caches the detected PackageManager per node ID for
+	// the lifetime of this op. Re-probing is cheap (~50ms over SSH) but
+	// skipping the second probe per host keeps multi-step ops tight.
+	pkgManagers map[string]deploy.PackageManager
+}
+
+// pkgManagerForHost detects (or returns the cached) PackageManager for
+// n. Memoized on rc.pkgManagers so a single op doesn't re-probe the
+// same host across download / inspect / install steps.
+func pkgManagerForHost(ctx context.Context, deps Deps, rc *runCtx, n domain.Node) (deploy.PackageManager, error) {
+	if rc.pkgManagers == nil {
+		rc.pkgManagers = make(map[string]deploy.PackageManager)
+	}
+	if mgr, ok := rc.pkgManagers[n.ID]; ok {
+		return mgr, nil
+	}
+	mgr, err := deploy.DetectPackageManager(ctx, func(probeCtx context.Context, cmd string) (string, error) {
+		return runHostStep(probeCtx, deps, rc, n, cmd)
+	})
+	if err != nil {
+		return nil, err
+	}
+	rc.pkgManagers[n.ID] = mgr
+	return mgr, nil
 }
 
 // load fetches the cluster row, nodes, and creds in one shot. Returns an
@@ -252,62 +279,104 @@ func allOnline(info *domain.ServerInfo) bool {
 // waitHostHealthy polls the local /minio/health/live endpoint via SSH from
 // the host itself — the most reliable signal that the service is running on
 // that node. Used between hosts in rolling_restart and after start_cluster.
+//
+// The probe honours the cluster's admin-URL scheme: https clusters use
+// curl -k against https://127.0.0.1 (loopback is rarely a cert SAN), and
+// http clusters use plain http. Mirror of deploy.Installer.waitHealthy.
+//
+// Each probe iteration runs under its own 10 s sub-context so a hung
+// SSH session (host accepted the TCP/handshake but never returns from
+// the command) cannot consume the whole budget — the outer deadline
+// still terminates the loop on time.
 func waitHostHealthy(ctx context.Context, deps Deps, rc *runCtx, n domain.Node, opts WaitOptions) error {
 	opts = opts.withDefaults(60 * time.Second)
-	port := rc.cluster.NodeCount // not the right field; compute from cluster
-	_ = port
-	deadline := time.Now().Add(opts.Timeout)
-	// Resolve the cluster's API port from the admin creds URL.
-	apiPort := apiPortFromCreds(rc.adminCreds)
+	loopCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
+	defer cancel()
+	probe := healthProbeCommand(rc.adminCreds)
 	for {
-		if err := ctx.Err(); err != nil {
-			return err
+		if err := loopCtx.Err(); err != nil {
+			return fmt.Errorf("%s not healthy after %s", n.Hostname, opts.Timeout)
 		}
-		client, err := deps.SSHPool.Get(ctx, rc.cluster.ID, hostRef(n), resolvedCreds(rc, n.ID))
+		probeCtx, probeCancel := context.WithTimeout(loopCtx, 10*time.Second)
+		client, err := deps.SSHPool.Get(probeCtx, rc.cluster.ID, hostRef(n), resolvedCreds(rc, n.ID))
 		if err == nil {
-			r, runErr := bmssh.Run(ctx, client, fmt.Sprintf("curl -fsS --max-time 5 http://127.0.0.1:%d/minio/health/live", apiPort))
+			r, runErr := bmssh.Run(probeCtx, client, probe)
 			if runErr == nil && r.ExitCode == 0 {
+				probeCancel()
 				return nil
 			}
 		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("%s not healthy after %s", n.Hostname, opts.Timeout)
-		}
+		probeCancel()
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-loopCtx.Done():
+			return fmt.Errorf("%s not healthy after %s", n.Hostname, opts.Timeout)
 		case <-time.After(opts.Tick):
 		}
 	}
 }
 
+// healthProbeCommand builds the curl invocation used by waitHostHealthy. It
+// matches the host's S3 API scheme to the admin-URL scheme so TLS clusters
+// don't get probed over plain http and vice versa.
+func healthProbeCommand(c domain.AdminCreds) string {
+	curlOpts := "-fsS --max-time 5"
+	scheme := "http"
+	if isHTTPSURL(c.URL) {
+		curlOpts += " -k"
+		scheme = "https"
+	}
+	return fmt.Sprintf("curl %s %s://127.0.0.1:%d/minio/health/live", curlOpts, scheme, apiPortFromCreds(c))
+}
+
+// isHTTPSURL reports whether the admin URL uses https. An unparseable or
+// empty URL is treated as https — the same conservative default the refresh
+// probes in the API package use, so all the loopback checks stay aligned.
+func isHTTPSURL(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme == "" {
+		return true
+	}
+	return strings.EqualFold(u.Scheme, "https")
+}
+
 // waitSSHReturn polls SSH dial until a handshake succeeds. Used by
-// reboot_host to detect the host coming back after the reboot drops its TCP
-// connections.
+// reboot_host to detect the host coming back after the reboot drops
+// its TCP connections.
+//
+// Each iteration runs under its own 15 s sub-context (10 s dial + a
+// small `true` round-trip). Without that bound, a half-up host whose
+// sshd accepts the handshake but whose session.Run never returns
+// (kernel hang, hung systemd, IPMI-style serial-console wedge) would
+// pin the outer loop forever — the `if time.Now().After(deadline)`
+// check below only runs between iterations, so a single never-returning
+// Run skips it entirely.
 func waitSSHReturn(ctx context.Context, deps Deps, rc *runCtx, n domain.Node, opts WaitOptions) error {
 	opts = opts.withDefaults(5 * time.Minute)
-	deadline := time.Now().Add(opts.Timeout)
+	loopCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
+	defer cancel()
 	for {
-		if err := ctx.Err(); err != nil {
-			return err
+		if err := loopCtx.Err(); err != nil {
+			return fmt.Errorf("%s did not return SSH after %s", n.Hostname, opts.Timeout)
 		}
-		// Drop any cached client first — the one that was open before the
-		// reboot is stale.
+		// Drop any cached client first — the one that was open before
+		// the reboot is stale.
 		deps.SSHPool.Drop(rc.cluster.ID, n.ID)
-		client, err := deps.SSHPool.Get(ctx, rc.cluster.ID, hostRef(n), resolvedCreds(rc, n.ID))
+		probeCtx, probeCancel := context.WithTimeout(loopCtx, 15*time.Second)
+		client, err := deps.SSHPool.Get(probeCtx, rc.cluster.ID, hostRef(n), resolvedCreds(rc, n.ID))
 		if err == nil {
-			// A successful handshake is the signal; also verify a no-op runs.
-			_, runErr := bmssh.Run(ctx, client, "true")
+			// A successful handshake is the signal; also verify a
+			// no-op runs end-to-end so we don't mistake a half-up
+			// sshd for a healthy host.
+			_, runErr := bmssh.Run(probeCtx, client, "true")
 			if runErr == nil {
+				probeCancel()
 				return nil
 			}
 		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("%s did not return SSH after %s", n.Hostname, opts.Timeout)
-		}
+		probeCancel()
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-loopCtx.Done():
+			return fmt.Errorf("%s did not return SSH after %s", n.Hostname, opts.Timeout)
 		case <-time.After(5 * time.Second):
 		}
 	}

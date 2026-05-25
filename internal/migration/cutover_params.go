@@ -91,15 +91,14 @@ func (p CutoverParams) Validate() error {
 	return nil
 }
 
-// ArtifactURL resolves the Buckit RPM URL for the requested version. Mirrors
-// deploy.DeployParams.ArtifactURL so the migration installer can reuse the
-// same install command machinery.
-func (p CutoverParams) ArtifactURL() (string, error) {
-	url, err := deploy.ResolveRPMURL(p.TargetVersion, "")
+// ArtifactForKind resolves the Buckit Artifact for the host's detected
+// package format. kind is "rpm" or "deb".
+func (p CutoverParams) ArtifactForKind(kind string) (deploy.Artifact, error) {
+	art, err := deploy.ResolveArtifact(p.TargetVersion, kind, "")
 	if err != nil {
-		return "", errors.New("cutover: " + err.Error())
+		return deploy.Artifact{}, errors.New("cutover: " + err.Error())
 	}
-	return url, nil
+	return art, nil
 }
 
 // FromMigrationBody decodes the wire payload the API handler hands the

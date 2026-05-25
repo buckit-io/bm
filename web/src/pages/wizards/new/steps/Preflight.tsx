@@ -8,6 +8,21 @@ interface Props {
   update: (patch: Partial<NewClusterDraft>) => void;
 }
 
+// uniqueMessage returns the single host-status message when every host
+// reports the same one (and there's at least one), otherwise "". Used
+// to summarise checks like pkg_mgr where the operator only cares about
+// the answer, not the per-host repetition.
+function uniqueMessage(
+  hostStatuses: PreflightResult["hostStatuses"] | undefined,
+): string {
+  if (!hostStatuses || hostStatuses.length === 0) return "";
+  const messages = new Set(
+    hostStatuses.map((s) => s.message ?? "").filter((m) => m !== ""),
+  );
+  if (messages.size !== 1) return "";
+  return [...messages][0];
+}
+
 function resultPill(r: PreflightResult["result"]) {
   switch (r) {
     case "pass":
@@ -112,6 +127,13 @@ export function Preflight({ draft, update }: Props) {
                 p.hostStatuses?.filter((s) => s.status !== "pass") ?? [];
               const total = p.hostStatuses?.length ?? 0;
               const passing = total - failingHosts.length;
+              // For pkg_mgr, surface the detected manager (e.g. "Detected: dnf (rpm)")
+              // when every host passes — gives the operator a clear signal about
+              // which install path bm will use without making them read per-host detail.
+              const pkgMgrDetected =
+                p.id === "pkg_mgr" && failingHosts.length === 0
+                  ? uniqueMessage(p.hostStatuses)
+                  : "";
               return [
                 <tr key={p.id}>
                   <td>{p.label}</td>
@@ -128,7 +150,7 @@ export function Preflight({ draft, update }: Props) {
                   </td>
                   <td>{resultPill(p.result)}</td>
                 </tr>,
-                (p.detail || failingHosts.length > 0) && (
+                (p.detail || failingHosts.length > 0 || pkgMgrDetected) && (
                   <tr key={p.id + "-d"} className="discover__detail">
                     <td colSpan={4}>
                       <div
@@ -140,6 +162,7 @@ export function Preflight({ draft, update }: Props) {
                         }}
                       >
                         {p.detail && <span>↳ {p.detail}</span>}
+                        {pkgMgrDetected && <span>↳ Detected: {pkgMgrDetected}</span>}
                         {failingHosts.map((s) => (
                           <span key={s.hostId}>
                             ↳ <span className="mono">{s.hostname}</span>

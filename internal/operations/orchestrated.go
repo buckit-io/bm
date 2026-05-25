@@ -363,38 +363,44 @@ func (e *clusterUpgradeBySystemctlExecutor) Execute(ctx context.Context, run *ta
 			run.LogInfo("%s: skipping host without buckit.service", n.Hostname)
 			continue
 		}
-		artifact, err := resolveRpmArtifactForNode(ctx, e.deps, rc, n, p.Version, p.CustomURL)
+		pkgMgr, err := pkgManagerForHost(ctx, e.deps, rc, n)
+		if err != nil {
+			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			return fmt.Errorf("%s detect package manager: %w", n.Hostname, err)
+		}
+		artifact, err := resolveArtifactForNode(ctx, e.deps, rc, n, p.Version, p.CustomURL, pkgMgr.Kind())
 		if err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
 			return fmt.Errorf("%s version resolve: %w", n.Hostname, err)
 		}
-		expectedSHA256, err := deploy.FetchRPMChecksum(ctx, artifact)
+		expectedSHA256, err := deploy.FetchChecksum(ctx, artifact)
 		if err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
 			return fmt.Errorf("%s checksum resolve: %w", n.Hostname, err)
 		}
 		setHostState(run, i, n, tasks.HostRunning, "downloading")
 		run.LogInfo("%s: downloading %s", n.Hostname, artifact.URL)
-		if _, err := runHostStep(ctx, e.deps, rc, n, deploy.DownloadRPMCommand(artifact.URL)); err != nil {
+		if _, err := runHostStep(ctx, e.deps, rc, n, pkgMgr.DownloadCommand(artifact.URL)); err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
 			return fmt.Errorf("%s download: %w", n.Hostname, err)
 		}
 		setHostState(run, i, n, tasks.HostRunning, "verifying checksum")
-		if _, err := runHostStep(ctx, e.deps, rc, n, deploy.VerifyRPMChecksumCommand(expectedSHA256)); err != nil {
+		if _, err := runHostStep(ctx, e.deps, rc, n, pkgMgr.VerifyChecksumCommand(expectedSHA256)); err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
 			return fmt.Errorf("%s checksum: %w", n.Hostname, err)
 		}
-		packageAction, err := determineRpmInstallAction(ctx, e.deps, rc, n)
+		packageAction, err := inspectInstallAction(ctx, e.deps, rc, n, pkgMgr)
 		if err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
 			return fmt.Errorf("%s package inspect: %w", n.Hostname, err)
 		}
-		actionLabel := "dnf upgrade"
-		actionCommand := "dnf upgrade -y /tmp/buckit.rpm"
-		if packageAction == "reinstall" {
-			actionLabel = "dnf reinstall"
-			actionCommand = "dnf reinstall -y /tmp/buckit.rpm"
+		if packageAction == deploy.InstallActionDowngrade {
+			const msg = "cluster_upgrade_by_systemctl: selected version is older than the version currently installed; downgrade is not supported"
+			setHostState(run, i, n, tasks.HostFailed, msg)
+			return fmt.Errorf("%s: %s", n.Hostname, msg)
 		}
+		actionLabel := pkgMgr.Kind() + " " + string(packageAction)
+		actionCommand := pkgMgr.InstallCommand(packageAction)
 		setHostState(run, i, n, tasks.HostRunning, actionLabel)
 		if _, err := runHostStep(ctx, e.deps, rc, n, sudoBash(rc.sshCreds.User, actionCommand)); err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
@@ -454,6 +460,12 @@ func (e *clusterUpgradeBySystemctlExecutor) Execute(ctx context.Context, run *ta
 type redeployExecutor struct{ deps Deps }
 
 func (e *redeployExecutor) Validate(req tasks.DispatchRequest) error {
+	if len(req.Params) > 0 {
+		var p rollingUpgradeParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return fmt.Errorf("redeploy_software: invalid params: %w", err)
+		}
+	}
 	return validateEngineAtDispatch(e.deps, req.ClusterID, tasks.OpRedeploySoftware)
 }
 
@@ -465,6 +477,15 @@ func (e *redeployExecutor) Execute(ctx context.Context, run *tasks.Run) error {
 	if err := validateEngineCompat(rc.cluster, tasks.OpKind("redeploy_software")); err != nil {
 		return err
 	}
+	var p rollingUpgradeParams
+	if len(run.Params) > 0 {
+		if err := json.Unmarshal(run.Params, &p); err != nil {
+			return fmt.Errorf("redeploy_software: invalid params: %w", err)
+		}
+	}
+	if p.Version == "" {
+		return errors.New("redeploy_software: version required")
+	}
 	start := time.Now()
 	seedHostStatuses(run, rc.nodes)
 
@@ -472,34 +493,72 @@ func (e *redeployExecutor) Execute(ctx context.Context, run *tasks.Run) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		artifact, err := resolveRpmArtifactForNode(ctx, e.deps, rc, n, rc.cluster.Version, "")
+		pkgMgr, err := pkgManagerForHost(ctx, e.deps, rc, n)
+		if err != nil {
+			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			return fmt.Errorf("%s detect package manager: %w", n.Hostname, err)
+		}
+		// Bootstrap missing /etc/default/minio + /etc/minio/config.env
+		// (+ certs) from a peer *before* we touch anything
+		// irreversible. Failing here leaves the target untouched —
+		// no download, no half-installed rpm, no stranded
+		// /tmp/buckit.rpm — so the operator can fix the situation
+		// and retry cleanly.
+		if err := bootstrapBuckitConfigFromPeer(ctx, e.deps, rc, n); err != nil {
+			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			return fmt.Errorf("%s config bootstrap: %w", n.Hostname, err)
+		}
+		artifact, err := resolveArtifactForNode(ctx, e.deps, rc, n, p.Version, p.CustomURL, pkgMgr.Kind())
 		if err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
 			return fmt.Errorf("%s version resolve: %w", n.Hostname, err)
 		}
-		expectedSHA256, err := deploy.FetchRPMChecksum(ctx, artifact)
+		expectedSHA256, err := deploy.FetchChecksum(ctx, artifact)
 		if err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
 			return fmt.Errorf("%s checksum resolve: %w", n.Hostname, err)
 		}
-		setHostState(run, i, n, tasks.HostRunning, "stop")
-		if _, err := runHostStep(ctx, e.deps, rc, n, sudoSystemctl(rc.sshCreds.User, "stop buckit.service")); err != nil {
-			setHostState(run, i, n, tasks.HostFailed, err.Error())
-			return fmt.Errorf("%s stop: %w", n.Hostname, err)
-		}
-		setHostState(run, i, n, tasks.HostRunning, "reinstalling")
-		if _, err := runHostStep(ctx, e.deps, rc, n, deploy.DownloadRPMCommand(artifact.URL)); err != nil {
+		// Download + verify + inspect the candidate package *before*
+		// stopping the service: that way a downgrade rejection (or any
+		// earlier failure) leaves the node serving traffic. The actual
+		// stop → install → start only runs once we know the candidate
+		// is acceptable.
+		setHostState(run, i, n, tasks.HostRunning, "downloading")
+		if _, err := runHostStep(ctx, e.deps, rc, n, pkgMgr.DownloadCommand(artifact.URL)); err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
 			return fmt.Errorf("%s download: %w", n.Hostname, err)
 		}
 		setHostState(run, i, n, tasks.HostRunning, "verifying checksum")
-		if _, err := runHostStep(ctx, e.deps, rc, n, deploy.VerifyRPMChecksumCommand(expectedSHA256)); err != nil {
+		if _, err := runHostStep(ctx, e.deps, rc, n, pkgMgr.VerifyChecksumCommand(expectedSHA256)); err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
 			return fmt.Errorf("%s checksum: %w", n.Hostname, err)
 		}
-		if _, err := runHostStep(ctx, e.deps, rc, n, sudoBash(rc.sshCreds.User, "dnf reinstall -y /tmp/buckit.rpm")); err != nil {
+		packageAction, err := inspectInstallAction(ctx, e.deps, rc, n, pkgMgr)
+		if err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
-			return fmt.Errorf("%s reinstall: %w", n.Hostname, err)
+			return fmt.Errorf("%s package inspect: %w", n.Hostname, err)
+		}
+		if packageAction == deploy.InstallActionDowngrade {
+			const msg = "redeploy_software: selected version is older than the version currently installed; downgrade is not supported"
+			setHostState(run, i, n, tasks.HostFailed, msg)
+			return fmt.Errorf("%s: %s", n.Hostname, msg)
+		}
+		actionLabel := pkgMgr.Kind() + " " + string(packageAction)
+		actionCommand := pkgMgr.InstallCommand(packageAction)
+		setHostState(run, i, n, tasks.HostRunning, "stop")
+		// Tolerate "Unit not loaded" / "inactive" — a redeploy that
+		// follows a previous uninstall (or runs on a host where the
+		// unit was never installed) should still reach the install +
+		// start steps below. Mirror the `|| true` pattern the
+		// migration cutover uses for `systemctl stop minio.service`.
+		if _, err := runHostStep(ctx, e.deps, rc, n, sudoSystemctl(rc.sshCreds.User, "stop buckit.service || true")); err != nil {
+			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			return fmt.Errorf("%s stop: %w", n.Hostname, err)
+		}
+		setHostState(run, i, n, tasks.HostRunning, actionLabel)
+		if _, err := runHostStep(ctx, e.deps, rc, n, sudoBash(rc.sshCreds.User, actionCommand)); err != nil {
+			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			return fmt.Errorf("%s %s: %w", n.Hostname, packageAction, err)
 		}
 		setHostState(run, i, n, tasks.HostRunning, "start")
 		if _, err := runHostStep(ctx, e.deps, rc, n, sudoSystemctl(rc.sshCreds.User, "start buckit.service")); err != nil {
@@ -522,6 +581,144 @@ func (e *redeployExecutor) Execute(ctx context.Context, run *tasks.Run) error {
 	})
 	refreshClusterRow(ctx, e.deps, run.ClusterID, rc.admin)
 	return nil
+}
+
+// bootstrapBuckitConfigFromPeer makes sure target has the runtime
+// config files buckit.service reads (/etc/default/minio and
+// /etc/minio/config.env, plus the TLS material under /etc/minio/certs
+// when present). If the target already has /etc/default/minio it's a
+// no-op. Otherwise the function picks any peer node that does have the
+// file, pulls each artefact as base64-over-stdout, and writes it onto
+// the target with the same mode. Single-node clusters with no peer to
+// copy from are surfaced as a clear error so the operator knows to use
+// the new-cluster wizard for cold bootstraps.
+func bootstrapBuckitConfigFromPeer(ctx context.Context, deps Deps, rc *runCtx, target domain.Node) error {
+	primary := "/etc/default/minio"
+	secondary := "/etc/minio/config.env"
+	certsDir := "/etc/minio/certs"
+
+	have, err := remoteFileExists(ctx, deps, rc, target, primary)
+	if err != nil {
+		return fmt.Errorf("probe %s on %s: %w", primary, target.Hostname, err)
+	}
+	if have {
+		return nil
+	}
+	peer, ok := pickConfigSourcePeer(ctx, deps, rc, target, primary)
+	if !ok {
+		return fmt.Errorf(
+			"%s is missing %s and no other node in this cluster has it — for a fresh single-node cluster use the new-cluster wizard, not redeploy",
+			target.Hostname, primary,
+		)
+	}
+	if err := copyRemoteFile(ctx, deps, rc, peer, target, primary, "600"); err != nil {
+		return fmt.Errorf("copy %s from %s: %w", primary, peer.Hostname, err)
+	}
+	if secondaryOnPeer, _ := remoteFileExists(ctx, deps, rc, peer, secondary); secondaryOnPeer {
+		if err := copyRemoteFile(ctx, deps, rc, peer, target, secondary, "600"); err != nil {
+			return fmt.Errorf("copy %s from %s: %w", secondary, peer.Hostname, err)
+		}
+	}
+	if certsOnPeer, _ := remoteFileExists(ctx, deps, rc, peer, certsDir); certsOnPeer {
+		if err := copyRemoteTarball(ctx, deps, rc, peer, target, "/etc/minio", "certs"); err != nil {
+			return fmt.Errorf("copy %s from %s: %w", certsDir, peer.Hostname, err)
+		}
+	}
+	return nil
+}
+
+// pickConfigSourcePeer chooses a node to copy bootstrap config from.
+// Online peers come first (the admin API said so as of the last
+// refresh), with any other reachable peer that still has the marker
+// file as a fallback. Falling back matters when the cluster admin
+// state is stale or the only file-holders happen to be in a degraded
+// state but are still SSH-reachable — we'd rather copy stale config
+// than refuse to redeploy.
+func pickConfigSourcePeer(ctx context.Context, deps Deps, rc *runCtx, target domain.Node, marker string) (domain.Node, bool) {
+	var fallback domain.Node
+	var haveFallback bool
+	for _, n := range rc.nodes {
+		if n.ID == target.ID {
+			continue
+		}
+		ok, _ := remoteFileExists(ctx, deps, rc, n, marker)
+		if !ok {
+			continue
+		}
+		if n.State == domain.NodeOnline {
+			return n, true
+		}
+		if !haveFallback {
+			fallback = n
+			haveFallback = true
+		}
+	}
+	return fallback, haveFallback
+}
+
+func remoteFileExists(ctx context.Context, deps Deps, rc *runCtx, n domain.Node, path string) (bool, error) {
+	cmd := sudoBash(rc.sshCreds.User, "test -e "+shellQuote(path))
+	if _, err := runHostStep(ctx, deps, rc, n, cmd); err != nil {
+		// runHostStep returns an error on non-zero exit too; we
+		// interpret that as "file is absent" rather than a transport
+		// failure. A real transport break is rare and will surface
+		// from the next caller-visible step.
+		return false, nil
+	}
+	return true, nil
+}
+
+func copyRemoteFile(ctx context.Context, deps Deps, rc *runCtx, source, target domain.Node, path, mode string) error {
+	read := sudoBash(rc.sshCreds.User, "base64 -w0 "+shellQuote(path))
+	out, err := runHostStep(ctx, deps, rc, source, read)
+	if err != nil {
+		return err
+	}
+	encoded := strings.TrimSpace(out)
+	dir := pathDir(path)
+	write := sudoBash(rc.sshCreds.User, fmt.Sprintf(
+		"mkdir -p %s && printf '%%s' %s | base64 -d > %s && chmod %s %s",
+		shellQuote(dir),
+		shellQuote(encoded),
+		shellQuote(path),
+		mode,
+		shellQuote(path),
+	))
+	_, err = runHostStep(ctx, deps, rc, target, write)
+	return err
+}
+
+// copyRemoteTarball streams `entry` under `baseDir` from source to
+// target via `tar | base64`. Used for /etc/minio/certs so directory
+// modes, multiple files, and CAs/ live transferred together.
+func copyRemoteTarball(ctx context.Context, deps Deps, rc *runCtx, source, target domain.Node, baseDir, entry string) error {
+	read := sudoBash(rc.sshCreds.User, fmt.Sprintf(
+		"tar -C %s -cf - %s | base64 -w0",
+		shellQuote(baseDir), shellQuote(entry),
+	))
+	out, err := runHostStep(ctx, deps, rc, source, read)
+	if err != nil {
+		return err
+	}
+	encoded := strings.TrimSpace(out)
+	write := sudoBash(rc.sshCreds.User, fmt.Sprintf(
+		"mkdir -p %s && printf '%%s' %s | base64 -d | tar -C %s -xf -",
+		shellQuote(baseDir),
+		shellQuote(encoded),
+		shellQuote(baseDir),
+	))
+	_, err = runHostStep(ctx, deps, rc, target, write)
+	return err
+}
+
+func pathDir(p string) string {
+	if i := strings.LastIndexByte(p, '/'); i >= 0 {
+		if i == 0 {
+			return "/"
+		}
+		return p[:i]
+	}
+	return "."
 }
 
 // ---- shared helpers for the orchestrated flavor ----
@@ -591,48 +788,41 @@ func replaceSingleQuotes(s string) string {
 	return out
 }
 
-// resolveRpmArtifact returns the URL + checksum source for a version tag, or
-// the custom URL plus sibling .sha256 when version="custom".
-func resolveRpmArtifactForNode(
+// resolveArtifactForNode resolves the Artifact (URL + sha256 sidecar
+// URLs) for the version/customURL pair, honouring the host's detected
+// package format. version="custom" plus customURL takes a .rpm-vs-.deb
+// auto-detect via CustomArtifactFromURL — that catches mismatches up
+// front rather than mid-install.
+func resolveArtifactForNode(
 	ctx context.Context,
 	deps Deps,
 	rc *runCtx,
 	n domain.Node,
 	version string,
 	customURL string,
-) (deploy.RPMArtifact, error) {
+	kind string,
+) (deploy.Artifact, error) {
 	if version == "custom" {
 		if customURL == "" {
-			return deploy.RPMArtifact{}, errors.New("cluster_upgrade_by_systemctl: customUrl required when version=custom")
+			return deploy.Artifact{}, errors.New("customUrl required when version=custom")
 		}
-		return deploy.CustomRPMArtifact(customURL), nil
+		art, err := deploy.CustomArtifactFromURL(customURL)
+		if err != nil {
+			return deploy.Artifact{}, err
+		}
+		if kind != "" && art.Kind != kind {
+			return deploy.Artifact{}, fmt.Errorf(
+				"custom URL is a %s artifact but host uses %s",
+				art.Kind, kind,
+			)
+		}
+		return art, nil
 	}
 	arch, err := detectNodeArch(ctx, deps, rc, n)
 	if err != nil {
-		return deploy.RPMArtifact{}, err
+		return deploy.Artifact{}, err
 	}
-	artifact, err := deploy.ResolveRPMArtifact(version, arch)
-	if err != nil {
-		return deploy.RPMArtifact{}, fmt.Errorf("cluster_upgrade_by_systemctl: %s", err.Error())
-	}
-	return artifact, nil
-}
-
-// resolveRpmURL returns the URL for a version tag, or the custom URL when
-// version="custom".
-func resolveRpmURLForNode(
-	ctx context.Context,
-	deps Deps,
-	rc *runCtx,
-	n domain.Node,
-	version string,
-	customURL string,
-) (string, error) {
-	artifact, err := resolveRpmArtifactForNode(ctx, deps, rc, n, version, customURL)
-	if err != nil {
-		return "", err
-	}
-	return artifact.URL, nil
+	return deploy.ResolveArtifact(version, kind, arch)
 }
 
 func resolveBinaryUpdateURL(ctx context.Context, rc *runCtx, version string) (string, error) {
@@ -676,29 +866,26 @@ func resolveBinaryUpdateURL(ctx context.Context, rc *runCtx, version string) (st
 	return url, nil
 }
 
-func determineRpmInstallAction(ctx context.Context, deps Deps, rc *runCtx, n domain.Node) (string, error) {
-	const inspectCmd = `installed=$(rpm -q --qf '%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\n' buckit 2>/dev/null || true); candidate=$(rpm -qp --qf '%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\n' /tmp/buckit.rpm); printf 'installed=%s\ncandidate=%s\n' "$installed" "$candidate"`
-	out, err := runHostStep(ctx, deps, rc, n, sudoBash(rc.sshCreds.User, inspectCmd))
+// inspectInstallAction inspects the buckit package currently installed
+// on n (if any) and the candidate staged at mgr.LocalFile(), then
+// reports which install verb the caller should use:
+//
+//   - InstallActionReinstall: same EVR is already on disk (or both EVRs
+//     differ only in epoch — covered by V-R vercmp returning 0).
+//   - InstallActionUpgrade:   nothing installed, or installed < candidate.
+//   - InstallActionDowngrade: installed > candidate. Callers refuse this —
+//     dnf would reject the local RPM anyway, and downgrade isn't a
+//     supported bm flow.
+//
+// The script that produces the three-line probe output lives on the
+// PackageManager (so rpmManager / debManager normalize their respective
+// vercmp algorithms), but the Go-side decision is shared.
+func inspectInstallAction(ctx context.Context, deps Deps, rc *runCtx, n domain.Node, mgr deploy.PackageManager) (deploy.InstallAction, error) {
+	out, err := runHostStep(ctx, deps, rc, n, sudoBash(rc.sshCreds.User, mgr.InspectScript()))
 	if err != nil {
 		return "", err
 	}
-	var installed, candidate string
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		switch {
-		case strings.HasPrefix(line, "installed="):
-			installed = strings.TrimSpace(strings.TrimPrefix(line, "installed="))
-		case strings.HasPrefix(line, "candidate="):
-			candidate = strings.TrimSpace(strings.TrimPrefix(line, "candidate="))
-		}
-	}
-	if candidate == "" {
-		return "", errors.New("empty candidate rpm identity")
-	}
-	if installed != "" && installed == candidate {
-		return "reinstall", nil
-	}
-	return "upgrade", nil
+	return deploy.ParseInspectOutput(out)
 }
 
 func detectNodeArch(ctx context.Context, deps Deps, rc *runCtx, n domain.Node) (string, error) {

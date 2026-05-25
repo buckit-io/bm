@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -14,6 +15,26 @@ import (
 
 	"github.com/buckit-io/bm/internal/domain"
 )
+
+// dialTimeout bounds the TCP connect to the admin endpoint. Without this,
+// http.DefaultTransport falls back to the kernel's retransmit behaviour on a
+// dead host, which means admin calls only fail once the outer request context
+// expires (~15s). 3s is comfortable for LAN/WAN clusters while still failing
+// fast when the endpoint is down.
+const dialTimeout = 3 * time.Second
+
+// tlsHandshakeTimeout caps the TLS handshake. Default is 10s — too generous
+// for the refresh path, which budgets ~15s total. Brings TLS-stall failures
+// (mis-issued cert, half-up service) within a single refresh cycle.
+const tlsHandshakeTimeout = 5 * time.Second
+
+// responseHeaderTimeout caps the wait between request-sent and first byte
+// of the response headers. The Go default is 0 (no limit), so a wedged
+// admin endpoint that accepts the request but never replies blocks until
+// ctx cancels. Common when a TLS terminator stays up while the upstream
+// service is stopped — TCP + TLS succeed against the proxy, but nothing
+// answers behind it. 5s is well above a healthy ServerInfo's response time.
+const responseHeaderTimeout = 5 * time.Second
 
 // Client is a thin facade over a madmin.AdminClient.
 type Client struct {
@@ -44,13 +65,17 @@ func New(creds domain.AdminCreds) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	transport := http.DefaultTransport
+	// Always clone the default transport so we can attach a bounded dialer
+	// without mutating the package global.
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	dialer := &net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}
+	tr.DialContext = dialer.DialContext
+	tr.TLSHandshakeTimeout = tlsHandshakeTimeout
+	tr.ResponseHeaderTimeout = responseHeaderTimeout
 	if secure && creds.Insecure {
-		// Clone the default transport so we don't mutate the package global.
-		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} // operator opt-in
-		transport = tr
 	}
+	transport := http.RoundTripper(tr)
 	adm, err := madmin.NewWithOptions(endpoint, &madmin.Options{
 		Creds:     credsForOptions(creds.AccessKey, creds.SecretKey),
 		Secure:    secure,

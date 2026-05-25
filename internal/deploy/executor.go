@@ -253,14 +253,21 @@ func (e *Executor) commit(ctx context.Context, p DeployParams, verify VerifyResu
 		}
 	}
 
-	url := p.ServerURL
-	if url == "" && len(p.Hosts) > 0 {
-		url = fmt.Sprintf("http://%s:%d", p.Hosts[0].Hostname, p.API.Port)
+	// bm always dials a real node for management calls — p.ServerURL is for
+	// MinIO's own MINIO_SERVER_URL (presigned URLs, etc.) and may point at a
+	// load balancer that bm can't or shouldn't depend on.
+	var url string
+	if len(p.Hosts) > 0 {
+		url = adminURLForHost(p, p.Hosts[0])
 	}
 	if err := e.ClusterAdmin.Put(ctx, clusterID, domain.AdminCreds{
 		URL:       url,
 		AccessKey: p.Credentials.RootUser,
 		SecretKey: p.Credentials.RootPassword,
+		// BYO certs aren't in the operator's system trust store. Skip
+		// verification rather than maintaining a separate cert pool — this
+		// matches the personal-tool trust model (see CLAUDE.md).
+		Insecure: p.TLS.Enabled(),
 	}); err != nil {
 		return "", err
 	}

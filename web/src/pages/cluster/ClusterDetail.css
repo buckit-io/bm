@@ -7,6 +7,16 @@
 
 .cdetail__header {
   display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.cdetail__breadcrumb {
+  font-size: var(--fs-sm);
+}
+
+.cdetail__header-row {
+  display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--s-4);
@@ -27,6 +37,52 @@
 
 .cdetail__menu-wrap {
   position: relative;
+}
+
+/* Gear icon next to the cluster label */
+.cdetail__gear-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.cdetail__gear-wrap::before {
+  content: "|";
+  margin-right: var(--s-3);
+  color: var(--c-border);
+  font-weight: var(--fw-normal);
+  font-size: var(--fs-md);
+  pointer-events: none;
+}
+
+.cdetail__gear-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--c-fg-muted);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  cursor: pointer;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.cdetail__gear-btn .gear-icon {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.cdetail__gear-btn:hover {
+  color: var(--c-fg);
+}
+
+.cdetail__gear-wrap .cdetail__menu {
+  left: 0;
+  right: auto;
+  min-width: 220px;
 }
 
 .cdetail__menu {

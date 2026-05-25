@@ -24,6 +24,7 @@ type DeployParams struct {
 	ServerURL   string                                  `json:"serverUrl,omitempty"`
 	Hosts       []domain.HostRow                        `json:"hosts"`
 	SSH         domain.SshCreds                         `json:"ssh"`
+	TLS         domain.TLSConfig                        `json:"tls,omitempty"`
 	Discovery   map[string]domain.WizardDiscoveryResult `json:"discovery,omitempty"`
 	Topology    domain.Topology                         `json:"topology"`
 }
@@ -51,6 +52,13 @@ func FromDraft(d domain.NewClusterDraft) DeployParams {
 	if d.Region == "" {
 		d.Region = "us-east-1"
 	}
+	// Normalize line endings in pasted PEM bodies — Windows-edited / Notepad
+	// paste produces CRLF, which makes bash heredoc terminator matching fail
+	// (`BMPEM\r` never matches `BMPEM`) and hangs the install step.
+	tls := d.TLS
+	tls.CertPEM = normalizeLineEndings(tls.CertPEM)
+	tls.KeyPEM = normalizeLineEndings(tls.KeyPEM)
+	tls.CABundlePEM = normalizeLineEndings(tls.CABundlePEM)
 	return DeployParams{
 		Name:        strings.TrimSpace(d.Name),
 		Description: d.Description,
@@ -62,9 +70,17 @@ func FromDraft(d domain.NewClusterDraft) DeployParams {
 		ServerURL:   d.ServerURL,
 		Hosts:       hosts,
 		SSH:         d.SSH,
+		TLS:         tls,
 		Discovery:   d.Discovery,
 		Topology:    d.Topology,
 	}
+}
+
+func normalizeLineEndings(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, "\r\n", "\n")
 }
 
 // Validate enforces the invariants the install pipeline depends on.
@@ -94,10 +110,16 @@ func (p DeployParams) Validate() error {
 	if _, err := p.ArtifactURL(); err != nil {
 		return err
 	}
+	if err := p.validateTLS(); err != nil {
+		return err
+	}
 	return nil
 }
 
 // ArtifactURL resolves the deploy's artifact URL from version/customUrl.
+// Kept for Validate() which checks only that a URL can be produced;
+// runtime callers use ArtifactForKind to honour the host's detected
+// package format.
 func (p DeployParams) ArtifactURL() (string, error) {
 	if p.Version == "custom" {
 		u := strings.TrimSpace(p.CustomURL)
@@ -106,15 +128,45 @@ func (p DeployParams) ArtifactURL() (string, error) {
 		}
 		return u, nil
 	}
-	arch, err := p.clusterArch()
+	// Validate-time fallback: prefer rpm if available, else deb.
+	a, err := p.ArtifactForKind("rpm")
+	if err == nil {
+		return a.URL, nil
+	}
+	a, err = p.ArtifactForKind("deb")
 	if err != nil {
 		return "", err
 	}
-	url, err := ResolveRPMURL(p.Version, arch)
-	if err != nil {
-		return "", errors.New("deploy: " + err.Error())
+	return a.URL, nil
+}
+
+// ArtifactForKind resolves the Artifact for the host's detected package
+// format. kind is "rpm" or "deb". Custom URLs auto-detect kind from
+// suffix and are rejected if the suffix doesn't match the host.
+func (p DeployParams) ArtifactForKind(kind string) (Artifact, error) {
+	if p.Version == "custom" {
+		u := strings.TrimSpace(p.CustomURL)
+		if u == "" {
+			return Artifact{}, errors.New("deploy: customUrl required when version=custom")
+		}
+		art, err := CustomArtifactFromURL(u)
+		if err != nil {
+			return Artifact{}, errors.New("deploy: " + err.Error())
+		}
+		if kind != "" && art.Kind != kind {
+			return Artifact{}, fmt.Errorf("deploy: custom URL is a %s artifact but host uses %s", art.Kind, kind)
+		}
+		return art, nil
 	}
-	return url, nil
+	arch, err := p.clusterArch()
+	if err != nil {
+		return Artifact{}, err
+	}
+	art, err := ResolveArtifact(p.Version, kind, arch)
+	if err != nil {
+		return Artifact{}, errors.New("deploy: " + err.Error())
+	}
+	return art, nil
 }
 
 func (p DeployParams) clusterArch() (string, error) {

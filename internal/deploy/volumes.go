@@ -21,6 +21,11 @@ func renderVolumes(p DeployParams) string {
 		return ""
 	}
 
+	scheme := "http"
+	if p.TLS.Enabled() {
+		scheme = "https"
+	}
+
 	pathFit := detectNumericPattern(paths)
 	if len(hosts) == 1 {
 		if pathFit.fits {
@@ -32,24 +37,24 @@ func renderVolumes(p DeployParams) string {
 	hostFit := detectNumericPattern(hosts)
 	switch {
 	case hostFit.fits && pathFit.fits:
-		return fmt.Sprintf("http://%s:%d%s", hostFit.pattern, p.API.Port, pathFit.pattern)
+		return fmt.Sprintf("%s://%s:%d%s", scheme, hostFit.pattern, p.API.Port, pathFit.pattern)
 	case hostFit.fits:
 		parts := make([]string, 0, len(paths))
 		for _, path := range paths {
-			parts = append(parts, fmt.Sprintf("http://%s:%d%s", hostFit.pattern, p.API.Port, path))
+			parts = append(parts, fmt.Sprintf("%s://%s:%d%s", scheme, hostFit.pattern, p.API.Port, path))
 		}
 		return strings.Join(parts, " ")
 	case pathFit.fits:
 		parts := make([]string, 0, len(hosts))
 		for _, host := range hosts {
-			parts = append(parts, fmt.Sprintf("http://%s:%d%s", host, p.API.Port, pathFit.pattern))
+			parts = append(parts, fmt.Sprintf("%s://%s:%d%s", scheme, host, p.API.Port, pathFit.pattern))
 		}
 		return strings.Join(parts, " ")
 	default:
 		parts := make([]string, 0, len(hosts)*len(paths))
 		for _, host := range hosts {
 			for _, path := range paths {
-				parts = append(parts, fmt.Sprintf("http://%s:%d%s", host, p.API.Port, path))
+				parts = append(parts, fmt.Sprintf("%s://%s:%d%s", scheme, host, p.API.Port, path))
 			}
 		}
 		return strings.Join(parts, " ")

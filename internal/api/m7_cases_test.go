@@ -842,7 +842,7 @@ func TestM7ClusterUpgradeBySystemctlUsesArm64RPM(t *testing.T) {
 			verified = true
 			return "", "", 0, true
 		case strings.Contains(cmd, "rpm -q --qf") && strings.Contains(cmd, "rpm -qp --qf"):
-			return "installed=0:20260501000000.0.0-1.aarch64\ncandidate=0:20260601000000.0.0-1.aarch64\n", "", 0, true
+			return "installed=0:20260501000000.0.0-1.aarch64\ncandidate=0:20260601000000.0.0-1.aarch64\ncmp=-1\n", "", 0, true
 		case strings.Contains(cmd, "systemctl restart"):
 			restartedBySystemctl = true
 			return "", "", 0, true
@@ -919,7 +919,7 @@ func TestM7ClusterUpgradeBySystemctlFailsIfVersionUnchanged(t *testing.T) {
 		case strings.Contains(cmd, "sha256sum -c -") || strings.Contains(cmd, "shasum -a 256 -c -"):
 			return "", "", 0, true
 		case strings.Contains(cmd, "rpm -q --qf") && strings.Contains(cmd, "rpm -qp --qf"):
-			return "installed=0:20260501000000.0.0-1.aarch64\ncandidate=0:20260601000000.0.0-1.aarch64\n", "", 0, true
+			return "installed=0:20260501000000.0.0-1.aarch64\ncandidate=0:20260601000000.0.0-1.aarch64\ncmp=-1\n", "", 0, true
 		default:
 			return "", "", 0, false
 		}
@@ -982,7 +982,7 @@ func TestM7ClusterUpgradeBySystemctlReinstallsSameInstalledRPM(t *testing.T) {
 		case strings.Contains(cmd, "sha256sum -c -") || strings.Contains(cmd, "shasum -a 256 -c -"):
 			return "", "", 0, true
 		case strings.Contains(cmd, "rpm -q --qf") && strings.Contains(cmd, "rpm -qp --qf"):
-			return "installed=0:20260522022039.0.0-1.aarch64\ncandidate=0:20260522022039.0.0-1.aarch64\n", "", 0, true
+			return "installed=0:20260522022039.0.0-1.aarch64\ncandidate=0:20260522022039.0.0-1.aarch64\ncmp=0\n", "", 0, true
 		case strings.Contains(cmd, "dnf upgrade -y /tmp/buckit.rpm"):
 			usedUpgrade = true
 			return "", "", 0, true
@@ -1011,3 +1011,86 @@ func TestM7ClusterUpgradeBySystemctlReinstallsSameInstalledRPM(t *testing.T) {
 		t.Fatal("expected dnf reinstall for same installed rpm identity")
 	}
 }
+
+// TestM7ClusterUpgradeBySystemctlOnDeb mirrors the RPM upgrade flow on
+// a Debian/Ubuntu host. The probe returns apt-get only, the inspect
+// script uses dpkg-query / dpkg-deb / dpkg --compare-versions, and the
+// install verb is apt-get install -y /tmp/buckit.deb.
+func TestM7ClusterUpgradeBySystemctlOnDeb(t *testing.T) {
+	h := newM7Harness(t)
+	h.restartVersion = "RELEASE.2026-06-01T00-00-00Z"
+	artifactLn, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactSrv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/buckit.sha256":
+			_, _ = w.Write([]byte("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd  buckit-arm64.deb\n"))
+		default:
+			_, _ = w.Write([]byte("deb"))
+		}
+	}))
+	artifactSrv.Listener = artifactLn
+	artifactSrv.Start()
+	defer artifactSrv.Close()
+	restoreVersions := deploy.RestoreVersionsCacheForTest([]domain.BuckitVersion{{
+		Tag:   "v1.0.0",
+		Label: "v1.0.0",
+		Artifacts: []domain.BuckitArtifact{
+			{Kind: "deb", OS: "linux", Arch: "arm64", URL: artifactSrv.URL + "/buckit-arm64.deb", SHA256URL: artifactSrv.URL + "/buckit.sha256"},
+		},
+		DebURL: artifactSrv.URL + "/buckit-arm64.deb",
+	}})
+	defer restoreVersions()
+
+	var downloaded []string
+	var aptInstalled bool
+	h.sshSrv.CmdOverride = func(cmd string) (string, string, int, bool) {
+		switch {
+		case cmd == "uname -m":
+			return "aarch64\n", "", 0, true
+		case strings.Contains(cmd, "command -v dnf") && strings.Contains(cmd, "command -v apt-get"):
+			// Combined probe: only apt-get is on this host.
+			return "\n\n/usr/bin/apt-get\n", "", 0, true
+		case strings.HasPrefix(cmd, "curl -fSL -o /tmp/buckit.deb "):
+			downloaded = append(downloaded, strings.TrimPrefix(cmd, "curl -fSL -o /tmp/buckit.deb "))
+			return "", "", 0, true
+		case strings.Contains(cmd, "sha256sum -c -") || strings.Contains(cmd, "shasum -a 256 -c -"):
+			return "", "", 0, true
+		case strings.Contains(cmd, "dpkg-query -W") && strings.Contains(cmd, "dpkg-deb -f"):
+			return "installed=0.1.0-1\ncandidate=0.2.0-1\ncmp=-1\n", "", 0, true
+		case strings.Contains(cmd, "apt-get install -y /tmp/buckit.deb"):
+			aptInstalled = true
+			return "", "", 0, true
+		default:
+			return "", "", 0, false
+		}
+	}
+
+	id, code := dispatch(t, h, tasks.OpClusterUpgradeBySystemctl, nil, map[string]any{
+		"version": "v1.0.0",
+	})
+	if code != 202 {
+		t.Fatalf("dispatch: %d", code)
+	}
+	row := waitTermM7(t, h, id, 30*time.Second)
+	if row.Status != tasks.StateSucceeded {
+		t.Fatalf("cluster_upgrade_by_systemctl on deb: %s (%s)", row.Status, row.FailureNote)
+	}
+	if len(downloaded) == 0 {
+		t.Fatal("expected at least one .deb download URL")
+	}
+	for _, url := range downloaded {
+		if strings.Trim(url, "'") != artifactSrv.URL+"/buckit-arm64.deb" {
+			t.Fatalf("want arm64 deb URL, got %q", url)
+		}
+	}
+	if !aptInstalled {
+		t.Fatal("expected apt-get install -y /tmp/buckit.deb to run")
+	}
+	if h.calls.serviceRestart.Load() != 1 {
+		t.Fatalf("expected 1 admin restart call, got %d", h.calls.serviceRestart.Load())
+	}
+}
+

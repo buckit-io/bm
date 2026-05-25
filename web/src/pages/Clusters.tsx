@@ -62,8 +62,6 @@ function ratioCell(ok: number, total: number) {
 export function Clusters() {
   const { data: clusters, isLoading } = useClusters();
   const refresh = useRefreshClusters();
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
   const autoRefreshStarted = useRef(false);
 
   // Re-render every second so "Fetched Ns ago" actually ticks while the
@@ -73,19 +71,6 @@ export function Clusters() {
     const id = setInterval(() => setTick((n) => n + 1), 1000);
     return () => clearInterval(id);
   }, []);
-
-  // Close the +New menu on outside-click.
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onMouseDown = (e: MouseEvent) => {
-      const target = e.target as globalThis.Node | null;
-      if (menuRef.current && target && !menuRef.current.contains(target)) {
-        setMenuOpen(false);
-      }
-    };
-    window.addEventListener("mousedown", onMouseDown);
-    return () => window.removeEventListener("mousedown", onMouseDown);
-  }, [menuOpen]);
 
   // Redirect to /welcome when the backend has no clusters yet (first run).
   if (!isLoading && clusters && clusters.length === 0) {
@@ -133,34 +118,12 @@ export function Clusters() {
             </span>
             {refresh.isPending ? "Refreshing…" : "Refresh"}
           </button>
-          <div className="clusters__new" ref={menuRef}>
-            <button
-              className="btn btn--primary"
-              onClick={() => setMenuOpen((v) => !v)}
-              aria-haspopup="menu"
-              aria-expanded={menuOpen}
-            >
-              + New ▾
-            </button>
-            {menuOpen && (
-              <div className="clusters__menu" role="menu">
-                <Link
-                  to="/clusters/new"
-                  className="clusters__menu-item"
-                  onClick={() => setMenuOpen(false)}
-                >
-                  Deploy new cluster
-                </Link>
-                <Link
-                  to="/clusters/import"
-                  className="clusters__menu-item"
-                  onClick={() => setMenuOpen(false)}
-                >
-                  Import existing Buckit or MinIO cluster
-                </Link>
-              </div>
-            )}
-          </div>
+          <Link to="/clusters/new" className="btn btn--primary">
+            + Deploy new cluster
+          </Link>
+          <Link to="/clusters/import" className="btn btn--primary">
+            + Import cluster
+          </Link>
         </div>
       </header>
 

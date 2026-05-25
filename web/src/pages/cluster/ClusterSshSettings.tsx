@@ -50,12 +50,13 @@ const AUTH_OPTIONS: {
 
 function hostsFromNodes(
   nodes: Node[],
+  port: number,
   overrides: Record<string, SshOverrides> = {},
 ): HostRow[] {
   return nodes.map((n) => ({
     id: n.id,
     hostname: n.hostname,
-    port: 22,
+    port: port || n.sshPort || 22,
     probe: "idle",
     sshOverride: overrides[n.id],
   }));
@@ -64,8 +65,20 @@ function hostsFromNodes(
 const DEFAULT_SSH: SshCreds = {
   authMethod: "agent",
   user: "",
+  port: 22,
   sudo: true,
 };
+
+// normalizeForUser keeps the sudo flag consistent with the username. Root
+// never needs (or can use) passwordless sudo — we strip the flag here so
+// the visible checkbox and the saved/dispatched value are always in sync.
+// Applied at every seam that mutates ssh.user (load + input change).
+function normalizeForUser(s: SshCreds): SshCreds {
+  if (s.user.trim() === "root" && s.sudo) {
+    return { ...s, sudo: false };
+  }
+  return s;
+}
 
 export function ClusterSshSettings() {
   const { clusterId = "" } = useParams();
@@ -91,7 +104,7 @@ export function ClusterSshSettings() {
     let cancelled = false;
     getClusterSshConfig(clusterId).then((cfg) => {
       if (cancelled) return;
-      if (cfg) setSsh(cfg.ssh);
+      if (cfg) setSsh(normalizeForUser(cfg.ssh));
       // Stash overrides on a ref-like state until nodes arrive.
       setPendingOverrides(cfg?.overrides ?? {});
       setConfigLoaded(true);
@@ -108,8 +121,8 @@ export function ClusterSshSettings() {
   // Apply nodes + overrides into the hosts state once both are ready.
   useEffect(() => {
     if (!nodes) return;
-    setHosts(hostsFromNodes(nodes, pendingOverrides));
-  }, [nodes, pendingOverrides]);
+    setHosts(hostsFromNodes(nodes, ssh.port ?? 0, pendingOverrides));
+  }, [nodes, pendingOverrides, ssh.port]);
 
   const setHostOverride = (id: string, override: SshOverrides | undefined) =>
     setHosts((prev) =>
@@ -169,6 +182,8 @@ export function ClusterSshSettings() {
     if (!ssh.user.trim()) return false;
     if (ssh.authMethod === "key" && !ssh.keyPath?.trim()) return false;
     if (ssh.authMethod === "password" && !ssh.password) return false;
+    const p = ssh.port ?? 22;
+    if (!Number.isInteger(p) || p < 1 || p > 65535) return false;
     return true;
   }, [ssh]);
 
@@ -275,7 +290,7 @@ export function ClusterSshSettings() {
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "minmax(200px, 220px) max-content",
+              gridTemplateColumns: "minmax(200px, 220px) 110px max-content",
               gap: "var(--s-2) var(--s-4)",
               alignItems: "center",
             }}
@@ -283,13 +298,30 @@ export function ClusterSshSettings() {
             <label className="field-label" htmlFor="cluster-ssh-user">
               SSH user
             </label>
+            <label className="field-label" htmlFor="cluster-ssh-port">
+              SSH port
+            </label>
             <div />
             <input
               id="cluster-ssh-user"
               className="input"
               value={ssh.user}
-              onChange={(e) => setSsh({ ...ssh, user: e.target.value })}
+              onChange={(e) =>
+                setSsh(normalizeForUser({ ...ssh, user: e.target.value }))
+              }
               placeholder="buckit"
+            />
+            <input
+              id="cluster-ssh-port"
+              className="input"
+              type="number"
+              min={1}
+              max={65535}
+              value={ssh.port ?? 22}
+              onChange={(e) => {
+                const n = parseInt(e.target.value, 10);
+                setSsh({ ...ssh, port: Number.isFinite(n) ? n : 22 });
+              }}
             />
             <label
               className="hstack"
@@ -305,7 +337,7 @@ export function ClusterSshSettings() {
             >
               <input
                 type="checkbox"
-                checked={ssh.user.trim() === "root" ? false : ssh.sudo}
+                checked={ssh.sudo}
                 disabled={ssh.user.trim() === "root"}
                 onChange={(e) => setSsh({ ...ssh, sudo: e.target.checked })}
               />
@@ -420,13 +452,20 @@ export function ClusterSshSettings() {
 }
 
 function probePill(p: HostRow["probe"]) {
-  const map: Record<HostRow["probe"], { text: string; cls: string }> = {
+  const map: Record<
+    HostRow["probe"],
+    { text: string; cls: string; color?: string }
+  > = {
     idle: { text: "—", cls: "subtle" },
     probing: { text: "Probing…", cls: "subtle" },
-    reachable: { text: "✓ Reachable", cls: "" },
-    auth_failed: { text: "✗ Auth failed", cls: "" },
-    timeout: { text: "✗ Timeout", cls: "" },
+    reachable: { text: "✓ Reachable", cls: "", color: "var(--c-success)" },
+    auth_failed: { text: "✗ Auth failed", cls: "", color: "var(--c-danger)" },
+    timeout: { text: "✗ Timeout", cls: "", color: "var(--c-danger)" },
   };
   const v = map[p];
-  return <span className={v.cls}>{v.text}</span>;
+  return (
+    <span className={v.cls} style={v.color ? { color: v.color } : undefined}>
+      {v.text}
+    </span>
+  );
 }

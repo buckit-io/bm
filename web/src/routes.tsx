@@ -10,7 +10,6 @@ import { History } from "./pages/History";
 import { ClusterDetailLayout } from "./pages/cluster/ClusterDetail";
 import { NodeDetail } from "./pages/cluster/NodeDetail";
 import { NodeLogs } from "./pages/cluster/NodeLogs";
-import { NodeTrace } from "./pages/cluster/NodeTrace";
 import { ClusterSettings } from "./pages/cluster/ClusterSettings";
 import { ClusterSshSettings } from "./pages/cluster/ClusterSshSettings";
 import { NewClusterWizard } from "./pages/wizards/new/Wizard";
@@ -35,7 +34,6 @@ export function AppRoutes() {
         <Route path="/clusters/:clusterId" element={<ClusterDetailLayout />} />
         <Route path="/clusters/:clusterId/nodes/:nodeId" element={<NodeDetail />} />
         <Route path="/clusters/:clusterId/nodes/:nodeId/logs" element={<NodeLogs />} />
-        <Route path="/clusters/:clusterId/nodes/:nodeId/trace" element={<NodeTrace />} />
         <Route path="/clusters/:clusterId/settings" element={<ClusterSettings />} />
         <Route path="/clusters/:clusterId/ssh" element={<ClusterSshSettings />} />
 

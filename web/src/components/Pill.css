@@ -12,7 +12,8 @@
 }
 
 .pill__icon {
-  font-size: 0.7rem;
+  font-size: 1.1em;
+  font-weight: var(--fw-bold);
   line-height: 1;
 }
 

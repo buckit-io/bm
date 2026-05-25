@@ -148,7 +148,7 @@ export type DiscoverResult =
 // same response. Returns the final result frame's body. The backend
 // guarantees exactly one `event: result` frame and closes the stream.
 export async function discoverClusterStream(
-  body: { url: string; username: string; password: string },
+  body: { url: string; username: string; password: string; insecure?: boolean },
   handlers: DiscoverHandlers,
 ): Promise<DiscoverResult> {
   const stream = sseStream(`${BASE}/clusters/import/discover`, {

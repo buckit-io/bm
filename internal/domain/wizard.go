@@ -153,6 +153,28 @@ type Credentials struct {
 	RootPassword string `json:"rootPassword"`
 }
 
+// TLSMode matches web/src/pages/wizards/new/state.ts:TlsMode.
+type TLSMode string
+
+const (
+	TLSOff TLSMode = "off"
+	TLSBYO TLSMode = "byo"
+)
+
+// TLSConfig carries the operator's TLS choice for a new cluster. When
+// Mode == TLSBYO the install pipeline writes CertPEM + KeyPEM (and CABundlePEM
+// when set) into /etc/minio/certs on every host and switches MINIO_VOLUMES /
+// MINIO_SERVER_URL to https. Mirrors state.ts:TlsConfig.
+type TLSConfig struct {
+	Mode        TLSMode `json:"mode,omitempty"`
+	CertPEM     string  `json:"certPem,omitempty"`
+	KeyPEM      string  `json:"keyPem,omitempty"`
+	CABundlePEM string  `json:"caBundlePem,omitempty"`
+}
+
+// Enabled reports whether the cluster should be deployed with TLS on.
+func (t TLSConfig) Enabled() bool { return t.Mode == TLSBYO }
+
 // APIPorts captures the S3 + console listen ports the deploy writes into
 // MINIO_OPTS.
 type APIPorts struct {
@@ -177,6 +199,7 @@ type NewClusterDraft struct {
 	ServerURL      string                           `json:"serverUrl,omitempty"`
 	Hosts          []HostRow                        `json:"hosts"`
 	SSH            SshCreds                         `json:"ssh"`
+	TLS            TLSConfig                        `json:"tls,omitempty"`
 	Discovery      map[string]WizardDiscoveryResult `json:"discovery,omitempty"`
 	Topology       Topology                         `json:"topology"`
 }

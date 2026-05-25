@@ -23,7 +23,7 @@ const STATE_LABELS: Record<HostOpState, string> = {
 };
 
 const STATE_GLYPH: Record<HostOpState, string> = {
-  pending: "·",
+  pending: "●",
   running: "⟳",
   succeeded: "✓",
   failed: "✗",

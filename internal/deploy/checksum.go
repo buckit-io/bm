@@ -11,17 +11,47 @@ import (
 	"strings"
 )
 
-const rpmDownloadPath = "/tmp/buckit.rpm"
-
-type RPMArtifact struct {
+// Artifact describes a downloadable package (RPM or DEB) plus the
+// sources bm can consult to verify it. The shape is package-manager
+// neutral — RpmURL vs DebURL is selected at the BuckitVersion layer.
+type Artifact struct {
+	// Kind is "rpm" or "deb" once threaded from detection; empty on
+	// pre-detection paths (CustomRPMArtifact / CustomDebArtifact set it
+	// explicitly).
+	Kind       string
 	URL        string
 	SHA256URLs []string
 	SHA256     string
 }
 
-func CustomRPMArtifact(url string) RPMArtifact {
+// CustomRPMArtifact builds an Artifact for a user-supplied .rpm URL.
+// Kept as the RPM-specific constructor so the wizard / cutover paths
+// that still hard-code RPM keep working unchanged.
+func CustomRPMArtifact(url string) Artifact {
 	u := strings.TrimSpace(url)
-	return RPMArtifact{URL: u, SHA256URLs: DefaultSHA256URLs(u)}
+	return Artifact{Kind: "rpm", URL: u, SHA256URLs: DefaultSHA256URLs(u)}
+}
+
+// CustomDebArtifact mirrors CustomRPMArtifact for .deb URLs.
+func CustomDebArtifact(url string) Artifact {
+	u := strings.TrimSpace(url)
+	return Artifact{Kind: "deb", URL: u, SHA256URLs: DefaultSHA256URLs(u)}
+}
+
+// CustomArtifactFromURL picks rpm vs deb by URL suffix. Anything else
+// returns an error so the user gets a clear failure instead of a
+// confusing mid-install one.
+func CustomArtifactFromURL(url string) (Artifact, error) {
+	u := strings.TrimSpace(url)
+	lower := strings.ToLower(u)
+	switch {
+	case strings.HasSuffix(lower, ".rpm"):
+		return CustomRPMArtifact(u), nil
+	case strings.HasSuffix(lower, ".deb"):
+		return CustomDebArtifact(u), nil
+	default:
+		return Artifact{}, fmt.Errorf("custom artifact URL must end in .rpm or .deb: %s", u)
+	}
 }
 
 func DefaultSHA256URLs(url string) []string {
@@ -32,7 +62,9 @@ func DefaultSHA256URLs(url string) []string {
 	return []string{u + ".sha256sum", u + ".sha256"}
 }
 
-func FetchRPMChecksum(ctx context.Context, artifact RPMArtifact) (string, error) {
+// FetchChecksum resolves a sha256 for the artifact by trying its
+// SHA256URLs in order and falling back to the literal SHA256 field.
+func FetchChecksum(ctx context.Context, artifact Artifact) (string, error) {
 	if strings.TrimSpace(artifact.URL) == "" {
 		return "", errors.New("artifact URL required")
 	}
@@ -79,23 +111,24 @@ func fetchRPMChecksumFromURL(ctx context.Context, rpmURL string, shaURL string) 
 	return sum, nil
 }
 
+// DownloadRPMCommand is preserved as a thin wrapper so existing callers
+// (migration cutover, orchestrated ops still on the Phase 1 seam)
+// compile unchanged. The bytes it produces are identical to
+// rpmManager{}.DownloadCommand(url).
 func DownloadRPMCommand(url string) string {
-	return fmt.Sprintf("curl -fSL -o %s %s", rpmDownloadPath, ShellEscape(url))
+	return rpmManager{}.DownloadCommand(url)
 }
 
+// VerifyRPMChecksumCommand is the same thin-wrapper story as
+// DownloadRPMCommand.
 func VerifyRPMChecksumCommand(expectedSHA256 string) string {
-	line := fmt.Sprintf("%s  %s\\n", strings.TrimSpace(expectedSHA256), rpmDownloadPath)
-	quotedLine := ShellEscape(line)
-	return strings.Join([]string{
-		"if command -v sha256sum >/dev/null 2>&1; then",
-		"printf " + quotedLine + " | sha256sum -c -;",
-		"elif command -v shasum >/dev/null 2>&1; then",
-		"printf " + quotedLine + " | shasum -a 256 -c -;",
-		"else",
-		"echo 'sha256 tool not found' >&2;",
-		"exit 1;",
-		"fi",
-	}, " ")
+	return rpmManager{}.VerifyChecksumCommand(expectedSHA256)
+}
+
+// FetchRPMChecksum is a back-compat shim. New code should call
+// FetchChecksum.
+func FetchRPMChecksum(ctx context.Context, artifact Artifact) (string, error) {
+	return FetchChecksum(ctx, artifact)
 }
 
 func parseSHA256File(body string, rpmURL string) (string, error) {

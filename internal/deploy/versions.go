@@ -85,14 +85,19 @@ func RPMURLForArch(v *domain.BuckitVersion, arch string) string {
 	return v.RpmURL
 }
 
-func RPMArtifactForArch(v *domain.BuckitVersion, arch string) RPMArtifact {
+// RPMArtifactForArch returns the resolved Artifact for the RPM URL of v
+// at arch, including any sha256 sidecar URLs the catalog knows about.
+// Kept as the RPM-specific entrypoint; DebArtifactForArch is the
+// parallel for Debian.
+func RPMArtifactForArch(v *domain.BuckitVersion, arch string) Artifact {
 	if v == nil {
-		return RPMArtifact{}
+		return Artifact{}
 	}
 	normArch := normalizeReleaseArch(arch)
 	if a := releaseArtifact(v, "rpm", arch); a != nil {
 		shaURLs := uniqueStrings(append([]string{strings.TrimSpace(a.SHA256URL)}, DefaultSHA256URLs(a.URL)...))
-		return RPMArtifact{
+		return Artifact{
+			Kind:       "rpm",
 			URL:        a.URL,
 			SHA256URLs: shaURLs,
 			SHA256:     strings.TrimSpace(a.SHA256),
@@ -126,10 +131,48 @@ func RPMArtifactForArch(v *domain.BuckitVersion, arch string) RPMArtifact {
 			sum = s
 		}
 	}
-	return RPMArtifact{
+	return Artifact{
+		Kind:       "rpm",
 		URL:        url,
 		SHA256URLs: shaURLs,
 		SHA256:     sum,
+	}
+}
+
+// DebURLForArch returns the catalog's .deb URL for arch. The catalog
+// today stores a single DebURL plus per-Artifacts entries that the
+// release classifier fills in for amd64 / arm64. The arch-specific
+// entry wins; the catalog-wide DebURL is the fallback.
+func DebURLForArch(v *domain.BuckitVersion, arch string) string {
+	if v == nil {
+		return ""
+	}
+	if a := releaseArtifact(v, "deb", arch); a != nil {
+		return a.URL
+	}
+	return v.DebURL
+}
+
+// DebArtifactForArch mirrors RPMArtifactForArch for .deb URLs. Sha256
+// sidecar URLs follow the same DefaultSHA256URLs convention.
+func DebArtifactForArch(v *domain.BuckitVersion, arch string) Artifact {
+	if v == nil {
+		return Artifact{}
+	}
+	if a := releaseArtifact(v, "deb", arch); a != nil {
+		shaURLs := uniqueStrings(append([]string{strings.TrimSpace(a.SHA256URL)}, DefaultSHA256URLs(a.URL)...))
+		return Artifact{
+			Kind:       "deb",
+			URL:        a.URL,
+			SHA256URLs: shaURLs,
+			SHA256:     strings.TrimSpace(a.SHA256),
+		}
+	}
+	url := DebURLForArch(v, arch)
+	return Artifact{
+		Kind:       "deb",
+		URL:        url,
+		SHA256URLs: DefaultSHA256URLs(url),
 	}
 }
 
@@ -144,19 +187,56 @@ func ResolveRPMURL(version, arch string) (string, error) {
 	return artifact.URL, nil
 }
 
-func ResolveRPMArtifact(version, arch string) (RPMArtifact, error) {
+func ResolveRPMArtifact(version, arch string) (Artifact, error) {
 	v := VersionByTag(version)
 	if v == nil {
-		return RPMArtifact{}, errors.New("unsupported version " + version)
+		return Artifact{}, errors.New("unsupported version " + version)
 	}
 	artifact := RPMArtifactForArch(v, arch)
 	if artifact.URL == "" {
 		if normalizeReleaseArch(arch) == "" {
-			return RPMArtifact{}, errors.New("no rpm URL for " + version)
+			return Artifact{}, errors.New("no rpm URL for " + version)
 		}
-		return RPMArtifact{}, errors.New("no rpm URL for " + version + " on " + normalizeReleaseArch(arch))
+		return Artifact{}, errors.New("no rpm URL for " + version + " on " + normalizeReleaseArch(arch))
 	}
 	return artifact, nil
+}
+
+// ResolveDebURL returns the Buckit DEB URL for the requested version
+// and optional architecture.
+func ResolveDebURL(version, arch string) (string, error) {
+	artifact, err := ResolveDebArtifact(version, arch)
+	if err != nil {
+		return "", err
+	}
+	return artifact.URL, nil
+}
+
+func ResolveDebArtifact(version, arch string) (Artifact, error) {
+	v := VersionByTag(version)
+	if v == nil {
+		return Artifact{}, errors.New("unsupported version " + version)
+	}
+	artifact := DebArtifactForArch(v, arch)
+	if artifact.URL == "" {
+		if normalizeReleaseArch(arch) == "" {
+			return Artifact{}, errors.New("no deb URL for " + version)
+		}
+		return Artifact{}, errors.New("no deb URL for " + version + " on " + normalizeReleaseArch(arch))
+	}
+	return artifact, nil
+}
+
+// ResolveArtifact picks rpm or deb based on kind ("rpm" | "deb").
+func ResolveArtifact(version, kind, arch string) (Artifact, error) {
+	switch kind {
+	case "rpm", "":
+		return ResolveRPMArtifact(version, arch)
+	case "deb":
+		return ResolveDebArtifact(version, arch)
+	default:
+		return Artifact{}, errors.New("unsupported artifact kind " + kind)
+	}
 }
 
 func ResolveBinaryURL(version, osName, arch string) (string, error) {

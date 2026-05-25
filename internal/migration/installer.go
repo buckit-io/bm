@@ -88,32 +88,37 @@ func (in *Installer) Install(ctx context.Context, host domain.HostRow, params Cu
 		return err
 	}
 
-	// 3. Download the Buckit RPM.
-	url, err := params.ArtifactURL()
+	// 3. Detect the host's package manager, then resolve+fetch the
+	//    matching Buckit artifact.
+	mgr, err := deploy.DetectPackageManagerForClient(ctx, client)
+	if err != nil {
+		reportErr(StageFailed, fmt.Errorf("detect package manager: %w", err))
+		return err
+	}
+	artifact, err := params.ArtifactForKind(mgr.Kind())
 	if err != nil {
 		reportErr(StageFailed, err)
 		return err
 	}
-	expectedSHA256, err := deploy.FetchRPMChecksum(ctx, deploy.CustomRPMArtifact(url))
+	expectedSHA256, err := deploy.FetchChecksum(ctx, artifact)
 	if err != nil {
 		reportErr(StageFailed, fmt.Errorf("checksum: %w", err))
 		return err
 	}
-	report(StageUploadingPkg, "Fetching "+url)
-	if err := deploy.RunStep(ctx, client, deploy.DownloadRPMCommand(url)); err != nil {
+	report(StageUploadingPkg, "Fetching "+artifact.URL)
+	if err := deploy.RunStep(ctx, client, mgr.DownloadCommand(artifact.URL)); err != nil {
 		reportErr(StageFailed, fmt.Errorf("download: %w", err))
 		return err
 	}
-	report(StageUploadingPkg, "Verifying /tmp/buckit.rpm sha256")
-	if err := deploy.RunStep(ctx, client, deploy.VerifyRPMChecksumCommand(expectedSHA256)); err != nil {
+	report(StageUploadingPkg, fmt.Sprintf("Verifying %s sha256", mgr.LocalFile()))
+	if err := deploy.RunStep(ctx, client, mgr.VerifyChecksumCommand(expectedSHA256)); err != nil {
 		reportErr(StageFailed, fmt.Errorf("checksum: %w", err))
 		return err
 	}
 
 	// 4. Install the package.
-	report(StageInstalling, "Installing /tmp/buckit.rpm")
-	pkgCmd := deploy.PickInstallCmd(ctx, client)
-	if err := deploy.RunStep(ctx, client, deploy.SudoWrap(creds, pkgCmd)); err != nil {
+	report(StageInstalling, fmt.Sprintf("Installing %s", mgr.LocalFile()))
+	if err := deploy.RunStep(ctx, client, deploy.SudoWrap(creds, mgr.InstallCommand(deploy.InstallActionFresh))); err != nil {
 		reportErr(StageFailed, fmt.Errorf("install: %w", err))
 		return err
 	}

@@ -61,9 +61,10 @@
 
 .import__log-line {
   display: grid;
-  grid-template-columns: 16px 1fr;
+  grid-template-columns: 20px 1fr;
   gap: var(--s-2);
   color: var(--c-fg-muted);
+  align-items: baseline;
 }
 .import__log-line--ok {
   color: var(--c-success);
@@ -73,6 +74,9 @@
 }
 .import__log-icon {
   text-align: center;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-bold);
+  line-height: 1.1;
 }
 
 /* ── discovery summary grid ────────────────────────────────────── */

@@ -69,7 +69,7 @@ export interface NIC {
   speedMbps: number;
 }
 
-export type DriveState = "ready" | "healing" | "failed";
+export type DriveState = "ready" | "healing" | "failed" | "unknown";
 
 export interface Drive {
   mount: string;
@@ -81,7 +81,12 @@ export interface Drive {
   isBoot?: boolean;
 }
 
-export type NodeState = "online" | "offline" | "degraded" | "unknown";
+export type NodeState =
+  | "online"
+  | "offline"
+  | "degraded"
+  | "unknown"
+  | "unreachable";
 
 export interface Node {
   id: string;
@@ -109,6 +114,77 @@ export interface Node {
   consoleAccessible: boolean;
 }
 
+// ---- health info (admin /healthinfo per host) ----
+//
+// Sourced from GET /api/v1/clusters/:id/healthinfo. The endpoint hits the
+// upstream MinIO Admin API's /healthinfo route, which carries kernel/CPU/
+// RAM/NIC facts that /info doesn't. Join on hostname (addr is host:port).
+
+export interface HostOSInfo {
+  kernelVersion?: string;
+  kernelArch?: string;
+  platform?: string;
+  platformFamily?: string;
+  platformVersion?: string;
+  hostname?: string;
+  uptime?: number;
+  bootTime?: number;
+}
+
+export interface HostMemInfo {
+  total?: number;
+  used?: number;
+  free?: number;
+  available?: number;
+  swapTotal?: number;
+}
+
+export interface HostCPUInfo {
+  modelName?: string;
+  vendorId?: string;
+  mhz?: number;
+  cores?: number;
+  physicalId?: string;
+}
+
+export interface HostNICInfo {
+  interface?: string;
+  driver?: string;
+  firmwareVersion?: string;
+}
+
+export interface HostHealthInfo {
+  addr: string;
+  os?: HostOSInfo;
+  mem?: HostMemInfo;
+  cpus?: HostCPUInfo[];
+  nics?: HostNICInfo[];
+  errors?: string[];
+}
+
+export interface HealthInfo {
+  version?: string;
+  timestamp: string;
+  hosts: HostHealthInfo[];
+  error?: string;
+}
+
+// ---- node logs (one-shot journalctl fetch) ----
+
+export type NodeLogsRange = "15m" | "1h" | "6h" | "24h" | "7d";
+
+export interface NodeLogsResponse {
+  host: string;
+  unit: string;
+  since: NodeLogsRange;
+  limit: number;
+  fetchedAt: string;
+  lines: string[];
+  truncated: boolean;
+  exitCode: number;
+  stderr?: string;
+}
+
 // ---- ssh credentials (per cluster + per host overrides) ----
 
 export type AuthMethod = "key" | "password" | "agent";
@@ -116,6 +192,7 @@ export type AuthMethod = "key" | "password" | "agent";
 export interface SshCreds {
   authMethod: AuthMethod;
   user: string;
+  port?: number;
   keyPath?: string;
   keyPassphrase?: string;
   password?: string;

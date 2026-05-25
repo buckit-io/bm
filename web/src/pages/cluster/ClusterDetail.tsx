@@ -39,6 +39,8 @@ function nodeStatePill(n: Node) {
       return <Pill tone="warning" icon="⚠">Degraded</Pill>;
     case "offline":
       return <Pill tone="danger" icon="✗">Offline</Pill>;
+    case "unreachable":
+      return <Pill tone="danger" icon="✗">Unreachable</Pill>;
     default:
       return <Pill tone="neutral" icon="○">Unknown</Pill>;
   }
@@ -87,6 +89,7 @@ function summarizePools(nodes: Node[], parity: number): PoolSummary[] {
     else p.nodes.offline++;
     for (const d of n.drives ?? []) {
       if (d.isBoot) continue;
+      if (d.state === "unknown") continue; // admin API down; exclude from counts
       p.drives.total++;
       if (d.state === "ready") p.drives.ready++;
       else if (d.state === "healing") p.drives.healing++;
@@ -153,8 +156,9 @@ type SortDir = "asc" | "desc";
 const STATE_RANK: Record<Node["state"], number> = {
   online: 0,
   degraded: 1,
-  offline: 2,
-  unknown: 3,
+  unreachable: 2,
+  offline: 3,
+  unknown: 4,
 };
 
 function sortValue(n: Node, key: SortKey): string | number {
@@ -314,7 +318,7 @@ export function ClusterDetailLayout() {
         .finally(() => {
           refreshRunningRef.current = false;
         });
-    }, 30 * 60 * 1000);
+    }, 15 * 1000);
     return () => {
       window.clearInterval(id);
       clearFollowupTimers();
@@ -424,6 +428,25 @@ export function ClusterDetailLayout() {
     window.addEventListener("mousedown", onMouseDown);
     return () => window.removeEventListener("mousedown", onMouseDown);
   }, [actionsOpen]);
+
+  // ---- gear / settings menu ----
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const onMouseDown = (e: MouseEvent) => {
+      const target = e.target as globalThis.Node | null;
+      if (
+        settingsMenuRef.current &&
+        target &&
+        !settingsMenuRef.current.contains(target)
+      ) {
+        setSettingsOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", onMouseDown);
+    return () => window.removeEventListener("mousedown", onMouseDown);
+  }, [settingsOpen]);
   const [activeOp, setActiveOp] = useState<ActiveOp | null>(null);
   const [showSshRequired, setShowSshRequired] = useState(false);
   const sshConfigured = !!sshConfig;
@@ -479,27 +502,53 @@ export function ClusterDetailLayout() {
     <section className="cdetail">
       {/* ── header ──────────────────────────────────────────────────── */}
       <header className="cdetail__header">
-        <div>
-          <div
-            className="subtle"
-            style={{ marginBottom: "var(--s-2)", fontSize: "var(--fs-sm)" }}
-          >
-            <Link to="/clusters">Clusters</Link>
-            <span> / </span>
-            <span>{cluster.name}</span>
-          </div>
-          <h1 className="cdetail__name">
-            {cluster.name}
-            {clusterHealthPill(cluster)}
-          </h1>
-          <p className="muted cdetail__meta">
-            {cluster.version} · {cluster.nodeCount} nodes · {cluster.poolCount} pool ·
-            EC:{cluster.parity}
-            {cluster.migratedFrom &&
-              ` · migrated from MinIO ${cluster.migratedFrom.version}`}
-          </p>
+        {/* breadcrumb spans full width above the title row */}
+        <div
+          className="subtle cdetail__breadcrumb"
+        >
+          <Link to="/clusters">Clusters</Link>
+          <span> / </span>
+          <span>{cluster.name}</span>
         </div>
-        <div className="hstack">
+        {/* title row: name+meta on the left, action buttons on the right */}
+        <div className="cdetail__header-row">
+          <div>
+            <h1 className="cdetail__name">
+              {cluster.name}
+              {clusterHealthPill(cluster)}
+              <div className="cdetail__gear-wrap" ref={settingsMenuRef}>
+                <button
+                  type="button"
+                  className="cdetail__gear-btn"
+                  onClick={() => setSettingsOpen((v) => !v)}
+                  aria-haspopup="menu"
+                  aria-expanded={settingsOpen}
+                  title="Cluster settings"
+                >
+                  <span className="gear-icon">⚙</span> settings
+                </button>
+                {settingsOpen && (
+                  <div className="cdetail__menu" role="menu">
+                    {renderSettingsMenu(cluster, (op) => {
+                      setSettingsOpen(false);
+                      if (op.flavor === "navigate" && op.navigateTo) {
+                        navigate(op.navigateTo(cluster));
+                        return;
+                      }
+                      setActiveOp({ op });
+                    })}
+                  </div>
+                )}
+              </div>
+            </h1>
+            <p className="muted cdetail__meta">
+              {cluster.version} · {cluster.nodeCount} nodes · {cluster.poolCount} pool ·
+              EC:{cluster.parity}
+              {cluster.migratedFrom &&
+                ` · migrated from MinIO ${cluster.migratedFrom.version}`}
+            </p>
+          </div>
+          <div className="hstack">
           {cluster.consoleUrl && (
             <a
               className="btn"
@@ -547,6 +596,7 @@ export function ClusterDetailLayout() {
             )}
           </div>
         </div>
+      </div>
       </header>
 
       {/* ── summary cards ──────────────────────────────────────────── */}
@@ -944,9 +994,9 @@ export function ClusterDetailLayout() {
   );
 }
 
-// Renders the Cluster Actions menu, grouped by transport (admin /
-// ssh / manager). Filters out items hidden by their `visible`
-// predicate.
+// Renders the Cluster Actions menu, grouped by transport (admin / ssh).
+// The "manager" group (settings, remove) has moved to the gear menu.
+// Filters out items hidden by their `visible` predicate.
 function renderActionsMenu(
   cluster: Cluster,
   onPick: (op: OperationDef) => void,
@@ -954,7 +1004,7 @@ function renderActionsMenu(
   const visible = CLUSTER_OPERATIONS.filter(
     (o) => o.visible?.(cluster) ?? true,
   );
-  const groups: OperationDef["group"][] = ["admin", "ssh", "manager"];
+  const groups: OperationDef["group"][] = ["admin", "ssh"];
   return groups.flatMap((g) => {
     const items = visible.filter((o) => o.group === g);
     if (items.length === 0) return [];
@@ -983,6 +1033,37 @@ function renderActionsMenu(
       )),
     ];
   });
+}
+
+// Renders the gear / settings menu: Configure admin creds, Configure SSH,
+// and Remove cluster definition. These are "manager" group items that live
+// near the cluster label rather than in the main Cluster Actions dropdown.
+function renderSettingsMenu(
+  cluster: Cluster,
+  onPick: (op: OperationDef) => void,
+) {
+  const items = CLUSTER_OPERATIONS.filter(
+    (o) => o.group === "manager" && (o.visible?.(cluster) ?? true),
+  );
+  return items.map((op) => (
+    <button
+      key={op.id}
+      className={
+        "cdetail__menu-item cdetail__menu-item--stacked" +
+        (op.danger ? " is-danger" : "")
+      }
+      onClick={() => onPick(op)}
+      role="menuitem"
+    >
+      <div>{op.dynamicLabel ? op.dynamicLabel(cluster) : op.label}</div>
+      <div
+        className="subtle"
+        style={{ fontSize: "var(--fs-xs)", fontWeight: 400 }}
+      >
+        {op.description}
+      </div>
+    </button>
+  ));
 }
 
 function formatUptime(sec: number): string {

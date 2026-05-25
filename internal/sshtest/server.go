@@ -246,10 +246,27 @@ func runFakeCommand(cmd string, stdout io.Writer, stderr io.Writer) int {
 	case cmd == "command -v dnf":
 		fmt.Fprintln(stdout, "/usr/bin/dnf")
 		return 0
+	case strings.Contains(cmd, "command -v dnf") && strings.Contains(cmd, "command -v yum") && strings.Contains(cmd, "command -v apt-get"):
+		// Combined probe used by deploy.DetectPackageManager. Default
+		// to an RPM host (dnf available) — tests that need a deb host
+		// install a CmdOverride that intercepts this case first.
+		fmt.Fprintln(stdout, "/usr/bin/dnf")
+		fmt.Fprintln(stdout, "/usr/bin/yum")
+		fmt.Fprintln(stdout, "")
+		return 0
 	case strings.HasPrefix(cmd, "command -v "):
 		return 1
 	case strings.HasPrefix(cmd, "rpm -q ") || strings.HasPrefix(cmd, "dpkg -s "):
 		return 1
+	case strings.HasPrefix(cmd, "dpkg-query -W ") || strings.HasPrefix(cmd, "dpkg-deb -f ") || strings.HasPrefix(cmd, "dpkg --compare-versions "):
+		// dpkg machinery the Debian path uses. Default to "nothing
+		// installed"; tests that need a populated dpkg-query response
+		// install a CmdOverride.
+		return 0
+	case strings.HasPrefix(cmd, "curl -fSL -o /tmp/buckit.deb"):
+		return 0
+	case strings.HasPrefix(cmd, "apt-get install"):
+		return 0
 	case strings.HasPrefix(cmd, "ss -ltn"):
 		fmt.Fprintln(stdout, "State   Recv-Q Send-Q   Local Address:Port    Peer Address:Port")
 		return 0

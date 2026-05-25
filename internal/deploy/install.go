@@ -2,6 +2,8 @@ package deploy
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -79,44 +81,42 @@ func (in *Installer) Install(ctx context.Context, host domain.HostRow, params De
 		return err
 	}
 
-	url, err := params.ArtifactURL()
+	mgr, err := DetectPackageManager(ctx, func(probeCtx context.Context, cmd string) (string, error) {
+		r, runErr := bmssh.Run(probeCtx, client, cmd)
+		if runErr != nil {
+			return r.Stdout, runErr
+		}
+		return r.Stdout, nil
+	})
+	if err != nil {
+		reportErr(StageFailed, fmt.Errorf("detect package manager: %w", err))
+		return err
+	}
+
+	artifact, err := params.ArtifactForKind(mgr.Kind())
 	if err != nil {
 		reportErr(StageFailed, err)
 		return err
 	}
-	artifact := CustomRPMArtifact(url)
-	if params.Version != "custom" {
-		arch, err := params.clusterArch()
-		if err != nil {
-			reportErr(StageFailed, err)
-			return err
-		}
-		artifact, err = ResolveRPMArtifact(params.Version, arch)
-		if err != nil {
-			reportErr(StageFailed, fmt.Errorf("deploy: %w", err))
-			return err
-		}
-	}
-	expectedSHA256, err := FetchRPMChecksum(ctx, artifact)
+	expectedSHA256, err := FetchChecksum(ctx, artifact)
 	if err != nil {
 		reportErr(StageFailed, fmt.Errorf("checksum: %w", err))
 		return err
 	}
 
-	report(StageDownloading, fmt.Sprintf("Fetching %s", url))
-	if err := runStep(ctx, client, DownloadRPMCommand(url)); err != nil {
+	report(StageDownloading, fmt.Sprintf("Fetching %s", artifact.URL))
+	if err := runStep(ctx, client, mgr.DownloadCommand(artifact.URL)); err != nil {
 		reportErr(StageFailed, fmt.Errorf("download: %w", err))
 		return err
 	}
-	report(StageDownloading, "Verifying /tmp/buckit.rpm sha256")
-	if err := runStep(ctx, client, VerifyRPMChecksumCommand(expectedSHA256)); err != nil {
+	report(StageDownloading, fmt.Sprintf("Verifying %s sha256", mgr.LocalFile()))
+	if err := runStep(ctx, client, mgr.VerifyChecksumCommand(expectedSHA256)); err != nil {
 		reportErr(StageFailed, fmt.Errorf("checksum: %w", err))
 		return err
 	}
 
-	report(StageInstalling, "Installing /tmp/buckit.rpm")
-	pkgCmd := pickInstallCmd(ctx, client)
-	if err := runStep(ctx, client, pkgCmd); err != nil {
+	report(StageInstalling, fmt.Sprintf("Installing %s", mgr.LocalFile()))
+	if err := runStep(ctx, client, mgr.InstallCommand(InstallActionFresh)); err != nil {
 		reportErr(StageFailed, fmt.Errorf("install: %w", err))
 		return err
 	}
@@ -131,6 +131,15 @@ func (in *Installer) Install(ctx context.Context, host domain.HostRow, params De
 	if err := runStep(ctx, client, sudoWrap(creds, prepareStorageCmd(params.Topology.SelectedMounts, serviceUser, serviceGroup))); err != nil {
 		reportErr(StageFailed, fmt.Errorf("storage permissions: %w", err))
 		return err
+	}
+
+	if params.TLS.Enabled() {
+		report(StageWritingConfig, "Installing TLS certificate to "+CertsDir)
+		certCmd := writeCertsCmd(params.TLS, serviceUser, serviceGroup)
+		if err := runStep(ctx, client, sudoWrap(creds, certCmd)); err != nil {
+			reportErr(StageFailed, fmt.Errorf("tls certs: %w", err))
+			return err
+		}
 	}
 
 	// Write the secondary env file first so that if its write fails the
@@ -168,7 +177,7 @@ func (in *Installer) Install(ctx context.Context, host domain.HostRow, params De
 	}
 
 	report(StageHealthy, "Waiting for /minio/health/live")
-	if err := in.waitHealthy(ctx, client, params.API.Port); err != nil {
+	if err := in.waitHealthy(ctx, client, params.API.Port, params.TLS.Enabled()); err != nil {
 		reportErr(StageFailed, fmt.Errorf("health: %w", err))
 		return err
 	}
@@ -200,16 +209,26 @@ func RunStep(ctx context.Context, client *ssh.Client, cmd string) error {
 	return nil
 }
 
-func (in *Installer) waitHealthy(ctx context.Context, client *ssh.Client, port int) error {
+func (in *Installer) waitHealthy(ctx context.Context, client *ssh.Client, port int, tls bool) error {
 	if port == 0 {
 		port = 9000
 	}
+	// 127.0.0.1 is rarely in the cert SANs, so skip verification on this
+	// loopback liveness probe. Real verification happens against the
+	// cluster's external URL via admin creds elsewhere.
+	curlOpts := "-fsS --max-time 5"
+	scheme := "http"
+	if tls {
+		curlOpts += " -k"
+		scheme = "https"
+	}
+	probe := fmt.Sprintf("curl %s %s://127.0.0.1:%d/minio/health/live", curlOpts, scheme, port)
 	deadline := time.Now().Add(in.HealthyTimeout)
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		r, err := bmssh.Run(ctx, client, fmt.Sprintf("curl -fsS --max-time 5 http://127.0.0.1:%d/minio/health/live", port))
+		r, err := bmssh.Run(ctx, client, probe)
 		if err == nil && r.ExitCode == 0 {
 			return nil
 		}
@@ -260,28 +279,16 @@ func detectServiceUserGroup(ctx context.Context, client *ssh.Client, creds bmssh
 	return user, group, nil
 }
 
-// pickInstallCmd picks the right package manager by probing for one.
-func pickInstallCmd(ctx context.Context, client *ssh.Client) string {
-	return PickInstallCmd(ctx, client)
-}
-
-// PickInstallCmd is the exported variant the migration package reuses for
-// the cutover install step. Probes for dnf / yum / apt-get and returns the
-// command that installs /tmp/buckit.rpm.
-func PickInstallCmd(ctx context.Context, client *ssh.Client) string {
-	for _, mgr := range []string{"dnf", "yum", "apt-get"} {
-		r, err := bmssh.Run(ctx, client, "command -v "+mgr)
-		if err == nil && r.ExitCode == 0 {
-			switch mgr {
-			case "dnf", "yum":
-				return mgr + " install -y /tmp/buckit.rpm"
-			case "apt-get":
-				return "apt-get install -y /tmp/buckit.rpm"
-			}
+// DetectPackageManagerForClient runs DetectPackageManager against an
+// already-open *ssh.Client. Convenience for the migration installer.
+func DetectPackageManagerForClient(ctx context.Context, client *ssh.Client) (PackageManager, error) {
+	return DetectPackageManager(ctx, func(probeCtx context.Context, cmd string) (string, error) {
+		r, err := bmssh.Run(probeCtx, client, cmd)
+		if err != nil {
+			return r.Stdout, err
 		}
-	}
-	// Fall back to dnf — the preflight rejects hosts that lack it.
-	return "dnf install -y /tmp/buckit.rpm"
+		return r.Stdout, nil
+	})
 }
 
 // secondaryEnvFile is the canonical path for the secondary env file that
@@ -293,18 +300,25 @@ const secondaryEnvFile = "/etc/minio/config.env"
 
 // renderConfigEnv writes the /etc/default/minio body with the path to the
 // secondary env file (which carries the root credentials), region, listen
-// ports, and the selected MINIO_VOLUMES.
+// ports, and the selected MINIO_VOLUMES. When TLS is enabled the rendered
+// scheme flips to https and MINIO_OPTS gains --certs-dir.
 func renderConfigEnv(p DeployParams, host domain.HostRow) string {
+	scheme := "http"
+	opts := fmt.Sprintf("--address :%d --console-address :%d", p.API.Port, p.API.ConsolePort)
+	if p.TLS.Enabled() {
+		scheme = "https"
+		opts = fmt.Sprintf("%s --certs-dir %s", opts, CertsDir)
+	}
 	volumes := renderVolumes(p)
 	serverURL := strings.TrimSpace(p.ServerURL)
 	if serverURL == "" {
-		serverURL = fmt.Sprintf("http://%s:%d", host.Hostname, p.API.Port)
+		serverURL = fmt.Sprintf("%s://%s:%d", scheme, host.Hostname, p.API.Port)
 	}
 	var b strings.Builder
 	b.WriteString(formatEnv("MINIO_CONFIG_ENV_FILE", secondaryEnvFile))
 	b.WriteString(formatEnv("MINIO_VOLUMES", volumes))
 	b.WriteString(formatEnv("MINIO_REGION", p.Region))
-	b.WriteString(formatEnv("MINIO_OPTS", fmt.Sprintf("--address :%d --console-address :%d", p.API.Port, p.API.ConsolePort)))
+	b.WriteString(formatEnv("MINIO_OPTS", opts))
 	b.WriteString(formatEnv("MINIO_SERVER_URL", serverURL))
 	return b.String()
 }
@@ -321,6 +335,57 @@ func renderSecondaryConfigEnv(p DeployParams) string {
 }
 
 func formatEnv(k, v string) string { return fmt.Sprintf("%s=%q\n", k, v) }
+
+// writeCertsCmd builds the shell pipeline that lays down the TLS material
+// MinIO reads on startup. Files land under CertsDir; the directory is mode
+// 0700 and the cert files are mode 0600 owned by the service user. Uses
+// `install` for atomic-create + mode/owner in one syscall and a heredoc per
+// file. The same writer pattern that lays down /etc/minio/config.env.
+func writeCertsCmd(tls domain.TLSConfig, user, group string) string {
+	u, g := ShellEscape(user), ShellEscape(group)
+	var b strings.Builder
+	b.WriteString("set -e\n")
+	// install -o takes only a username; group is a separate -g flag.
+	b.WriteString("install -d -o " + u + " -g " + g + " -m 700 " + ShellEscape(CertsDir) + "\n")
+	b.WriteString(installPemFile(CertPath, u, g, "600", tls.CertPEM))
+	b.WriteString(installPemFile(KeyPath, u, g, "600", tls.KeyPEM))
+	if strings.TrimSpace(tls.CABundlePEM) != "" {
+		b.WriteString("install -d -o " + u + " -g " + g + " -m 755 " + ShellEscape(CertsDir+"/CAs") + "\n")
+		b.WriteString(installPemFile(CABundlePath, u, g, "644", tls.CABundlePEM))
+	}
+	return b.String()
+}
+
+func installPemFile(path, user, group, mode, body string) string {
+	quoted := ShellEscape(path)
+	// Per-call random heredoc terminator: a fixed marker (e.g. "BMPEM") could
+	// collide with operator-supplied PEM content and either truncate the write
+	// or inject the remainder as shell. 16 hex chars = 64 bits of entropy;
+	// collision with an arbitrary cert body is effectively impossible.
+	marker := randomHeredocMarker()
+	return fmt.Sprintf(
+		"install -o %s -g %s -m %s /dev/null %s\n"+
+			"tee %s > /dev/null <<'%s'\n%s%s\n",
+		user, group, mode, quoted, quoted, marker, ensureTrailingNewline(body), marker,
+	)
+}
+
+func randomHeredocMarker() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		// rand.Read on a sane OS never errors; if it did, fall back to a
+		// timestamp-derived marker — still unlikely to collide.
+		return fmt.Sprintf("BMPEM%d", time.Now().UnixNano())
+	}
+	return "BMPEM_" + hex.EncodeToString(b)
+}
+
+func ensureTrailingNewline(s string) string {
+	if strings.HasSuffix(s, "\n") {
+		return s
+	}
+	return s + "\n"
+}
 
 func prepareStorageCmd(mounts []string, user, group string) string {
 	owner := ShellEscape(user) + ":" + ShellEscape(group)

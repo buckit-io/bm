@@ -8,9 +8,15 @@ import {
   validateRootUser,
 } from "../../../../lib/credentials";
 import {
+  looksLikePemCert,
+  looksLikePemKey,
+  readFileAsText,
+} from "../../../../lib/tls";
+import {
   CUSTOM_VERSION,
   CustomUrlCheck,
   NewClusterDraft,
+  TlsConfig,
 } from "../state";
 
 interface Props {
@@ -261,6 +267,12 @@ export function Basics({ draft, update }: Props) {
         )}
       </div>
 
+      {/* ── Transport security ────────────────────────────────────── */}
+      <TlsSection
+        tls={draft.tls}
+        onChange={(tls) => update({ tls })}
+      />
+
       {/* ── Region + Server URL ───────────────────────────────────── */}
       <div className="field">
         <label className="field-label" htmlFor="region">Region</label>
@@ -282,7 +294,7 @@ export function Basics({ draft, update }: Props) {
           className="input"
           value={draft.serverUrl}
           onChange={(e) => update({ serverUrl: e.target.value })}
-          placeholder={`http://<first host>:${draft.api.port}`}
+          placeholder={`${draft.tls.mode === "byo" ? "https" : "http"}://<first host>:${draft.api.port}`}
         />
         <span className="field-hint">
           Used in pre-signed URLs and admin responses. Prefer the load
@@ -291,6 +303,192 @@ export function Basics({ draft, update }: Props) {
           from the first host at deploy time.
         </span>
       </div>
+    </div>
+  );
+}
+
+interface TlsSectionProps {
+  tls: TlsConfig;
+  onChange: (tls: TlsConfig) => void;
+}
+
+function TlsSection({ tls, onChange }: TlsSectionProps) {
+  const certRef = useRef<HTMLInputElement>(null);
+  const keyRef = useRef<HTMLInputElement>(null);
+  const caRef = useRef<HTMLInputElement>(null);
+
+  const onFile = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+    field: "certPem" | "keyPem" | "caBundlePem",
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await readFileAsText(file);
+      onChange({ ...tls, [field]: text });
+    } finally {
+      // Clear so re-loading the same file re-fires onChange.
+      e.target.value = "";
+    }
+  };
+
+  // Inline sanity hints — backend re-validates everything authoritatively
+  // (see internal/deploy/params.go Validate).
+  const certHint =
+    tls.mode === "byo" && tls.certPem.trim().length > 0 && !looksLikePemCert(tls.certPem)
+      ? "Doesn't look like a PEM certificate. Expected -----BEGIN CERTIFICATE----- block."
+      : null;
+  const keyHint =
+    tls.mode === "byo" && tls.keyPem.trim().length > 0 && !looksLikePemKey(tls.keyPem)
+      ? "Doesn't look like a PEM private key (PKCS#1, PKCS#8, or SEC1 EC)."
+      : null;
+
+  return (
+    <div className="vstack" style={{ gap: "var(--s-3)" }}>
+      <div className="field-label" style={{ fontSize: "var(--fs-md)" }}>
+        Transport security
+      </div>
+      <div className="hstack" style={{ gap: "var(--s-4)", flexWrap: "wrap" }}>
+        <label className="hstack" style={{ gap: "var(--s-2)", alignItems: "center" }}>
+          <input
+            type="radio"
+            name="tls-mode"
+            checked={tls.mode === "off"}
+            onChange={() => onChange({ ...tls, mode: "off" })}
+          />
+          <span>Disabled (HTTP)</span>
+        </label>
+        <label className="hstack" style={{ gap: "var(--s-2)", alignItems: "center" }}>
+          <input
+            type="radio"
+            name="tls-mode"
+            checked={tls.mode === "byo"}
+            onChange={() => onChange({ ...tls, mode: "byo" })}
+          />
+          <span>Enable TLS (HTTPS) — provide certificate</span>
+        </label>
+      </div>
+      <span className="field-hint">
+        TLS encrypts internal and external traffic so credentials and object
+        data aren't sent in plaintext. You'll need two PEM files: a server
+        certificate and its matching private key.
+      </span>
+
+      {tls.mode === "byo" && (
+        <>
+          <div className="field">
+            <div
+              className="hstack"
+              style={{ justifyContent: "space-between", alignItems: "baseline" }}
+            >
+              <label className="field-label" htmlFor="tls-cert">
+                Server certificate (PEM)
+              </label>
+              <button
+                type="button"
+                className="btn btn--sm"
+                onClick={() => certRef.current?.click()}
+              >
+                Load from file…
+              </button>
+              <input
+                ref={certRef}
+                type="file"
+                accept=".pem,.crt,.cer,text/plain"
+                style={{ display: "none" }}
+                onChange={(e) => onFile(e, "certPem")}
+              />
+            </div>
+            <textarea
+              id="tls-cert"
+              className="input"
+              rows={12}
+              spellCheck={false}
+              value={tls.certPem}
+              onChange={(e) => onChange({ ...tls, certPem: e.target.value })}
+              placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"
+            />
+            {certHint && (
+              <span className="field-hint" style={{ color: "var(--c-danger)" }}>
+                {certHint}
+              </span>
+            )}
+          </div>
+
+          <div className="field">
+            <div
+              className="hstack"
+              style={{ justifyContent: "space-between", alignItems: "baseline" }}
+            >
+              <label className="field-label" htmlFor="tls-key">
+                Private key (PEM)
+              </label>
+              <button
+                type="button"
+                className="btn btn--sm"
+                onClick={() => keyRef.current?.click()}
+              >
+                Load from file…
+              </button>
+              <input
+                ref={keyRef}
+                type="file"
+                accept=".pem,.key,text/plain"
+                style={{ display: "none" }}
+                onChange={(e) => onFile(e, "keyPem")}
+              />
+            </div>
+            <textarea
+              id="tls-key"
+              className="input"
+              rows={12}
+              spellCheck={false}
+              value={tls.keyPem}
+              onChange={(e) => onChange({ ...tls, keyPem: e.target.value })}
+              placeholder="-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----"
+            />
+            {keyHint && (
+              <span className="field-hint" style={{ color: "var(--c-danger)" }}>
+                {keyHint}
+              </span>
+            )}
+          </div>
+
+          <div className="field">
+            <div
+              className="hstack"
+              style={{ justifyContent: "space-between", alignItems: "baseline" }}
+            >
+              <label className="field-label" htmlFor="tls-ca">
+                CA bundle (PEM, optional)
+              </label>
+              <button
+                type="button"
+                className="btn btn--sm"
+                onClick={() => caRef.current?.click()}
+              >
+                Load from file…
+              </button>
+              <input
+                ref={caRef}
+                type="file"
+                accept=".pem,.crt,.cer,text/plain"
+                style={{ display: "none" }}
+                onChange={(e) => onFile(e, "caBundlePem")}
+              />
+            </div>
+            <textarea
+              id="tls-ca"
+              className="input"
+              rows={10}
+              spellCheck={false}
+              value={tls.caBundlePem}
+              onChange={(e) => onChange({ ...tls, caBundlePem: e.target.value })}
+              placeholder="Only needed if intermediates aren't chained into the certificate above."
+            />
+          </div>
+        </>
+      )}
     </div>
   );
 }

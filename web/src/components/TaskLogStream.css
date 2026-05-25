@@ -39,7 +39,13 @@
 }
 
 .logstream__ts { color: var(--c-fg-subtle); }
-.logstream__src { color: var(--c-info); font-weight: var(--fw-medium); }
+.logstream__src {
+  color: var(--c-info);
+  font-weight: var(--fw-bold);
+  font-size: var(--fs-md);
+  line-height: 1.2;
+  text-align: center;
+}
 .logstream__text { color: var(--c-fg); white-space: pre-wrap; }
 
 .logstream__line--ok .logstream__src,

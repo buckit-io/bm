@@ -23,7 +23,7 @@ func TestFetchRPMChecksumSingleEntry(t *testing.T) {
 	srv.Start()
 	defer srv.Close()
 
-	sum, err := FetchRPMChecksum(context.Background(), RPMArtifact{
+	sum, err := FetchRPMChecksum(context.Background(), Artifact{
 		URL:        "https://example.test/buckit.rpm",
 		SHA256URLs: []string{srv.URL},
 	})
@@ -50,7 +50,7 @@ func TestFetchRPMChecksumMatchesArtifactName(t *testing.T) {
 	srv.Start()
 	defer srv.Close()
 
-	sum, err := FetchRPMChecksum(context.Background(), RPMArtifact{
+	sum, err := FetchRPMChecksum(context.Background(), Artifact{
 		URL:        "https://example.test/buckit-arm64.rpm",
 		SHA256URLs: []string{srv.URL},
 	})
@@ -152,7 +152,7 @@ func TestFetchRPMChecksumTriesSha256sumThenSha256ThenDigest(t *testing.T) {
 	srv.Start()
 	defer srv.Close()
 
-	sum, err := FetchRPMChecksum(context.Background(), RPMArtifact{
+	sum, err := FetchRPMChecksum(context.Background(), Artifact{
 		URL:        "https://example.test/pkg.rpm",
 		SHA256URLs: []string{srv.URL + "/pkg.rpm.sha256sum", srv.URL + "/pkg.rpm.sha256"},
 		SHA256:     strings.Repeat("e", 64),
@@ -169,7 +169,7 @@ func TestFetchRPMChecksumTriesSha256sumThenSha256ThenDigest(t *testing.T) {
 }
 
 func TestFetchRPMChecksumFallsBackToGitHubDigest(t *testing.T) {
-	sum, err := FetchRPMChecksum(context.Background(), RPMArtifact{
+	sum, err := FetchRPMChecksum(context.Background(), Artifact{
 		URL:        "https://example.test/pkg.rpm",
 		SHA256URLs: []string{"https://example.test/pkg.rpm.sha256sum", "https://example.test/pkg.rpm.sha256"},
 		SHA256:     strings.Repeat("f", 64),

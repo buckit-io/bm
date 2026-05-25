@@ -61,11 +61,49 @@ export interface NewClusterDraft {
   hosts: HostRow[];
   ssh: SshCreds;
 
+  // Transport security for the deployed cluster. "off" leaves MinIO on
+  // HTTP. "byo" ships the operator-supplied cert + key into
+  // /etc/minio/certs on every node and flips MINIO_VOLUMES to https.
+  // Per the MinIO TLS guide, one cert with SANs covering every
+  // hostname is the standard layout — backend preflight enforces that.
+  tls: TlsConfig;
+
   discovery: Record<string, DiscoveryResult>;
   topology: Topology;
   preflight: PreflightResult[];
   deploy: DeployState;
   done: DoneState;
+}
+
+export type TlsMode = "off" | "byo";
+
+// TlsConfig holds the operator's TLS choice for the cluster. PEMs are
+// pasted (or loaded from a file in the browser) and only live in the
+// wizard's in-memory draft — there is no persistence layer for drafts,
+// so no at-rest encryption concern. The backend re-validates everything
+// in DeployParams.Validate before any of this lands on a host.
+export interface TlsConfig {
+  mode: TlsMode;
+  // PEM-encoded leaf cert (optionally followed by intermediates).
+  certPem: string;
+  // PEM-encoded private key (PKCS#1, PKCS#8, or SEC1 EC).
+  keyPem: string;
+  // Optional concatenated CA bundle. Only needed when intermediates
+  // aren't already chained into certPem and the chain isn't reachable
+  // via the system trust store.
+  caBundlePem: string;
+  // Derived from certPem by the Basics step; surfaced in the UI for
+  // confidence and in the Review summary. Not sent to the server.
+  parsed?: ParsedCert;
+  // Set when certPem/keyPem failed to parse or didn't pair. Blocks Next.
+  parseError?: string;
+}
+
+export interface ParsedCert {
+  commonName: string;
+  sans: string[];      // DNS SANs + IP SANs, mixed.
+  notBefore: string;   // ISO 8601.
+  notAfter: string;    // ISO 8601.
 }
 
 // Per-host override for SSH credentials. Any field left undefined falls
@@ -97,6 +135,10 @@ export interface HostRow {
 export interface SshCreds {
   authMethod: "agent" | "key" | "password";
   user: string;
+  // Cluster-wide SSH port. Saving the cluster SSH config propagates this
+  // to every node's `sshPort`, so the periodic TCP probe and per-host
+  // SSH ops pick it up. Omitted/zero means "leave node ports alone".
+  port?: number;
   // Used when authMethod === "key": absolute or `~`-relative path to a
   // private key file the bm process can read. Stored as a path (not the
   // key bytes) because bm runs as the operator's process and shares the
@@ -215,6 +257,7 @@ export function emptyDraft(): NewClusterDraft {
       { id: "h1", hostname: "", port: 22, probe: "idle" },
     ],
     ssh: { authMethod: "agent", user: "", sudo: true },
+    tls: { mode: "off", certPem: "", keyPem: "", caBundlePem: "" },
     discovery: {},
     topology: {
       setSize: 16,

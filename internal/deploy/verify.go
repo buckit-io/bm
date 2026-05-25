@@ -3,7 +3,6 @@ package deploy
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/buckit-io/bm/internal/admin"
@@ -27,9 +26,13 @@ func verifyCluster(ctx context.Context, p DeployParams) (VerifyResult, error) {
 	defer cancel()
 
 	creds := domain.AdminCreds{
-		URL:       serverURLForHost(p, firstDeployHost(p)),
+		URL:       adminURLForHost(p, firstDeployHost(p)),
 		AccessKey: p.Credentials.RootUser,
 		SecretKey: p.Credentials.RootPassword,
+		// BYO certs aren't in the operator's system trust store. Skip
+		// verification rather than maintaining a separate cert pool — this
+		// matches the personal-tool trust model (see CLAUDE.md).
+		Insecure: p.TLS.Enabled(),
 	}
 	adminClient, err := admin.New(creds)
 	if err != nil {
@@ -77,15 +80,24 @@ func verifyCluster(ctx context.Context, p DeployParams) (VerifyResult, error) {
 	}, nil
 }
 
-func serverURLForHost(p DeployParams, host domain.HostRow) string {
-	if url := strings.TrimSpace(p.ServerURL); url != "" {
-		return url
+// adminURLForHost is the URL bm itself dials to reach the cluster's admin API.
+// It always points at a real node (never p.ServerURL) because the operator's
+// ServerURL may be a load balancer that isn't reachable yet or that bm
+// shouldn't depend on for its own management calls.
+func adminURLForHost(p DeployParams, host domain.HostRow) string {
+	scheme := "http"
+	if p.TLS.Enabled() {
+		scheme = "https"
 	}
-	return fmt.Sprintf("http://%s:%d", host.Hostname, p.API.Port)
+	return fmt.Sprintf("%s://%s:%d", scheme, host.Hostname, p.API.Port)
 }
 
 func consoleURLForHost(p DeployParams, host domain.HostRow) string {
-	return fmt.Sprintf("http://%s:%d", host.Hostname, p.API.ConsolePort)
+	scheme := "http"
+	if p.TLS.Enabled() {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s:%d", scheme, host.Hostname, p.API.ConsolePort)
 }
 
 func firstDeployHost(p DeployParams) domain.HostRow {

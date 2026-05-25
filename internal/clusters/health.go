@@ -26,6 +26,9 @@ func Summarize(nodes []domain.Node) domain.HealthSummary {
 				dReady++
 			case domain.DriveHealing:
 				dHealing++
+			case domain.DriveUnknown:
+				// Admin API was unreachable when this state was set;
+				// don't count it as failed — we just don't know.
 			default:
 				dFailed++
 			}

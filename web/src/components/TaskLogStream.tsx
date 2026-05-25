@@ -123,6 +123,6 @@ function glyph(level?: OpEvent["level"]): string {
     case "error":
       return "✗";
     default:
-      return "·";
+      return "●";
   }
 }

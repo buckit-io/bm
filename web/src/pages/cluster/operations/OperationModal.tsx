@@ -383,7 +383,18 @@ function EventLog({ events }: { events: OpEvent[] }) {
           <span className="subtle" style={{ minWidth: 64 }}>
             {formatEventTs(e.ts)}
           </span>
-          <span style={{ minWidth: 14 }}>{eventGlyph(e.level)}</span>
+          <span
+            style={{
+              minWidth: 18,
+              textAlign: "center",
+              fontSize: "var(--fs-md)",
+              fontWeight: "var(--fw-bold)",
+              lineHeight: 1,
+              color: eventColor(e.level),
+            }}
+          >
+            {eventGlyph(e.level)}
+          </span>
           <span style={{ color: eventColor(e.level) }}>{e.text}</span>
         </div>
       ))}
@@ -405,7 +416,7 @@ function eventGlyph(level?: OpEvent["level"]): string {
     case "ok": return "✓";
     case "warn": return "⚠";
     case "error": return "✗";
-    default: return "·";
+    default: return "●";
   }
 }
 
@@ -457,7 +468,7 @@ function HostStatusList({
 function hostStatePill(s: HostOpState) {
   switch (s) {
     case "pending":
-      return <Pill tone="neutral" icon="·">Pending</Pill>;
+      return <Pill tone="neutral" icon="●">Pending</Pill>;
     case "running":
       return <Pill tone="info" icon="⟳">Running</Pill>;
     case "succeeded":

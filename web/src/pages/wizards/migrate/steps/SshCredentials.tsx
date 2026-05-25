@@ -335,13 +335,20 @@ export function SshCredentials({ draft, update }: Props) {
 }
 
 function probePill(p: HostRow["probe"]) {
-  const map: Record<HostRow["probe"], { text: string; cls: string }> = {
+  const map: Record<
+    HostRow["probe"],
+    { text: string; cls: string; color?: string }
+  > = {
     idle: { text: "—", cls: "subtle" },
     probing: { text: "Probing…", cls: "subtle" },
-    reachable: { text: "✓ Reachable", cls: "" },
-    auth_failed: { text: "✗ Auth failed", cls: "" },
-    timeout: { text: "✗ Timeout", cls: "" },
+    reachable: { text: "✓ Reachable", cls: "", color: "var(--c-success)" },
+    auth_failed: { text: "✗ Auth failed", cls: "", color: "var(--c-danger)" },
+    timeout: { text: "✗ Timeout", cls: "", color: "var(--c-danger)" },
   };
   const v = map[p];
-  return <span className={v.cls}>{v.text}</span>;
+  return (
+    <span className={v.cls} style={v.color ? { color: v.color } : undefined}>
+      {v.text}
+    </span>
+  );
 }

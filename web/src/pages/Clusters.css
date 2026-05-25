@@ -17,10 +17,6 @@
   font-weight: var(--fw-semibold);
 }
 
-.clusters__new {
-  position: relative;
-}
-
 .clusters__stale {
   font-size: var(--fs-xs);
   color: var(--c-fg-subtle);
@@ -39,32 +35,6 @@
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
-}
-
-.clusters__menu {
-  position: absolute;
-  right: 0;
-  top: calc(100% + var(--s-1));
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow-md);
-  min-width: 280px;
-  padding: var(--s-1);
-  z-index: 20;
-}
-
-.clusters__menu-item {
-  display: block;
-  padding: var(--s-2) var(--s-3);
-  border-radius: var(--r-sm);
-  color: var(--c-fg);
-  font-size: var(--fs-md);
-  white-space: nowrap;
-}
-.clusters__menu-item:hover {
-  background: var(--c-surface-2);
-  text-decoration: none;
 }
 
 .clusters__filters {

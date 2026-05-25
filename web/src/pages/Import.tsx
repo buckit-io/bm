@@ -48,7 +48,7 @@ export function Import() {
     abortRef.current = ctrl;
     try {
       const result = await discoverClusterStream(
-        { url, username, password },
+        { url, username, password, insecure: true },
         {
           signal: ctrl.signal,
           onProgress: (line) => {
@@ -95,7 +95,7 @@ export function Import() {
     const chosenName = phase.chosenName;
     setPhase({ kind: "saving", candidate, chosenName });
     try {
-      const { clusterId } = await commitImport({ candidate, chosenName });
+      const { clusterId } = await commitImport({ candidate, chosenName, insecure: true });
       qc.invalidateQueries({ queryKey: ["clusters"] });
       navigate(`/clusters/${clusterId}`);
     } catch (err) {
@@ -267,7 +267,7 @@ function ImportModal({ phase, onChangeName, onSave, onClose }: ImportModalProps)
                     ? "✓"
                     : l.level === "error"
                       ? "✗"
-                      : "·"}
+                      : "●"}
                 </span>
                 <span>{l.text}</span>
               </div>
