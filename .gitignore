@@ -7,3 +7,4 @@
 *.test
 *.out
 .DS_Store
+.gocache
