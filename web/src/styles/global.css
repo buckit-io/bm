@@ -402,7 +402,15 @@ textarea.input {
 
 .card-stat__sub {
   font-size: var(--fs-sm);
-  color: var(--c-fg-muted);
+  color: var(--c-fg);
+}
+.card-stat__sub b {
+  color: var(--c-fg-subtle);
+  font-weight: var(--fw-medium);
+  margin-right: var(--s-1);
+}
+.card-stat__sub.subtle {
+  color: var(--c-fg-subtle);
 }
 
 .progress {
