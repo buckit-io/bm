@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/buckit-io/bm/internal/domain"
@@ -219,11 +220,12 @@ func TestTimeSyncRetriesTransientReadFailure(t *testing.T) {
 	SetVersionResolver(func(_ string) string { return "https://example.com/buckit.rpm" })
 	defer SetVersionResolver(nil)
 	conn := newFakeConn()
-	dateCalls := 0
+	// Per-host parallelism in preflight means this closure runs on multiple
+	// goroutines — increment via atomic so the race detector stays happy.
+	var dateCalls atomic.Int64
 	conn.fallback = func(cmd string) cannedResp {
 		if cmd == "date +%s.%N" {
-			dateCalls++
-			if dateCalls == 1 {
+			if dateCalls.Add(1) == 1 {
 				return cannedResp{exit: 1}
 			}
 			return cannedResp{stdout: fmt.Sprintf("%.3f\n", nowFn()), exit: 0}
@@ -268,11 +270,13 @@ func TestPortsConflictRetriesTransientSessionFailure(t *testing.T) {
 	SetVersionResolver(func(_ string) string { return "https://example.com/buckit.rpm" })
 	defer SetVersionResolver(nil)
 	conn := newFakeConn()
-	ssCalls := 0
+	// preflight fans out per host in parallel; the closure below runs on
+	// many goroutines and shares `ssCalls`. Use atomic to avoid the race
+	// detector tripping on the increment/read sequence.
+	var ssCalls atomic.Int64
 	conn.fallback = func(cmd string) cannedResp {
 		if strings.HasPrefix(cmd, "ss -ltn") {
-			ssCalls++
-			if ssCalls == 1 {
+			if ssCalls.Add(1) == 1 {
 				return cannedResp{err: fmt.Errorf("new session: ssh: rejected: connect failed (open failed)")}
 			}
 			return cannedResp{stdout: "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n", exit: 0}
@@ -428,12 +432,6 @@ func TestCheckPkgMgrDetectsKindAndRejectsMixed(t *testing.T) {
 		conn.commands = map[string]cannedResp{}
 		conn.fallback = func(cmd string) cannedResp {
 			return cannedResp{exit: 1}
-		}
-		runs := map[string]int{}
-		original := conn.fallback
-		conn.fallback = func(cmd string) cannedResp {
-			runs[cmd]++
-			return original(cmd)
 		}
 		// Use commands map to dispatch per-host doesn't work with fakeConn
 		// (it ignores HostRow). Instead, inject host-keyed Run wrapper.

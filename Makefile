@@ -39,7 +39,7 @@ build-all:
 
 ## test: run unit tests
 test:
-	CGO_ENABLED=0 $(GO) test -race -count=1 ./...
+	$(GO) test -race -count=1 ./...
 
 ## lint: run golangci-lint (installs to .bin if missing)
 lint:

@@ -34,7 +34,9 @@ jobs:
         run: go vet ./...
       - name: go test
         if: matrix.os == 'linux' && matrix.arch == 'amd64'
-        run: CGO_ENABLED=0 go test -race -count=1 ./...
+        # -race requires cgo; CGO_ENABLED defaults to 1 on the runner.
+        # Production binaries (build step below) still ship with CGO_ENABLED=0.
+        run: go test -race -count=1 ./...
       - name: build
         env:
           GOOS: ${{ matrix.os }}
