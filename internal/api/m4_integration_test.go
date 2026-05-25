@@ -318,22 +318,21 @@ func TestRefreshNodeConnectivityUpdatesProbeFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	prevTCP := refreshTCPProbe
-	prevHTTP := refreshHTTPProbe
+	prevTCP := refreshTCPProbe.Load()
+	prevHTTP := refreshHTTPProbe.Load()
 	t.Cleanup(func() {
-		refreshTCPProbe = prevTCP
-		refreshHTTPProbe = prevHTTP
+		refreshTCPProbe.Store(prevTCP)
+		refreshHTTPProbe.Store(prevHTTP)
 	})
 
-	refreshTCPProbe = func(_ context.Context, address string) bool {
+	tcp := tcpProbeFn(func(_ context.Context, address string) bool {
 		return strings.HasSuffix(address, ":2222") || strings.HasSuffix(address, ":9000")
-	}
-	refreshHTTPProbe = func(_ context.Context, _ *http.Client, rawURL string) bool {
-		if strings.Contains(rawURL, ":9000/") {
-			return true
-		}
-		return false
-	}
+	})
+	refreshTCPProbe.Store(&tcp)
+	httpProbe := httpProbeFn(func(_ context.Context, _ *http.Client, rawURL string) bool {
+		return strings.Contains(rawURL, ":9000/")
+	})
+	refreshHTTPProbe.Store(&httpProbe)
 
 	err = refreshNodeConnectivity(context.Background(), Options{
 		Nodes: nodesRepo,

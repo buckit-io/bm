@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -29,8 +30,22 @@ const refreshProbeConcurrency = 8
 const refreshProbeTimeout = 15 * time.Second
 const refreshDialTimeout = 2 * time.Second
 
+// tcpProbeFn / httpProbeFn are aliased so atomic.Pointer can hold them.
+// Stored as pointers in atomic boxes so test injection is race-safe even
+// when a previous test's async probe goroutine is still running while the
+// next test reassigns the implementation. (refreshNodeConnectivity is fired
+// fire-and-forget via startAsyncNodeProbeRefresh — its goroutine can outlive
+// the test that triggered it.)
+type tcpProbeFn func(ctx context.Context, address string) bool
+type httpProbeFn func(ctx context.Context, client *http.Client, rawURL string) bool
+
 var (
-	refreshTCPProbe = func(ctx context.Context, address string) bool {
+	refreshTCPProbe  atomic.Pointer[tcpProbeFn]
+	refreshHTTPProbe atomic.Pointer[httpProbeFn]
+)
+
+func init() {
+	tcp := tcpProbeFn(func(ctx context.Context, address string) bool {
 		d := net.Dialer{Timeout: refreshDialTimeout}
 		conn, err := d.DialContext(ctx, "tcp", address)
 		if err != nil {
@@ -38,8 +53,10 @@ var (
 		}
 		_ = conn.Close()
 		return true
-	}
-	refreshHTTPProbe = func(ctx context.Context, client *http.Client, rawURL string) bool {
+	})
+	refreshTCPProbe.Store(&tcp)
+
+	httpProbe := httpProbeFn(func(ctx context.Context, client *http.Client, rawURL string) bool {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 		if err != nil {
 			return false
@@ -51,8 +68,9 @@ var (
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 		return resp.StatusCode >= 200 && resp.StatusCode < 400
-	}
-)
+	})
+	refreshHTTPProbe.Store(&httpProbe)
+}
 
 // ---- read paths ----
 
@@ -571,11 +589,12 @@ func refreshNodeConnectivity(ctx context.Context, opts Options, _ string, nodeLi
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
+			tcp := *refreshTCPProbe.Load()
 			next := node
 			next.Pingable = probePing(ctx, node)
 			next.APIAccessible = probeHTTP(ctx, httpClient, secure, node.Hostname, 9000, "/minio/health/live")
 			next.ConsoleAccessible = probeHTTP(ctx, httpClient, secure, node.Hostname, 9001, "/")
-			next.Sshable = refreshTCPProbe(ctx, net.JoinHostPort(node.Hostname, fmt.Sprintf("%d", sshPortOrDefault(node.SSHPort))))
+			next.Sshable = tcp(ctx, net.JoinHostPort(node.Hostname, fmt.Sprintf("%d", sshPortOrDefault(node.SSHPort))))
 			_ = opts.Nodes.Put(ctx, next)
 		}(node)
 	}
@@ -584,10 +603,11 @@ func refreshNodeConnectivity(ctx context.Context, opts Options, _ string, nodeLi
 }
 
 func probePing(ctx context.Context, node domain.Node) bool {
-	if refreshTCPProbe(ctx, net.JoinHostPort(node.Hostname, fmt.Sprintf("%d", sshPortOrDefault(node.SSHPort)))) {
+	tcp := *refreshTCPProbe.Load()
+	if tcp(ctx, net.JoinHostPort(node.Hostname, fmt.Sprintf("%d", sshPortOrDefault(node.SSHPort)))) {
 		return true
 	}
-	return refreshTCPProbe(ctx, net.JoinHostPort(node.Hostname, "9000"))
+	return tcp(ctx, net.JoinHostPort(node.Hostname, "9000"))
 }
 
 func probeHTTP(ctx context.Context, client *http.Client, secure bool, hostname string, port int, path string) bool {
@@ -596,7 +616,8 @@ func probeHTTP(ctx context.Context, client *http.Client, secure bool, hostname s
 		scheme = "https"
 	}
 	rawURL := fmt.Sprintf("%s://%s:%d%s", scheme, hostname, port, path)
-	return refreshHTTPProbe(ctx, client, rawURL)
+	httpProbe := *refreshHTTPProbe.Load()
+	return httpProbe(ctx, client, rawURL)
 }
 
 func refreshProbeHTTPClient(creds domain.AdminCreds) *http.Client {
