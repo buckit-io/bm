@@ -1094,3 +1094,65 @@ func TestM7ClusterUpgradeBySystemctlOnDeb(t *testing.T) {
 	}
 }
 
+// TestM7SkipsHostsMissingUnit asserts the per-host skip path: if
+// `systemctl show -p LoadState` reports anything but "loaded" for every
+// host, the three cluster-wide executors fail with a clean message
+// instead of attempting any `systemctl restart`. The three ops share
+// one harness so we don't multiply test-fixture cost (which otherwise
+// pushes the wider package over wait timeouts under -race).
+func TestM7SkipsHostsMissingUnit(t *testing.T) {
+	h := newM7Harness(t)
+	h.sshSrv.CmdOverride = func(cmd string) (string, string, int, bool) {
+		if strings.Contains(cmd, "systemctl show -p LoadState") {
+			return "not-found", "", 0, true
+		}
+		return "", "", 0, false
+	}
+
+	cases := []struct {
+		name   string
+		kind   tasks.OpKind
+		params any
+	}{
+		{"rolling_restart", tasks.OpRollingRestart, nil},
+		{"start_cluster", tasks.OpStartCluster, nil},
+		{"rotate_root_creds", tasks.OpRotateRootCreds, map[string]any{"newPassword": "newpassword123"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// The per-cluster lock can linger for a few ms after the
+			// previous subtest's task is marked terminal in history.
+			// Retry briefly on 409 so a stale lock from the prior
+			// subtest doesn't fail this one.
+			var id string
+			var code int
+			deadline := time.Now().Add(2 * time.Second)
+			for {
+				id, code = dispatch(t, h, c.kind, nil, c.params)
+				if code != http.StatusConflict || time.Now().After(deadline) {
+					break
+				}
+				time.Sleep(25 * time.Millisecond)
+			}
+			if code != 202 {
+				t.Fatalf("dispatch: %d", code)
+			}
+			row := waitTermM7(t, h, id, 30*time.Second)
+			if row.Status != tasks.StateFailed {
+				t.Fatalf("expected failed, got %s (note=%q)", row.Status, row.FailureNote)
+			}
+			if !strings.Contains(row.FailureNote, "no hosts have buckit.service installed") {
+				t.Fatalf("expected friendly precondition error, got %q", row.FailureNote)
+			}
+			if row.Result == nil || len(row.Result.HostStatuses) != 2 {
+				t.Fatalf("expected 2 host statuses, got %+v", row.Result)
+			}
+			for _, hs := range row.Result.HostStatuses {
+				if !strings.Contains(hs.Detail, "skipped") {
+					t.Fatalf("expected per-host detail to mention skip, got %q", hs.Detail)
+				}
+			}
+		})
+	}
+}
+

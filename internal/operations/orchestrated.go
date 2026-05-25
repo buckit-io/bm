@@ -34,6 +34,7 @@ func (e *startClusterExecutor) Execute(ctx context.Context, run *tasks.Run) erro
 	var (
 		mu      sync.Mutex
 		failed  int
+		skipped int
 		failErr error
 		wg      sync.WaitGroup
 	)
@@ -41,6 +42,26 @@ func (e *startClusterExecutor) Execute(ctx context.Context, run *tasks.Run) erro
 		wg.Add(1)
 		go func(i int, n domain.Node) {
 			defer wg.Done()
+			hasUnit, probeErr := hostHasSystemdUnit(ctx, e.deps, rc, n, unit)
+			if probeErr != nil {
+				setHostState(run, i, n, tasks.HostFailed, probeErr.Error())
+				run.LogError("%s: %s probe: %v", n.Hostname, unit, probeErr)
+				mu.Lock()
+				failed++
+				if failErr == nil {
+					failErr = probeErr
+				}
+				mu.Unlock()
+				return
+			}
+			if !hasUnit {
+				setHostState(run, i, n, tasks.HostSucceeded, "skipped: "+unit+" not installed")
+				run.LogInfo("%s: skipping host without %s", n.Hostname, unit)
+				mu.Lock()
+				skipped++
+				mu.Unlock()
+				return
+			}
 			setHostState(run, i, n, tasks.HostRunning, "systemctl start")
 			cmd := sudoSystemctl(rc.sshCreds.User, "start "+unit)
 			if _, err := runHostStep(ctx, e.deps, rc, n, cmd); err != nil {
@@ -63,6 +84,9 @@ func (e *startClusterExecutor) Execute(ctx context.Context, run *tasks.Run) erro
 	if failed > 0 {
 		return fmt.Errorf("%d/%d hosts failed to start: %w", failed, len(rc.nodes), failErr)
 	}
+	if skipped == len(rc.nodes) {
+		return fmt.Errorf("start_cluster: no hosts have %s installed", unit)
+	}
 	// Cluster-wide health wait — admin API only works once quorum is up.
 	run.LogInfo("waiting for cluster healthy")
 	if err := waitClusterHealthy(ctx, rc.admin, WaitOptions{Timeout: 2 * time.Minute, Tick: 3 * time.Second}); err != nil {
@@ -72,10 +96,15 @@ func (e *startClusterExecutor) Execute(ctx context.Context, run *tasks.Run) erro
 	run.LogOK("Cluster healthy after %s", formatDuration(duration))
 	run.MutateState(func(s *tasks.OperationProgress) {
 		s.Detail = "Cluster started"
-		s.Summary = []tasks.SummaryItem{
+		summary := []tasks.SummaryItem{
 			{Label: "Hosts", Value: fmt.Sprintf("%d", len(rc.nodes))},
-			{Label: "Healthy after", Value: formatDuration(duration)},
+			{Label: "Started", Value: fmt.Sprintf("%d", len(rc.nodes)-skipped)},
 		}
+		if skipped > 0 {
+			summary = append(summary, tasks.SummaryItem{Label: "Skipped", Value: fmt.Sprintf("%d", skipped)})
+		}
+		summary = append(summary, tasks.SummaryItem{Label: "Healthy after", Value: formatDuration(duration)})
+		s.Summary = summary
 	})
 	refreshClusterRow(ctx, e.deps, run.ClusterID, rc.admin)
 	return nil
@@ -96,9 +125,21 @@ func (e *rollingRestartExecutor) Execute(ctx context.Context, run *tasks.Run) er
 	unit := unitName(rc.cluster.Engine)
 	seedHostStatuses(run, rc.nodes)
 
+	skipped := 0
 	for i, n := range rc.nodes {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		hasUnit, err := hostHasSystemdUnit(ctx, e.deps, rc, n, unit)
+		if err != nil {
+			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			return fmt.Errorf("%s %s probe: %w", n.Hostname, unit, err)
+		}
+		if !hasUnit {
+			skipped++
+			setHostState(run, i, n, tasks.HostSucceeded, "skipped: "+unit+" not installed")
+			run.LogInfo("%s: skipping host without %s", n.Hostname, unit)
+			continue
 		}
 		setHostState(run, i, n, tasks.HostRunning, "systemctl restart")
 		run.LogInfo("%s: systemctl restart %s", n.Hostname, unit)
@@ -115,14 +156,24 @@ func (e *rollingRestartExecutor) Execute(ctx context.Context, run *tasks.Run) er
 		setHostState(run, i, n, tasks.HostSucceeded, "healthy")
 		run.LogOK("%s: healthy", n.Hostname)
 	}
+	if skipped == len(rc.nodes) {
+		return fmt.Errorf("rolling_restart: no hosts have %s installed", unit)
+	}
 	duration := time.Since(start)
 	run.MutateState(func(s *tasks.OperationProgress) {
 		s.Detail = "Rolling restart complete"
-		s.Summary = []tasks.SummaryItem{
+		summary := []tasks.SummaryItem{
 			{Label: "Hosts", Value: fmt.Sprintf("%d", len(rc.nodes))},
-			{Label: "Sequential time", Value: formatDuration(duration)},
-			{Label: "Failed", Value: "0"},
+			{Label: "Restarted", Value: fmt.Sprintf("%d", len(rc.nodes)-skipped)},
 		}
+		if skipped > 0 {
+			summary = append(summary, tasks.SummaryItem{Label: "Skipped", Value: fmt.Sprintf("%d", skipped)})
+		}
+		summary = append(summary,
+			tasks.SummaryItem{Label: "Sequential time", Value: formatDuration(duration)},
+			tasks.SummaryItem{Label: "Failed", Value: "0"},
+		)
+		s.Summary = summary
 	})
 	refreshClusterRow(ctx, e.deps, run.ClusterID, rc.admin)
 	return nil
@@ -908,10 +959,84 @@ func detectNodeArch(ctx context.Context, deps Deps, rc *runCtx, n domain.Node) (
 }
 
 func hostHasBuckitSystemdUnit(ctx context.Context, deps Deps, rc *runCtx, n domain.Node) (bool, error) {
-	cmd := `state=$(systemctl show -p LoadState --value buckit.service 2>/dev/null || true); printf "%s" "$state"`
-	out, err := runHostStep(ctx, deps, rc, n, cmd)
+	return hostHasSystemdUnit(ctx, deps, rc, n, "buckit.service")
+}
+
+// hostHasSystemdUnit probes whether a named systemd unit is loaded on a
+// host. Uses `systemctl show -p LoadState` (which always exits 0) so we
+// can distinguish "unit missing" from "ssh broken" — `systemctl cat`
+// exits 1 in both cases and would muddle the two.
+func hostHasSystemdUnit(ctx context.Context, deps Deps, rc *runCtx, n domain.Node, unit string) (bool, error) {
+	out, err := runHostStep(ctx, deps, rc, n, loadStateProbeCommand(unit))
 	if err != nil {
 		return false, err
 	}
-	return strings.TrimSpace(out) == "loaded", nil
+	return parseLoadStateLoaded(out), nil
+}
+
+// loadStateProbeCommand builds the shell snippet hostHasSystemdUnit runs
+// on the target host. Extracted so tests can assert the exact wire bytes
+// without standing up an SSH server.
+func loadStateProbeCommand(unit string) string {
+	return fmt.Sprintf(
+		`state=$(systemctl show -p LoadState --value %s 2>/dev/null || true); printf "%%s" "$state"`,
+		shellQuote(unit),
+	)
+}
+
+// parseLoadStateLoaded interprets the output of loadStateProbeCommand.
+// Anything other than the literal "loaded" (after trimming whitespace)
+// is treated as the unit being unavailable for restart — that catches
+// "not-found", "masked", "error", and the empty-string case where
+// systemctl itself wasn't on the host.
+func parseLoadStateLoaded(showOutput string) bool {
+	return strings.TrimSpace(showOutput) == "loaded"
+}
+
+// unitMissingError formats the operator-facing error for a set of hosts
+// where the cluster's service unit isn't installed. The recovery hint
+// depends on the engine: Buckit clusters have first-class redeploy /
+// admin-API upgrade paths; MinIO clusters don't get those, so the hint
+// nudges the operator toward reinstall or re-import instead.
+func unitMissingError(unit string, missing []string, engine domain.ClusterEngine) error {
+	hint := `use "Upgrade cluster via Admin API" or "Redeploy software" first`
+	if engine == domain.EngineMinio {
+		hint = `the host is not running a managed minio.service — reinstall MinIO or import a different cluster`
+	}
+	return fmt.Errorf("%s is not installed on %s — %s",
+		unit, strings.Join(missing, ", "), hint)
+}
+
+// preflightUnitPresent verifies that the cluster's service unit is loaded
+// on every target host. Returns a clear, operator-facing error naming the
+// missing hosts and pointing at the right recovery action. SSH/transport
+// failures are surfaced as-is — we don't want to mask a connectivity
+// problem as a precondition failure.
+//
+// Wire this at the start of any executor that drives `systemctl <verb>
+// buckit.service` (or minio.service) so the operator sees the friendly
+// message instead of a downstream "Unit not loaded" from the first
+// restart attempt.
+func preflightUnitPresent(ctx context.Context, deps Deps, rc *runCtx, hosts []domain.Node) error {
+	if len(hosts) == 0 {
+		return nil
+	}
+	unit := unitName(rc.cluster.Engine)
+	var missing []string
+	for _, n := range hosts {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		ok, err := hostHasSystemdUnit(ctx, deps, rc, n, unit)
+		if err != nil {
+			return fmt.Errorf("%s: %s probe failed: %w", n.Hostname, unit, err)
+		}
+		if !ok {
+			missing = append(missing, n.Hostname)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return unitMissingError(unit, missing, rc.cluster.Engine)
 }

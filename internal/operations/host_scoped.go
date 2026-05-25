@@ -34,6 +34,9 @@ func (e *hostSystemctlExecutor) Execute(ctx context.Context, run *tasks.Run) err
 		return fmt.Errorf("%s: no target hosts", e.verb)
 	}
 	unit := unitName(rc.cluster.Engine)
+	if err := preflightUnitPresent(ctx, e.deps, rc, hosts); err != nil {
+		return err
+	}
 	start := time.Now()
 	seedHostStatuses(run, hosts)
 

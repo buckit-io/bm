@@ -84,8 +84,21 @@ func (e *rotateRootCredsExecutor) Execute(ctx context.Context, run *tasks.Run) (
 		s.Detail = "Resolving root credential files"
 	})
 
+	unit := unitName(rc.cluster.Engine)
 	plans := make([]rotateRootCredsTarget, 0, len(rc.nodes))
+	skipped := 0
 	for i, n := range rc.nodes {
+		hasUnit, err := hostHasSystemdUnit(ctx, e.deps, rc, n, unit)
+		if err != nil {
+			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			return fmt.Errorf("%s %s probe: %w", n.Hostname, unit, err)
+		}
+		if !hasUnit {
+			skipped++
+			setHostState(run, i, n, tasks.HostSucceeded, "skipped: "+unit+" not installed")
+			run.LogInfo("%s: skipping host without %s", n.Hostname, unit)
+			continue
+		}
 		target, err := resolveRotateRootCredsTarget(ctx, e.deps, rc, n, run.TaskID)
 		if err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
@@ -94,6 +107,9 @@ func (e *rotateRootCredsExecutor) Execute(ctx context.Context, run *tasks.Run) (
 		plans = append(plans, target)
 		setHostState(run, i, n, tasks.HostPending, "staged")
 		run.LogInfo("%s: target root env file %s", n.Hostname, target.SecondaryPath)
+	}
+	if len(plans) == 0 {
+		return fmt.Errorf("rotate_root_creds: no hosts have %s installed", unit)
 	}
 	if len(plans) > 0 {
 		sameAsCurrent := true
