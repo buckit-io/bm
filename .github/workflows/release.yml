@@ -1,0 +1,197 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "RELEASE.*"
+
+permissions:
+  contents: write
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+          if-no-files-found: error
+
+  build:
+    needs: web
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            platform: linux-amd64
+            ext: ""
+            pointer_name: bm
+          - goos: linux
+            goarch: arm64
+            platform: linux-arm64
+            ext: ""
+            pointer_name: bm
+          - goos: darwin
+            goarch: amd64
+            platform: darwin-amd64
+            ext: ""
+            pointer_name: bm
+          - goos: darwin
+            goarch: arm64
+            platform: darwin-arm64
+            ext: ""
+            pointer_name: bm
+          - goos: windows
+            goarch: amd64
+            platform: windows-amd64
+            ext: ".exe"
+            pointer_name: bm.exe
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          COMMIT="$(git rev-parse --short HEAD)"
+          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          BIN="bm-${{ matrix.platform }}${{ matrix.ext }}.${{ github.ref_name }}"
+          LDFLAGS="-s -w -X 'github.com/buckit-io/bm/internal/version.Version=${VERSION}' -X 'github.com/buckit-io/bm/internal/version.Commit=${COMMIT}' -X 'github.com/buckit-io/bm/internal/version.Date=${DATE}'"
+
+          go build -trimpath -ldflags "$LDFLAGS" -o "$BIN" ./cmd/bm
+      - name: Generate checksum
+        run: |
+          set -euo pipefail
+          BIN="bm-${{ matrix.platform }}${{ matrix.ext }}.${{ github.ref_name }}"
+          sha256sum "$BIN" > "$BIN.sha256sum"
+      - name: Sign with minisign
+        env:
+          MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          BIN="bm-${{ matrix.platform }}${{ matrix.ext }}.${{ github.ref_name }}"
+
+          go install aead.dev/minisign/cmd/minisign@v0.3.0
+          echo "$MINISIGN_PRIVATE_KEY" | base64 -d > /tmp/minisign.key
+          echo "$MINISIGN_PASSWORD" | minisign -Sm "$BIN" -s /tmp/minisign.key
+          shred -u /tmp/minisign.key
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.platform }}
+          path: |
+            bm-${{ matrix.platform }}${{ matrix.ext }}.${{ github.ref_name }}
+            bm-${{ matrix.platform }}${{ matrix.ext }}.${{ github.ref_name }}.sha256sum
+            bm-${{ matrix.platform }}${{ matrix.ext }}.${{ github.ref_name }}.minisig
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create checksums manifest
+        run: |
+          set -euo pipefail
+          cd artifacts
+          find . -maxdepth 1 -type f \
+            ! -name '*.sha256sum' \
+            ! -name '*.minisig' \
+            -name 'bm-*' \
+            -exec sha256sum {} \; | sed 's#  \./#  #' > checksums.txt
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '.rc') }}
+          files: |
+            artifacts/bm-*
+            artifacts/checksums.txt
+
+  update-gh-pages:
+    if: "!contains(github.ref_name, '.rc')"
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: gh-pages
+          path: pages
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Write self-update pointer files
+        run: |
+          set -euo pipefail
+
+          tag="${{ github.ref_name }}"
+          base="pages/manager/bm/release"
+
+          rm -rf "$base"
+          mkdir -p \
+            "$base/linux-amd64" \
+            "$base/linux-arm64" \
+            "$base/darwin-amd64" \
+            "$base/darwin-arm64" \
+            "$base/windows-amd64"
+
+          sha=$(awk '{print $1}' "artifacts/bm-linux-amd64.${tag}.sha256sum")
+          echo "${sha}  bm.${tag}" > "$base/linux-amd64/bm.sha256sum"
+
+          sha=$(awk '{print $1}' "artifacts/bm-linux-arm64.${tag}.sha256sum")
+          echo "${sha}  bm.${tag}" > "$base/linux-arm64/bm.sha256sum"
+
+          sha=$(awk '{print $1}' "artifacts/bm-darwin-amd64.${tag}.sha256sum")
+          echo "${sha}  bm.${tag}" > "$base/darwin-amd64/bm.sha256sum"
+
+          sha=$(awk '{print $1}' "artifacts/bm-darwin-arm64.${tag}.sha256sum")
+          echo "${sha}  bm.${tag}" > "$base/darwin-arm64/bm.sha256sum"
+
+          sha=$(awk '{print $1}' "artifacts/bm-windows-amd64.exe.${tag}.sha256sum")
+          echo "${sha}  bm.exe.${tag}" > "$base/windows-amd64/bm.sha256sum"
+      - name: Commit gh-pages update
+        run: |
+          set -euo pipefail
+          cd pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add manager/bm/release
+          git commit -m "Update bm release pointers for ${{ github.ref_name }}"
+      - name: Deploy to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./pages
+          force_orphan: true

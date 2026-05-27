@@ -37,7 +37,7 @@ func runWeb(rawArgs []string) error {
 	addr := fs.String("addr", defaultAddr, "listen address (loopback only in M1)")
 	noBrowser := fs.Bool("no-browser", false, "do not open the default browser on startup")
 	dataDir := fs.String("data-dir", "", "override config dir (default: ~/.config/bm)")
-	webDist := fs.String("web-dist", defaultWebDist(), "path to the built React assets (web/dist)")
+	webDist := fs.String("web-dist", defaultWebDist(), "override embedded UI assets with a built web/dist directory")
 	if err := fs.Parse(rawArgs); err != nil {
 		return err
 	}
@@ -161,8 +161,8 @@ func runWeb(rawArgs []string) error {
 }
 
 func defaultWebDist() string {
-	// Pick up an adjacent web/dist when running `./bm web` from the repo root
-	// so contributors don't need to pass --web-dist by hand.
+	// Prefer an adjacent web/dist during local development so contributors
+	// see current frontend changes without rebuilding the binary first.
 	if exe, err := os.Executable(); err == nil {
 		candidate := filepath.Join(filepath.Dir(exe), "web", "dist")
 		if info, err := os.Stat(candidate); err == nil && info.IsDir() {

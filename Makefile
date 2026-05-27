@@ -19,7 +19,7 @@ GOARCH       ?= $(shell $(GO) env GOARCH)
 all: build
 
 ## build: compile the bm binary for the host platform
-build:
+build: web
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/bm
 
 ## web: install deps and build the React frontend into web/dist
@@ -27,7 +27,7 @@ web:
 	cd web && npm install && npm run build
 
 ## build-all: cross-compile binaries for all supported platforms into dist/
-build-all:
+build-all: web
 	@mkdir -p dist
 	@for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do \
 	    os=$${target%/*}; arch=$${target#*/}; \
@@ -38,7 +38,7 @@ build-all:
 	done
 
 ## test: run unit tests
-test:
+test: web
 	$(GO) test -race -count=1 ./...
 
 ## lint: run golangci-lint (installs to .bin if missing)

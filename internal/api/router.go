@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	bmassets "github.com/buckit-io/bm"
 	"github.com/buckit-io/bm/internal/admin"
 	"github.com/buckit-io/bm/internal/alias"
 	"github.com/buckit-io/bm/internal/clusteradmin"
@@ -47,8 +49,8 @@ type Options struct {
 	// AliasSync is the function that flushes cluster state to AliasPath.
 	// Defaults to alias.Sync when nil so production wiring stays terse.
 	AliasSync func(ctx context.Context, s *store.Store, path string) error
-	// WebDist is the path to web/dist on disk. If empty or missing, the
-	// static handler returns a 404 with a hint to run `npm run build`.
+	// WebDist optionally overrides the embedded UI assets with files from disk.
+	// Used for local development against a freshly built web/dist tree.
 	WebDist string
 }
 
@@ -365,33 +367,69 @@ func requestLogger() func(http.Handler) http.Handler {
 	}
 }
 
-// staticHandler returns a handler that serves files from webDist. If webDist
-// is empty or missing, it returns a 404 with a hint to run `npm run build`.
-// Unknown paths fall back to index.html so the SPA router can take over.
+// staticHandler serves the React app from disk when a valid webDist override
+// exists, otherwise it falls back to the embedded release bundle.
 func staticHandler(webDist string) http.HandlerFunc {
-	if webDist == "" {
-		return missingDistHandler("")
+	if handler, ok := diskStaticHandler(webDist); ok {
+		return handler
+	}
+	if handler, ok := embeddedStaticHandler(); ok {
+		return handler
+	}
+	return missingDistHandler(webDist)
+}
+
+func diskStaticHandler(webDist string) (http.HandlerFunc, bool) {
+	if strings.TrimSpace(webDist) == "" {
+		return nil, false
 	}
 	info, err := os.Stat(webDist)
 	if err != nil || !info.IsDir() {
-		return missingDistHandler(webDist)
+		return nil, false
 	}
 	indexPath := filepath.Join(webDist, "index.html")
 	if _, err := os.Stat(indexPath); err != nil {
-		return missingDistHandler(webDist)
+		return nil, false
 	}
-	fs := http.FileServer(http.Dir(webDist))
+	fileServer := http.FileServer(http.Dir(webDist))
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Serve the file when it exists on disk; otherwise fall through to
 		// index.html so the SPA router can render the path client-side.
 		clean := filepath.Clean(r.URL.Path)
 		target := filepath.Join(webDist, clean)
 		if _, err := os.Stat(target); err == nil && clean != "/" {
-			fs.ServeHTTP(w, r)
+			fileServer.ServeHTTP(w, r)
 			return
 		}
 		http.ServeFile(w, r, indexPath)
+	}, true
+}
+
+func embeddedStaticHandler() (http.HandlerFunc, bool) {
+	uiFS, err := bmassets.WebDist()
+	if err != nil {
+		return nil, false
 	}
+	if _, err := fs.Stat(uiFS, "index.html"); err != nil {
+		return nil, false
+	}
+	fileServer := http.FileServer(http.FS(uiFS))
+	return func(w http.ResponseWriter, r *http.Request) {
+		clean := strings.TrimPrefix(filepath.Clean(r.URL.Path), "/")
+		if clean != "" && clean != "." {
+			if _, err := fs.Stat(uiFS, clean); err == nil {
+				fileServer.ServeHTTP(w, r)
+				return
+			}
+		}
+		index, err := fs.ReadFile(uiFS, "index.html")
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "ui_read_failed", err.Error())
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(index)
+	}, true
 }
 
 func missingDistHandler(path string) http.HandlerFunc {
@@ -404,7 +442,7 @@ func missingDistHandler(path string) http.HandlerFunc {
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusNotFound)
-		_, _ = fmt.Fprintf(w, "bm web: no built UI assets at %s\nrun `cd web && npm run build` and restart bm web.\n", path)
+		_, _ = fmt.Fprintf(w, "bm web: no UI assets available (disk override: %s)\nrun `cd web && npm run build` before building bm.\n", path)
 	}
 }
 
