@@ -238,8 +238,9 @@ func TestM6DeployHappyPath(t *testing.T) {
 			{ID: "h1", Hostname: host, Port: port, Probe: domain.HostProbeReachable},
 			{ID: "h2", Hostname: host, Port: port, Probe: domain.HostProbeReachable},
 		},
-		SSH:      domain.SshCreds{AuthMethod: domain.AuthPassword, User: h.sshSrv.User(), Password: h.sshSrv.Password(), Sudo: true},
-		Topology: domain.Topology{SetSize: 4, Parity: 2, SelectedMounts: []string{"/data/disk1", "/data/disk2"}},
+		SSH:        domain.SshCreds{AuthMethod: domain.AuthPassword, User: h.sshSrv.User(), Password: h.sshSrv.Password(), Sudo: true},
+		PersistSsh: true,
+		Topology:   domain.Topology{SetSize: 4, Parity: 2, SelectedMounts: []string{"/data/disk1", "/data/disk2"}},
 	}
 	body, _ := json.Marshal(draft)
 

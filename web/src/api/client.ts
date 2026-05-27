@@ -247,11 +247,31 @@ export async function getClusterSshConfig(
   }
 }
 
+// saveClusterSshConfig writes SSH credentials for the cluster. When
+// persist is false, the backend keeps them in process memory only
+// (cleared on bm restart) — useful for one-off operations without
+// committing creds to disk. Defaults to persistent.
+//
+// `hosts` (optional) carries per-node SSH ports {id, port}. Each entry
+// overwrites the corresponding Node.SSHPort on disk regardless of the
+// persist flag (the port is structural metadata, not a credential).
 export const saveClusterSshConfig = (
   clusterId: string,
   config: ClusterSshConfig,
+  options?: { persist?: boolean; hosts?: { id: string; port: number }[] },
   signal?: AbortSignal,
-) => put<void>(`/clusters/${encodeURIComponent(clusterId)}/ssh`, config, signal);
+) => {
+  const qs = options?.persist === false ? "?persist=false" : "";
+  const body =
+    options?.hosts && options.hosts.length > 0
+      ? { ...config, hosts: options.hosts }
+      : config;
+  return put<void>(
+    `/clusters/${encodeURIComponent(clusterId)}/ssh${qs}`,
+    body,
+    signal,
+  );
+};
 
 // ---- artifacts (Basics step custom URL validation) ----
 

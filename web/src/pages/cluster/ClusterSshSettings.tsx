@@ -90,6 +90,7 @@ export function ClusterSshSettings() {
   const [hosts, setHosts] = useState<HostRow[]>([]);
   const [probing, setProbing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [persistSsh, setPersistSsh] = useState(true);
   const [configLoaded, setConfigLoaded] = useState(false);
   // True once we've fetched config AND nodes have arrived. Used to
   // gate the form so we don't briefly render with hardcoded defaults
@@ -119,14 +120,25 @@ export function ClusterSshSettings() {
   >({});
 
   // Apply nodes + overrides into the hosts state once both are ready.
+  // Intentionally does not depend on ssh.port — per-host ports are now
+  // editable; changing the cluster-default port should not clobber
+  // operator edits on individual rows.
   useEffect(() => {
     if (!nodes) return;
     setHosts(hostsFromNodes(nodes, ssh.port ?? 0, pendingOverrides));
-  }, [nodes, pendingOverrides, ssh.port]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, pendingOverrides]);
 
   const setHostOverride = (id: string, override: SshOverrides | undefined) =>
     setHosts((prev) =>
       prev.map((h) => (h.id === id ? { ...h, sshOverride: override } : h)),
+    );
+
+  const setHostPort = (id: string, port: number) =>
+    setHosts((prev) =>
+      prev.map((h) =>
+        h.id === id ? { ...h, port: Number.isFinite(port) ? port : 22 } : h,
+      ),
     );
 
   const probeAll = async () => {
@@ -184,8 +196,12 @@ export function ClusterSshSettings() {
     if (ssh.authMethod === "password" && !ssh.password) return false;
     const p = ssh.port ?? 22;
     if (!Number.isInteger(p) || p < 1 || p > 65535) return false;
+    for (const h of hosts) {
+      const hp = h.port ?? 22;
+      if (!Number.isInteger(hp) || hp < 1 || hp > 65535) return false;
+    }
     return true;
-  }, [ssh]);
+  }, [ssh, hosts]);
 
   const onSave = async () => {
     if (!clusterId) return;
@@ -194,8 +210,15 @@ export function ClusterSshSettings() {
     for (const h of hosts) {
       if (h.sshOverride) overrides[h.id] = h.sshOverride;
     }
+    const hostPorts = hosts
+      .filter((h) => h.id && (h.port ?? 0) > 0)
+      .map((h) => ({ id: h.id, port: h.port }));
     try {
-      await saveClusterSshConfig(clusterId, { ssh, overrides });
+      await saveClusterSshConfig(
+        clusterId,
+        { ssh, overrides },
+        { persist: persistSsh, hosts: hostPorts },
+      );
       navigate(`/clusters/${clusterId}`);
     } finally {
       setSaving(false);
@@ -402,7 +425,19 @@ export function ClusterSshSettings() {
             {hosts.flatMap((h) => [
               <tr key={h.id}>
                 <td className="mono">{h.hostname}</td>
-                <td className="mono subtle">{h.port}</td>
+                <td>
+                  <input
+                    className="input"
+                    type="number"
+                    min={1}
+                    max={65535}
+                    value={h.port}
+                    onChange={(e) =>
+                      setHostPort(h.id, parseInt(e.target.value, 10))
+                    }
+                    aria-label={`SSH port for ${h.hostname}`}
+                  />
+                </td>
                 <td>
                   <input
                     type="checkbox"
@@ -432,20 +467,38 @@ export function ClusterSshSettings() {
         </table>
       </div>
 
-      <div className="hstack" style={{ justifyContent: "flex-end", gap: "var(--s-2)" }}>
-        <button
-          className="btn"
-          onClick={() => navigate(`/clusters/${cluster.id}`)}
-        >
-          Cancel
-        </button>
-        <button
-          className="btn btn--primary"
-          onClick={onSave}
-          disabled={!canSave || saving}
-        >
-          {saving ? "Saving…" : "Save"}
-        </button>
+      <div
+        className="hstack"
+        style={{
+          justifyContent: "space-between",
+          gap: "var(--s-3)",
+          alignItems: "center",
+          flexWrap: "wrap",
+        }}
+      >
+        <label className="hstack" style={{ gap: 8, alignItems: "center" }}>
+          <input
+            type="checkbox"
+            checked={persistSsh}
+            onChange={(e) => setPersistSsh(e.target.checked)}
+          />
+          <span>Save SSH credentials on this computer for future operations</span>
+        </label>
+        <div className="hstack" style={{ gap: "var(--s-2)" }}>
+          <button
+            className="btn"
+            onClick={() => navigate(`/clusters/${cluster.id}`)}
+          >
+            Cancel
+          </button>
+          <button
+            className="btn btn--primary"
+            onClick={onSave}
+            disabled={!canSave || saving}
+          >
+            {saving ? "Saving…" : persistSsh ? "Save" : "Apply"}
+          </button>
+        </div>
       </div>
     </div>
   );

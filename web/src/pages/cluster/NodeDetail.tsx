@@ -48,10 +48,12 @@ function groupedNodeOps(): { group: string; ops: OperationDef[] }[] {
   return groups;
 }
 
-// Per-op gating: SSH-flavored ops need cluster.sshConfigured; API-
-// flavored ops (logs/trace navigate) need this node's API to be up.
+// Per-op gating. Every current node op — including the "View service
+// log" navigate op, which runs journalctl over SSH from the next
+// screen (see internal/api/node_logs_handler.go) — needs SSH to the
+// cluster. There are no API-gated node ops today.
 function opRequires(op: OperationDef): "ssh" | "api" | undefined {
-  if (op.flavor === "navigate") return "api";
+  void op;
   return "ssh";
 }
 
@@ -220,19 +222,22 @@ export function NodeDetail() {
     !healthLoading && (healthErrored || (healthInfo !== undefined && !hostFacts));
 
   const sshOk = !!sshConfig;
-  const apiOk = node.apiAccessible;
+  const engineMismatch = (op: OperationDef): boolean =>
+    !!op.buckitOnly && !!cluster && cluster.engine !== "buckit";
 
   const disabledHint = (op: OperationDef) => {
-    const r = opRequires(op);
-    return r === "ssh" && !sshOk
-      ? "SSH is not configured for this cluster."
-      : r === "api" && !apiOk
-        ? "S3 API is not reachable on this node."
-        : undefined;
+    if (engineMismatch(op)) {
+      return "Only available on Buckit clusters. Migrate this cluster from MinIO to enable it.";
+    }
+    if (opRequires(op) === "ssh" && !sshOk) {
+      return "SSH is not configured for this cluster.";
+    }
+    return undefined;
   };
 
   const onPick = (op: OperationDef) => {
     if (!cluster) return;
+    if (engineMismatch(op)) return;
     setActionsOpen(false);
     const requirement = opRequires(op);
     if (requirement === "ssh" && !sshOk) {
@@ -289,31 +294,30 @@ export function NodeDetail() {
                   <div className="cdetail__menu-group">
                     {NODE_GROUP_LABELS[group] ?? group}
                   </div>
-                  {ops.map((op) => (
-                    <button
-                      key={op.id}
-                      className={
-                        "cdetail__menu-item cdetail__menu-item--stacked" +
-                        (op.danger ? " is-danger" : "")
-                      }
-                      onClick={() => onPick(op)}
-                      disabled={opRequires(op) === "api" && !apiOk}
-                      title={
-                        opRequires(op) === "api" && !apiOk
-                          ? disabledHint(op)
-                          : undefined
-                      }
-                      role="menuitem"
-                    >
-                      <span>{op.label}</span>
-                      <span
-                        className="subtle"
-                        style={{ fontSize: "var(--fs-xs)" }}
+                  {ops.map((op) => {
+                    const disabled = engineMismatch(op);
+                    return (
+                      <button
+                        key={op.id}
+                        className={
+                          "cdetail__menu-item cdetail__menu-item--stacked" +
+                          (op.danger ? " is-danger" : "")
+                        }
+                        onClick={() => onPick(op)}
+                        disabled={disabled}
+                        title={disabled ? disabledHint(op) : undefined}
+                        role="menuitem"
                       >
-                        {op.description}
-                      </span>
-                    </button>
-                  ))}
+                        <span>{op.label}</span>
+                        <span
+                          className="subtle"
+                          style={{ fontSize: "var(--fs-xs)" }}
+                        >
+                          {op.description}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               ))}
             </div>

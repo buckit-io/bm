@@ -14,19 +14,33 @@ import (
 	bmssh "github.com/buckit-io/bm/internal/ssh"
 )
 
-// minioEnvPath is the canonical /etc/default/minio location both minio.service
-// and the new buckit.service drop-ins read.
-const minioEnvPath = "/etc/default/minio"
+// dropInPath is the per-host systemd drop-in bm writes to align
+// buckit.service with the user / group / EnvironmentFile set the old
+// minio.service was using. Removed by Rollback. The 10- prefix is the
+// systemd-conventional lexical bucket for operator-supplied overrides
+// (drop-ins are merged in lexical order; lower wins on scalar conflicts,
+// so a future 90-operator.conf can still override us).
+const (
+	dropInDir  = "/etc/systemd/system/buckit.service.d"
+	dropInPath = dropInDir + "/10-bm-migrated.conf"
+)
 
-// minioEnvBackup is the per-host on-disk copy of the original env file. Kept
-// next to the original so rollback is a simple `cp` away.
-const minioEnvBackup = "/etc/default/minio.bm-bak"
+// Conventional MinIO packaging values bm falls back to when minio.service
+// doesn't declare User / Group / EnvironmentFile. The migration preflight
+// (minioServiceComplete) verifies the corresponding host-side artifacts
+// exist before emitting only-a-warning; a cutover dispatched without
+// preflight assumes these values without verification.
+const (
+	fallbackMinioUser    = "minio-user"
+	fallbackMinioGroup   = "minio-user"
+	fallbackMinioEnvFile = "/etc/default/minio"
+)
 
 // Installer drives a single host through the cutover pipeline. Reuses the
 // SSH pool so multiple sequential hosts amortize handshake cost.
 //
 // Stage progression mirrors web/src/pages/wizards/migrate/state.ts
-// :CutoverNodeState.state (StoppingMinio → UploadingPkg → Installing →
+// :CutoverNodeState.state (StoppingMinio → DownloadingPkg → Installing →
 // SwitchingUnit → WaitingHealth → Done).
 type Installer struct {
 	Pool *bmssh.Pool
@@ -42,10 +56,18 @@ func NewInstaller(pool *bmssh.Pool) *Installer {
 	return &Installer{Pool: pool, HealthyTimeout: 90 * time.Second}
 }
 
-// Install walks one host through the full cutover pipeline. emit is called
-// on every stage transition; the executor wraps those into UI events.
-// Returns the first error that aborted the run, or nil on Done.
-func (in *Installer) Install(ctx context.Context, host domain.HostRow, params CutoverParams, emit func(StepEvent)) error {
+// PreStage performs every per-host step that does NOT require minio.service
+// to be stopped: probe the live minio.service for User/Group/EnvironmentFile,
+// detect the package manager, download + verify the Buckit artifact, install
+// the package, and write the systemd drop-in. Runs concurrently across all
+// targeted hosts; if any host fails, the cutover aborts before any host
+// stops minio (zero-downtime abort).
+//
+// On success, the host has buckit installed but disabled, and a drop-in at
+// dropInPath ready to be picked up the next time buckit.service is enabled.
+// minio.service is still serving — the operator's cluster is untouched
+// from a data-path perspective.
+func (in *Installer) PreStage(ctx context.Context, host domain.HostRow, params CutoverParams, emit func(StepEvent)) error {
 	creds := bmssh.Merge(params.SSH, host.SSHOverride)
 	report := func(stage Stage, detail string) {
 		emit(StepEvent{HostID: host.ID, Hostname: host.Hostname, Stage: stage, Detail: detail})
@@ -54,7 +76,7 @@ func (in *Installer) Install(ctx context.Context, host domain.HostRow, params Cu
 		emit(StepEvent{HostID: host.ID, Hostname: host.Hostname, Stage: stage, Err: err, Detail: err.Error()})
 	}
 	if in == nil || in.Pool == nil {
-		return errors.New("cutover: nil installer / pool")
+		return errors.New("pre-stage: nil installer / pool")
 	}
 
 	report(StagePending, "Queued")
@@ -69,27 +91,20 @@ func (in *Installer) Install(ctx context.Context, host domain.HostRow, params Cu
 		return err
 	}
 
-	// 1. Capture the existing minio env into a backup file. Doing this
-	//    before stopping minio means a transport failure here aborts the
-	//    cutover safely — minio is still running.
-	report(StageStoppingMinio, "Backing up "+minioEnvPath)
-	if err := backupMinioEnv(ctx, client, creds); err != nil {
-		reportErr(StageFailed, fmt.Errorf("backup env: %w", err))
+	// 1. Capture minio.service's User/Group/EnvironmentFile while it's
+	//    still running. The drop-in renderer uses these to point
+	//    buckit.service at the same identity and env file.
+	report(StageDownloadingPkg, "Probing minio.service")
+	oldProps, err := deploy.LoadUnitProps(ctx, client, creds, "minio.service")
+	if err != nil {
+		reportErr(StageFailed, fmt.Errorf("probe minio.service: %w", err))
 		return err
 	}
 
-	// 2. Stop the existing minio.service. If the unit doesn't exist (e.g.
-	//    the operator already manually disabled it), a non-zero exit is
-	//    OK — log and continue.
-	report(StageStoppingMinio, "systemctl stop minio.service")
-	stopCmd := deploy.SudoWrap(creds, "systemctl stop minio.service || true")
-	if err := deploy.RunStep(ctx, client, stopCmd); err != nil {
-		reportErr(StageFailed, fmt.Errorf("stop minio: %w", err))
-		return err
-	}
-
-	// 3. Detect the host's package manager, then resolve+fetch the
-	//    matching Buckit artifact.
+	// 2. Detect the host's package manager, then download + verify the
+	//    Buckit artifact. Both run while minio.service is still serving,
+	//    so any transport failure here aborts the cutover with zero
+	//    impact on the cluster.
 	mgr, err := deploy.DetectPackageManagerForClient(ctx, client)
 	if err != nil {
 		reportErr(StageFailed, fmt.Errorf("detect package manager: %w", err))
@@ -105,30 +120,93 @@ func (in *Installer) Install(ctx context.Context, host domain.HostRow, params Cu
 		reportErr(StageFailed, fmt.Errorf("checksum: %w", err))
 		return err
 	}
-	report(StageUploadingPkg, "Fetching "+artifact.URL)
+	report(StageDownloadingPkg, "Fetching "+artifact.URL)
 	if err := deploy.RunStep(ctx, client, mgr.DownloadCommand(artifact.URL)); err != nil {
 		reportErr(StageFailed, fmt.Errorf("download: %w", err))
 		return err
 	}
-	report(StageUploadingPkg, fmt.Sprintf("Verifying %s sha256", mgr.LocalFile()))
+	report(StageDownloadingPkg, fmt.Sprintf("Verifying %s sha256", mgr.LocalFile()))
 	if err := deploy.RunStep(ctx, client, mgr.VerifyChecksumCommand(expectedSHA256)); err != nil {
 		reportErr(StageFailed, fmt.Errorf("checksum: %w", err))
 		return err
 	}
 
-	// 4. Install the package.
+	// 3. Install the Buckit package. Buckit does not conflict with minio —
+	//    different binary paths, different unit file paths, no shared env
+	//    files — so this is safe to do while minio.service is still
+	//    running. Verified against ../buckit/packaging/nfpm.yaml.
 	report(StageInstalling, fmt.Sprintf("Installing %s", mgr.LocalFile()))
 	if err := deploy.RunStep(ctx, client, deploy.SudoWrap(creds, mgr.InstallCommand(deploy.InstallActionFresh))); err != nil {
 		reportErr(StageFailed, fmt.Errorf("install: %w", err))
 		return err
 	}
 
-	// 5. Swap the systemd unit: disable minio.service, enable buckit.service.
-	//    /etc/default/minio remains the env source — Buckit is wire-compatible.
+	// 4. Probe buckit.service for its User/Group/EnvironmentFile and
+	//    write a drop-in if those differ from minio.service's. The
+	//    drop-in sits under /etc/systemd/system/buckit.service.d/ and
+	//    has no effect until buckit.service is enabled in the Switch
+	//    phase.
+	newProps, err := deploy.LoadUnitProps(ctx, client, creds, "buckit.service")
+	if err != nil {
+		reportErr(StageFailed, fmt.Errorf("probe buckit.service: %w", err))
+		return err
+	}
+	if body := renderDropIn(oldProps, newProps); body != "" {
+		report(StageSwitchingUnit, "Writing drop-in "+dropInPath)
+		if err := deploy.RunStep(ctx, client, deploy.SudoWrap(creds, writeDropInCmd(body))); err != nil {
+			reportErr(StageFailed, fmt.Errorf("write drop-in: %w", err))
+			return err
+		}
+	}
+
+	report(StageDownloadingPkg, "Pre-staged")
+	return nil
+}
+
+// Switch swaps minio.service → buckit.service atomically on one host:
+// stop minio, daemon-reload, disable minio, enable --now buckit. Called
+// inside the cluster-wide downtime window AFTER every host's PreStage
+// has succeeded. Per-host health verification is the executor's job
+// (cluster-wide verify phase); Switch only enables the unit.
+func (in *Installer) Switch(ctx context.Context, host domain.HostRow, params CutoverParams, emit func(StepEvent)) error {
+	creds := bmssh.Merge(params.SSH, host.SSHOverride)
+	report := func(stage Stage, detail string) {
+		emit(StepEvent{HostID: host.ID, Hostname: host.Hostname, Stage: stage, Detail: detail})
+	}
+	reportErr := func(stage Stage, err error) {
+		emit(StepEvent{HostID: host.ID, Hostname: host.Hostname, Stage: stage, Err: err, Detail: err.Error()})
+	}
+	if in == nil || in.Pool == nil {
+		return errors.New("switch: nil installer / pool")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	ref := domain.HostRef{ID: host.ID, Hostname: host.Hostname, Port: host.Port}
+	client, err := in.Pool.Get(ctx, "migrate-"+params.SourceClusterID, ref, creds)
+	if err != nil {
+		reportErr(StageFailed, fmt.Errorf("dial: %w", err))
+		return err
+	}
+
+	// Stop minio.service — downtime begins on this host. A non-zero
+	// exit is OK (operator may have manually disabled the unit).
+	report(StageStoppingMinio, "systemctl stop minio.service")
+	stopCmd := deploy.SudoWrap(creds, "systemctl stop minio.service || true")
+	if err := deploy.RunStep(ctx, client, stopCmd); err != nil {
+		reportErr(StageFailed, fmt.Errorf("stop minio: %w", err))
+		return err
+	}
+
+	// Swap units in one shot: daemon-reload picks up the drop-in
+	// written during PreStage; disable minio.service so it doesn't
+	// fight buckit on the next reboot; enable --now buckit.service
+	// to start it immediately.
 	report(StageSwitchingUnit, "systemctl swap minio.service → buckit.service")
 	swap := strings.Join([]string{
-		"systemctl disable minio.service || true",
 		"systemctl daemon-reload",
+		"systemctl disable minio.service || true",
 		"systemctl enable --now buckit.service",
 	}, " && ")
 	if err := deploy.RunStep(ctx, client, deploy.SudoWrap(creds, swap)); err != nil {
@@ -136,26 +214,107 @@ func (in *Installer) Install(ctx context.Context, host domain.HostRow, params Cu
 		return err
 	}
 
-	// 6. Wait for the new service to report healthy locally.
-	report(StageWaitingHealth, "Waiting for /minio/health/live")
-	if err := in.waitHealthy(ctx, client, params); err != nil {
-		reportErr(StageFailed, fmt.Errorf("local health: %w", err))
-		return err
-	}
-
-	report(StageDone, "Buckit healthy")
+	report(StageWaitingHealth, "buckit.service started")
 	return nil
 }
 
-// backupMinioEnv copies /etc/default/minio to /etc/default/minio.bm-bak when
-// the original exists and the backup doesn't. Idempotent — re-running cutover
-// on a host that's already been backed up does not overwrite the original.
-func backupMinioEnv(ctx context.Context, client *ssh.Client, creds bmssh.Resolved) error {
-	cmd := deploy.SudoWrap(creds, fmt.Sprintf(
-		"if [ -f %s ] && [ ! -f %s ]; then cp -p %s %s; fi",
-		minioEnvPath, minioEnvBackup, minioEnvPath, minioEnvBackup,
-	))
-	return deploy.RunStep(ctx, client, cmd)
+// renderDropIn produces the drop-in body when the new buckit.service's
+// User / Group / EnvironmentFile set differs from the old minio.service's.
+// Returns "" when everything already matches — no drop-in, nothing for
+// rollback to clean up.
+//
+// Defaults are *asymmetric* by design:
+//   - OLD (minio.service) missing → conventional MinIO packaging value
+//     (minio-user / minio-user / /etc/default/minio). The preflight
+//     check minioServiceComplete verifies these exist on the host.
+//   - NEW (buckit.service) missing → systemd's actual root fallback,
+//     because that's what systemd will apply when buckit starts.
+//
+// For EnvironmentFile we emit the reset idiom (`EnvironmentFile=` on its
+// own line) before re-adding the list — EnvironmentFile= is list-style
+// additive in systemd, so a bare drop-in would append rather than replace.
+func renderDropIn(old, new deploy.UnitProps) string {
+	const systemdDefaultUser = "root"
+	oldUser := orDefault(old.User, fallbackMinioUser)
+	newUser := orDefault(new.User, systemdDefaultUser)
+	oldGroup := orDefault(old.Group, fallbackMinioGroup)
+	newGroup := orDefault(new.Group, systemdDefaultUser)
+	oldEnv := old.EnvironmentFiles
+	if len(oldEnv) == 0 {
+		oldEnv = []string{fallbackMinioEnvFile}
+	}
+
+	var lines []string
+	if oldUser != newUser {
+		lines = append(lines, "User="+oldUser)
+	}
+	if oldGroup != newGroup {
+		lines = append(lines, "Group="+oldGroup)
+	}
+	if !stringSliceEqual(oldEnv, new.EnvironmentFiles) {
+		// Reset the inherited list first; without this the entries we
+		// add below would *append* to whatever buckit.service ships.
+		lines = append(lines, "EnvironmentFile=")
+		for _, p := range oldEnv {
+			// Preserve the `-` ignore-errors marker so a missing file on
+			// the buckit side doesn't fail-start the unit (mirrors the
+			// stock minio.service convention).
+			lines = append(lines, "EnvironmentFile=-"+p)
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "# Written by bm during MinIO → Buckit cutover. Removed on rollback.\n" +
+		"[Service]\n" +
+		strings.Join(lines, "\n") + "\n"
+}
+
+// writeDropInCmd returns a shell command that writes body to dropInPath.
+// Uses a here-doc with a quoted sentinel so $variables in body are not
+// expanded by the remote shell.
+//
+// The steps are joined with newlines (not " && ") because the heredoc
+// terminator MUST be on a line by itself — joining with " && " puts the
+// terminator on the same line as the chmod command and bash never sees
+// the end of the heredoc, dumping the trailing `BMDROPIN && chmod …`
+// text into the drop-in file. `set -e` preserves fail-fast behavior.
+func writeDropInCmd(body string) string {
+	return strings.Join([]string{
+		"set -e",
+		"mkdir -p " + dropInDir,
+		"tee " + dropInPath + " > /dev/null <<'BMDROPIN'\n" + body + "BMDROPIN",
+		"chmod 644 " + dropInPath,
+	}, "\n")
+}
+
+// removeDropInCmd returns a shell command that removes the drop-in file
+// and the parent directory if it's empty afterward. Safe to run when
+// the drop-in was never written — rm -f swallows missing-file errors.
+func removeDropInCmd() string {
+	return strings.Join([]string{
+		"rm -f " + dropInPath,
+		"rmdir " + dropInDir + " 2>/dev/null || true",
+	}, " && ")
+}
+
+func orDefault(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
+}
+
+func stringSliceEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // waitHealthy polls /minio/health/live until 200 or the deadline passes.
@@ -163,8 +322,8 @@ func backupMinioEnv(ctx context.Context, client *ssh.Client, creds bmssh.Resolve
 func (in *Installer) waitHealthy(ctx context.Context, client *ssh.Client, params CutoverParams) error {
 	port := params.API.Port
 	if port == 0 {
-		// Buckit reads MINIO_OPTS from /etc/default/minio for the listen
-		// address; we don't know it definitively without re-parsing the env.
+		// Buckit reads MINIO_OPTS from the env file for the listen
+		// address; we don't know it definitively without re-parsing.
 		// Default to the minio default 9000 — operators with non-default
 		// ports set params.API.Port via the wizard.
 		port = 9000
@@ -193,14 +352,18 @@ func (in *Installer) waitHealthy(ctx context.Context, client *ssh.Client, params
 	}
 }
 
-// Rollback reverts one host from Buckit back to MinIO. Runs only on hosts
-// whose cutover state reached StageDone; the rollback executor decides which
-// hosts qualify.
+// StopBuckit performs the buckit-side teardown on one host: disable buckit,
+// uninstall the package, remove the drop-in directory. Safe to fan out
+// across hosts in parallel — every step is local to its own host and
+// idempotent against repeated invocations.
 //
-// Steps: disable buckit.service, restore the env-file backup, daemon-reload,
-// enable --now minio.service. Idempotent — running on a host that's already
-// rolled back is a no-op (systemctl emits "already" warnings, exit 0).
-func (in *Installer) Rollback(ctx context.Context, host domain.HostRow, params CutoverParams, emit func(StepEvent)) error {
+// Rollback must split into two phases (StopBuckit then StartMinio) so that
+// MinIO's distributed bootstrap doesn't reject startup. If we ran
+// stop+start back-to-back per host, the first host to start minio would
+// dial peers still running buckit, see a binary-checksum mismatch, and
+// refuse to join. Stopping ALL buckits first leaves no buckit running
+// anywhere when minio comes up.
+func (in *Installer) StopBuckit(ctx context.Context, host domain.HostRow, params CutoverParams, emit func(StepEvent)) error {
 	creds := bmssh.Merge(params.SSH, host.SSHOverride)
 	report := func(stage Stage, detail string) {
 		emit(StepEvent{HostID: host.ID, Hostname: host.Hostname, Stage: stage, Detail: detail})
@@ -208,11 +371,9 @@ func (in *Installer) Rollback(ctx context.Context, host domain.HostRow, params C
 	reportErr := func(stage Stage, err error) {
 		emit(StepEvent{HostID: host.ID, Hostname: host.Hostname, Stage: stage, Err: err, Detail: err.Error()})
 	}
-
 	if in == nil || in.Pool == nil {
-		return errors.New("rollback: nil installer / pool")
+		return errors.New("stop-buckit: nil installer / pool")
 	}
-
 	ref := domain.HostRef{ID: host.ID, Hostname: host.Hostname, Port: host.Port}
 	client, err := in.Pool.Get(ctx, "migrate-"+params.SourceClusterID, ref, creds)
 	if err != nil {
@@ -221,18 +382,53 @@ func (in *Installer) Rollback(ctx context.Context, host domain.HostRow, params C
 	}
 
 	report(StageRolledBack, "Stopping buckit.service")
-	stop := strings.Join([]string{
-		"systemctl disable --now buckit.service || true",
-	}, " && ")
-	if err := deploy.RunStep(ctx, client, deploy.SudoWrap(creds, stop)); err != nil {
+	if err := deploy.RunStep(ctx, client, deploy.SudoWrap(creds, "systemctl disable --now buckit.service || true")); err != nil {
 		reportErr(StageFailed, fmt.Errorf("stop buckit: %w", err))
 		return err
 	}
 
-	report(StageRolledBack, "Restoring "+minioEnvPath)
-	restore := fmt.Sprintf("if [ -f %s ]; then cp -p %s %s; fi", minioEnvBackup, minioEnvBackup, minioEnvPath)
-	if err := deploy.RunStep(ctx, client, deploy.SudoWrap(creds, restore)); err != nil {
-		reportErr(StageFailed, fmt.Errorf("restore env: %w", err))
+	// Uninstall the buckit package. Detect the manager fresh — Rollback
+	// is a separate entry point that may run weeks later against a host
+	// where the pkg mgr binary moved.
+	report(StageRolledBack, "Uninstalling buckit package")
+	mgr, mgrErr := deploy.DetectPackageManagerForClient(ctx, client)
+	if mgrErr != nil {
+		report(StageRolledBack, "Skipping uninstall (no package manager detected): "+mgrErr.Error())
+	} else if err := deploy.RunStep(ctx, client, deploy.SudoWrap(creds, mgr.UninstallCommand())); err != nil {
+		reportErr(StageFailed, fmt.Errorf("uninstall buckit: %w", err))
+		return err
+	}
+
+	// Clean up the drop-in directory left under /etc/systemd/system —
+	// outside the package install paths, so uninstall doesn't touch it.
+	report(StageRolledBack, "Removing drop-in "+dropInPath)
+	if err := deploy.RunStep(ctx, client, deploy.SudoWrap(creds, removeDropInCmd())); err != nil {
+		reportErr(StageFailed, fmt.Errorf("remove drop-in: %w", err))
+		return err
+	}
+
+	return nil
+}
+
+// StartMinio re-enables minio.service on one host. Must run AFTER every
+// attempted host has finished StopBuckit — otherwise the distributed
+// bootstrap check rejects startup. Safe to fan out across hosts; each
+// host's minio retries peer discovery until the rest come up.
+func (in *Installer) StartMinio(ctx context.Context, host domain.HostRow, params CutoverParams, emit func(StepEvent)) error {
+	creds := bmssh.Merge(params.SSH, host.SSHOverride)
+	report := func(stage Stage, detail string) {
+		emit(StepEvent{HostID: host.ID, Hostname: host.Hostname, Stage: stage, Detail: detail})
+	}
+	reportErr := func(stage Stage, err error) {
+		emit(StepEvent{HostID: host.ID, Hostname: host.Hostname, Stage: stage, Err: err, Detail: err.Error()})
+	}
+	if in == nil || in.Pool == nil {
+		return errors.New("start-minio: nil installer / pool")
+	}
+	ref := domain.HostRef{ID: host.ID, Hostname: host.Hostname, Port: host.Port}
+	client, err := in.Pool.Get(ctx, "migrate-"+params.SourceClusterID, ref, creds)
+	if err != nil {
+		reportErr(StageFailed, fmt.Errorf("dial: %w", err))
 		return err
 	}
 
@@ -246,8 +442,6 @@ func (in *Installer) Rollback(ctx context.Context, host domain.HostRow, params C
 		return err
 	}
 
-	// Wait for minio to report healthy at the same port the cutover ran
-	// against. Any waitHealthy failure is treated as a hard rollback fail.
 	report(StageRolledBack, "Waiting for minio /health/live")
 	if err := in.waitHealthy(ctx, client, params); err != nil {
 		reportErr(StageFailed, fmt.Errorf("minio health: %w", err))

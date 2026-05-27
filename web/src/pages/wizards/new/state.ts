@@ -60,6 +60,11 @@ export interface NewClusterDraft {
 
   hosts: HostRow[];
   ssh: SshCreds;
+  // When true, the deploy commit step also persists ssh + overrides
+  // to the cluster_ssh bucket so post-deploy ops can reuse them
+  // without re-prompting. Default true; bound to a checkbox on the
+  // AddNodes step.
+  persistSsh: boolean;
 
   // Transport security for the deployed cluster. "off" leaves MinIO on
   // HTTP. "byo" ships the operator-supplied cert + key into
@@ -257,6 +262,7 @@ export function emptyDraft(): NewClusterDraft {
       { id: "h1", hostname: "", port: 22, probe: "idle" },
     ],
     ssh: { authMethod: "agent", user: "", sudo: true },
+    persistSsh: false,
     tls: { mode: "off", certPem: "", keyPem: "", caBundlePem: "" },
     discovery: {},
     topology: {

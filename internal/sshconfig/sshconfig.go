@@ -1,6 +1,12 @@
 // Package sshconfig stores per-cluster SSH credentials in the AES-GCM
 // encrypted `cluster_ssh` bbolt bucket. Decryption happens on read so callers
 // never see ciphertext.
+//
+// In addition to the on-disk bucket, the Repo holds an in-memory map so
+// operators can supply credentials for a one-off operation without
+// persisting them. In-memory entries live until the process exits. Get
+// checks the in-memory map first and falls back to disk, so every
+// existing caller picks up ephemeral creds transparently.
 package sshconfig
 
 import (
@@ -8,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 
 	"go.etcd.io/bbolt"
 
@@ -21,13 +28,26 @@ var ErrNotFound = errors.New("ssh config not found")
 // Repo wraps a store.Store with cluster_ssh helpers.
 type Repo struct {
 	s *store.Store
+
+	mu     sync.Mutex
+	memory map[string]domain.ClusterSshConfig
 }
 
 // New returns a Repo against s.
-func New(s *store.Store) *Repo { return &Repo{s: s} }
+func New(s *store.Store) *Repo {
+	return &Repo{s: s, memory: map[string]domain.ClusterSshConfig{}}
+}
 
-// Get returns the decrypted ClusterSshConfig for clusterID. ErrNotFound when absent.
+// Get returns the decrypted ClusterSshConfig for clusterID. Checks the
+// in-memory map first; falls back to the encrypted bucket. ErrNotFound
+// when neither source has an entry.
 func (r *Repo) Get(ctx context.Context, clusterID string) (domain.ClusterSshConfig, error) {
+	r.mu.Lock()
+	if cfg, ok := r.memory[clusterID]; ok {
+		r.mu.Unlock()
+		return cfg, nil
+	}
+	r.mu.Unlock()
 	raw, err := r.s.GetEncrypted(ctx, store.BucketClusterSSH, []byte(clusterID))
 	if err != nil {
 		return domain.ClusterSshConfig{}, err
@@ -47,7 +67,8 @@ func (r *Repo) Get(ctx context.Context, clusterID string) (domain.ClusterSshConf
 
 // Put validates + encrypts cfg and writes it under clusterID. Caller is
 // responsible for invalidating any pooled SSH clients (via ssh.Pool.Drop) when
-// credentials change.
+// credentials change. A persistent save also drops any in-memory entry
+// for the same cluster — disk creds supersede in-memory ones.
 func (r *Repo) Put(ctx context.Context, clusterID string, cfg domain.ClusterSshConfig) error {
 	if err := Validate(cfg); err != nil {
 		return err
@@ -56,11 +77,38 @@ func (r *Repo) Put(ctx context.Context, clusterID string, cfg domain.ClusterSshC
 	if err != nil {
 		return fmt.Errorf("sshconfig: marshal: %w", err)
 	}
-	return r.s.PutEncrypted(ctx, store.BucketClusterSSH, []byte(clusterID), body)
+	if err := r.s.PutEncrypted(ctx, store.BucketClusterSSH, []byte(clusterID), body); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	delete(r.memory, clusterID)
+	r.mu.Unlock()
+	return nil
 }
 
-// Delete drops the cluster's SSH config.
+// PutInMemory validates cfg and stores it in process memory under
+// clusterID. The entry lives until the process exits. Useful when an
+// operator wants to run a one-off operation without persisting creds to
+// disk.
+func (r *Repo) PutInMemory(clusterID string, cfg domain.ClusterSshConfig) error {
+	if err := Validate(cfg); err != nil {
+		return err
+	}
+	if cfg.Overrides == nil {
+		cfg.Overrides = map[string]domain.SshOverrides{}
+	}
+	r.mu.Lock()
+	r.memory[clusterID] = cfg
+	r.mu.Unlock()
+	return nil
+}
+
+// Delete drops the cluster's SSH config from both the in-memory map and
+// the on-disk bucket.
 func (r *Repo) Delete(ctx context.Context, clusterID string) error {
+	r.mu.Lock()
+	delete(r.memory, clusterID)
+	r.mu.Unlock()
 	return r.s.Update(ctx, func(tx *bbolt.Tx) error {
 		b := tx.Bucket(store.BucketClusterSSH)
 		if b == nil {

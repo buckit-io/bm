@@ -320,9 +320,11 @@ func TestRefreshNodeConnectivityUpdatesProbeFlags(t *testing.T) {
 
 	prevTCP := refreshTCPProbe.Load()
 	prevHTTP := refreshHTTPProbe.Load()
+	prevICMP := refreshICMPProbe.Load()
 	t.Cleanup(func() {
 		refreshTCPProbe.Store(prevTCP)
 		refreshHTTPProbe.Store(prevHTTP)
+		refreshICMPProbe.Store(prevICMP)
 	})
 
 	tcp := tcpProbeFn(func(_ context.Context, address string) bool {
@@ -333,10 +335,12 @@ func TestRefreshNodeConnectivityUpdatesProbeFlags(t *testing.T) {
 		return strings.Contains(rawURL, ":9000/")
 	})
 	refreshHTTPProbe.Store(&httpProbe)
+	icmp := icmpProbeFn(func(_ context.Context, _ string) bool { return false })
+	refreshICMPProbe.Store(&icmp)
 
 	err = refreshNodeConnectivity(context.Background(), Options{
 		Nodes: nodesRepo,
-	}, clusterID, []domain.Node{node}, domain.AdminCreds{URL: "http://node1:9000"})
+	}, clusterID, []domain.Node{node}, domain.AdminCreds{URL: "http://node1:9000"}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

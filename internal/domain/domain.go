@@ -84,11 +84,13 @@ type Node struct {
 	ClusterID         string    `json:"clusterId"`
 	Hostname          string    `json:"hostname"`
 	SSHPort           int       `json:"sshPort"`
+	APIPort           int       `json:"apiPort,omitempty"`
 	Label             string    `json:"label,omitempty"`
 	State             NodeState `json:"state"`
 	Version           string    `json:"version,omitempty"`
 	UptimeSec         *float64  `json:"uptimeSec,omitempty"`
 	OS                string    `json:"os,omitempty"`
+	Arch              string    `json:"arch,omitempty"`
 	Kernel            string    `json:"kernel,omitempty"`
 	CPUModel          string    `json:"cpuModel,omitempty"`
 	CPUCores          *int      `json:"cpuCores,omitempty"`

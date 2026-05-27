@@ -31,6 +31,7 @@ const (
 	OpClusterUpgradeBySystemctl   OpKind = "cluster_upgrade_by_systemctl"
 	OpClusterUpgradeByAdminUpdate OpKind = "cluster_upgrade_by_admin_update"
 	OpStartCluster                OpKind = "start_cluster"
+	OpStopClusterBySystemctl      OpKind = "stop_cluster_by_systemctl"
 	OpRotateRootCreds             OpKind = "rotate_root_creds"
 	OpAddPool                     OpKind = "add_pool"
 
@@ -70,6 +71,11 @@ const (
 	HostRunning   HostOpState = "running"
 	HostSucceeded HostOpState = "succeeded"
 	HostFailed    HostOpState = "failed"
+	// HostSkipped: the executor intentionally skipped this host (e.g.
+	// it was already offline at the start of a migration cutover).
+	// Distinct from Failed so the UI can render a neutral "skipped"
+	// pill rather than a danger-colored failure.
+	HostSkipped HostOpState = "skipped"
 )
 
 // HostOpStatus mirrors web/src/mock/data.ts.HostOpStatus.

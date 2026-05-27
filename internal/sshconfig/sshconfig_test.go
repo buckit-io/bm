@@ -64,6 +64,78 @@ func TestPutValidationKeyAuthMissingKeyPath(t *testing.T) {
 	}
 }
 
+func TestPutInMemory_GetReadsMemoryBeforeDisk(t *testing.T) {
+	r := newFixture(t)
+	ctx := context.Background()
+	disk := domain.ClusterSshConfig{
+		SSH: domain.SshCreds{
+			AuthMethod: domain.AuthAgent, User: "root",
+		},
+		Overrides: map[string]domain.SshOverrides{},
+	}
+	if err := r.Put(ctx, "c1", disk); err != nil {
+		t.Fatal(err)
+	}
+	mem := domain.ClusterSshConfig{
+		SSH: domain.SshCreds{
+			AuthMethod: domain.AuthAgent, User: "ephemeral",
+		},
+	}
+	if err := r.PutInMemory("c1", mem); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.Get(ctx, "c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SSH.User != "ephemeral" {
+		t.Fatalf("Get returned disk user %q; want in-memory user 'ephemeral'", got.SSH.User)
+	}
+}
+
+func TestPutInMemory_GetFallsBackToDiskWhenAbsent(t *testing.T) {
+	r := newFixture(t)
+	ctx := context.Background()
+	disk := domain.ClusterSshConfig{
+		SSH: domain.SshCreds{
+			AuthMethod: domain.AuthAgent, User: "root",
+		},
+	}
+	if err := r.Put(ctx, "c1", disk); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.Get(ctx, "c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SSH.User != "root" {
+		t.Fatalf("want disk user 'root', got %q", got.SSH.User)
+	}
+}
+
+func TestPutPersistentClearsInMemory(t *testing.T) {
+	r := newFixture(t)
+	ctx := context.Background()
+	if err := r.PutInMemory("c1", domain.ClusterSshConfig{
+		SSH: domain.SshCreds{AuthMethod: domain.AuthAgent, User: "ephemeral"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	disk := domain.ClusterSshConfig{
+		SSH: domain.SshCreds{AuthMethod: domain.AuthAgent, User: "persistent"},
+	}
+	if err := r.Put(ctx, "c1", disk); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.Get(ctx, "c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SSH.User != "persistent" {
+		t.Fatalf("persistent Put should drop the in-memory entry; got user %q", got.SSH.User)
+	}
+}
+
 func TestOverrideValidation(t *testing.T) {
 	r := newFixture(t)
 	method := domain.AuthPassword

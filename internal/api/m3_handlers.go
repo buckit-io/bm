@@ -73,7 +73,28 @@ func getSSHConfig(repo *sshconfig.Repo) http.HandlerFunc {
 	}
 }
 
+// putSshConfigBody is the wire shape PUT /clusters/:id/ssh accepts.
+// It superset-embeds ClusterSshConfig (the GET response shape) and
+// adds an optional per-node port array. The page sends `hosts` so the
+// backend can write individual Node.SSHPort values; legacy clients
+// that omit it fall back to propagating cfg.SSH.Port to every node.
+type putSshConfigBody struct {
+	domain.ClusterSshConfig
+	Hosts []domain.HostRef `json:"hosts,omitempty"`
+}
+
 // putSSHConfig serves PUT /clusters/:id/ssh.
+//
+// Query params:
+//
+//	persist=false  store the creds in process memory only (cleared on
+//	               bm restart). Useful when an operator wants to run a
+//	               one-off operation without committing creds to disk.
+//	               When omitted or "true", the creds are encrypted and
+//	               written to the cluster_ssh bbolt bucket.
+//
+// Per-node SSH port writes are structural (not credentials) and always
+// land on disk regardless of `persist`.
 func putSSHConfig(repo *sshconfig.Repo, nodeRepo *nodes.Repo, pool *bmssh.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if repo == nil {
@@ -81,11 +102,12 @@ func putSSHConfig(repo *sshconfig.Repo, nodeRepo *nodes.Repo, pool *bmssh.Pool) 
 			return
 		}
 		clusterID := chi.URLParam(r, "id")
-		var cfg domain.ClusterSshConfig
-		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		var body putSshConfigBody
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 			return
 		}
+		cfg := body.ClusterSshConfig
 		if cfg.Overrides == nil {
 			cfg.Overrides = map[string]domain.SshOverrides{}
 		}
@@ -93,24 +115,60 @@ func putSSHConfig(repo *sshconfig.Repo, nodeRepo *nodes.Repo, pool *bmssh.Pool) 
 			writeError(w, http.StatusBadRequest, "validation_failed", "port must be between 1 and 65535")
 			return
 		}
-		if err := repo.Put(r.Context(), clusterID, cfg); err != nil {
-			writeError(w, http.StatusBadRequest, "validation_failed", err.Error())
-			return
+		for _, h := range body.Hosts {
+			if h.Port != 0 && (h.Port < 1 || h.Port > 65535) {
+				writeError(w, http.StatusBadRequest, "validation_failed", "host port must be between 1 and 65535")
+				return
+			}
 		}
-		// Propagate the cluster-wide SSH port to each node so the periodic
-		// TCP probe and any SSH op that reads node.SSHPort use the new
-		// value. Port 0 means "leave nodes alone" (legacy clients).
-		if cfg.SSH.Port > 0 && nodeRepo != nil {
-			list, err := nodeRepo.List(r.Context(), clusterID)
-			if err == nil {
-				for _, n := range list {
-					if n.SSHPort == cfg.SSH.Port {
+		persist := r.URL.Query().Get("persist") != "false"
+		if persist {
+			if err := repo.Put(r.Context(), clusterID, cfg); err != nil {
+				writeError(w, http.StatusBadRequest, "validation_failed", err.Error())
+				return
+			}
+		} else {
+			if err := repo.PutInMemory(clusterID, cfg); err != nil {
+				writeError(w, http.StatusBadRequest, "validation_failed", err.Error())
+				return
+			}
+		}
+		// Apply per-node SSH ports. When the body carries `hosts`, that
+		// list is authoritative — each entry sets the corresponding Node's
+		// SSHPort. When it doesn't (legacy clients), fall back to
+		// propagating the cluster default to every node. Either way the
+		// SSH dialer in operations reads Node.SSHPort at dial time.
+		if nodeRepo != nil {
+			if len(body.Hosts) > 0 {
+				for _, h := range body.Hosts {
+					if h.ID == "" || h.Port == 0 {
 						continue
 					}
-					n.SSHPort = cfg.SSH.Port
+					n, err := nodeRepo.Get(r.Context(), clusterID, h.ID)
+					if err != nil {
+						continue // unknown host id — silently skip
+					}
+					if n.SSHPort == h.Port {
+						continue
+					}
+					n.SSHPort = h.Port
 					if err := nodeRepo.Put(r.Context(), n); err != nil {
 						writeError(w, http.StatusInternalServerError, "put_node_failed", err.Error())
 						return
+					}
+				}
+			} else if cfg.SSH.Port > 0 {
+				list, err := nodeRepo.List(r.Context(), clusterID)
+				if err == nil {
+					for _, n := range list {
+						if n.SSHPort == cfg.SSH.Port {
+							continue
+						}
+						n.SSHPort = cfg.SSH.Port
+						if err := nodeRepo.Put(r.Context(), n); err != nil {
+							writeError(w, http.StatusInternalServerError, "put_node_failed", err.Error())
+							return
+						}
 					}
 				}
 			}

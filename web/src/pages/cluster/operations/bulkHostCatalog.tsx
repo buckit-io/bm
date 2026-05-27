@@ -69,6 +69,7 @@ const REDEPLOY_SOFTWARE: OperationDef<{ version: string }> = {
   description: "Reinstall Buckit on the selected hosts.",
   flavor: "orchestrated",
   opKind: "redeploy_software",
+  buckitOnly: true,
   initialParams: { version: "v1.0.0" },
   inputSteps: [
     {

@@ -155,6 +155,12 @@ type MigrationBody struct {
 	SnapshotPath             string             `json:"snapshotPath"`
 	HealthyTimeoutSec        int                `json:"healthyTimeoutSec,omitempty"`
 	ClusterHealthyTimeoutSec int                `json:"clusterHealthyTimeoutSec,omitempty"`
+	// PersistSsh asks the cutover handler to save the supplied SSH config
+	// (defaults + per-host overrides) to the cluster_ssh bucket so future
+	// post-migration operations (restart, upgrade, redeploy) can reuse
+	// them without re-prompting. The wizard sets this from a checkbox on
+	// the SSH credentials page; default true.
+	PersistSsh bool `json:"persistSsh,omitempty"`
 }
 
 // ---- per-host stage enum ----
@@ -167,7 +173,7 @@ type Stage string
 const (
 	StagePending        Stage = "pending"
 	StageStoppingMinio  Stage = "stopping_minio"
-	StageUploadingPkg   Stage = "uploading_pkg"
+	StageDownloadingPkg Stage = "downloading_pkg"
 	StageInstalling     Stage = "installing"
 	StageSwitchingUnit  Stage = "switching_unit"
 	StageWaitingHealth  Stage = "waiting_health"

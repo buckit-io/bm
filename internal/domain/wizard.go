@@ -202,6 +202,10 @@ type NewClusterDraft struct {
 	TLS            TLSConfig                        `json:"tls,omitempty"`
 	Discovery      map[string]WizardDiscoveryResult `json:"discovery,omitempty"`
 	Topology       Topology                         `json:"topology"`
+	// PersistSsh asks the deploy commit step to save the SSH config
+	// to cluster_ssh so post-deploy operations can reuse it. Bound
+	// to a checkbox on the AddNodes step; default true.
+	PersistSsh bool `json:"persistSsh"`
 }
 
 // ---- Migration snapshot ----
@@ -285,6 +289,11 @@ type MinioSnapshot struct {
 	// lifecycle endpoint 404'd). The cutover proceeds — operators see them in
 	// the Review step of the wizard.
 	Warnings []string `json:"warnings,omitempty"`
+	// OfflineHosts lists hostnames whose admin-API state was not "online" at
+	// the moment of snapshot. The cutover filters these out before pre-stage
+	// (they'd fail SSH anyway) and the verify phase only waits for hosts that
+	// were participating. Empty when every node is healthy.
+	OfflineHosts []string `json:"offlineHosts,omitempty"`
 }
 
 // MinioSnapshotSummary is the counts-and-warnings shape the migrate wizard's
@@ -306,6 +315,7 @@ type MinioSnapshotSummary struct {
 	Notifications      int             `json:"notifications"`
 	ReplicationTargets int             `json:"replicationTargets"`
 	Warnings           []string        `json:"warnings"`
+	OfflineHosts       []string        `json:"offlineHosts,omitempty"`
 }
 
 // BucketHeadline is the {name, size} pair the wizard renders as

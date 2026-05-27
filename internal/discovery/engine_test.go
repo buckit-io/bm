@@ -16,10 +16,17 @@ func TestParseEngine(t *testing.T) {
 		{"RELEASE.2026-05-01T00-00-00Z", domain.EngineBuckit}, // exactly at cutoff = buckit
 		{"RELEASE.2026-05-15T12-34-56Z", domain.EngineBuckit},
 		{"RELEASE.2027-12-31T23-59-59Z", domain.EngineBuckit},
+		// Bare dashes — Buckit build / stripped-tag form observed in the wild.
+		{"2025-09-07T16-13-09Z", domain.EngineMinio},
+		{"2026-05-22T20-48-27Z", domain.EngineBuckit},
+		// RFC3339 with colons — MinIO source build fallback.
+		{"2025-09-07T16:13:09Z", domain.EngineMinio},
+		{"2026-05-22T20:48:27Z", domain.EngineBuckit},
 		{"v1.0.0", domain.EngineBuckit},
 		{"v2.3.4-rc1", domain.EngineBuckit},
 		{"", domain.EngineBuckit},
 		{"  RELEASE.2025-01-01T00-00-00Z  ", domain.EngineMinio}, // trimmed
+		{"  2025-01-01T00:00:00Z  ", domain.EngineMinio},         // RFC3339 trimmed
 		{"RELEASE.garbage", domain.EngineBuckit},                 // malformed -> buckit
 	}
 	for _, tc := range cases {

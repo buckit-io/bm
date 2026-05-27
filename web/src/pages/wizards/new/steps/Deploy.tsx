@@ -20,6 +20,7 @@ const STATE_LABELS: Record<HostOpState, string> = {
   running: "Running",
   succeeded: "Healthy",
   failed: "Failed",
+  skipped: "Skipped",
 };
 
 const STATE_GLYPH: Record<HostOpState, string> = {
@@ -27,6 +28,7 @@ const STATE_GLYPH: Record<HostOpState, string> = {
   running: "⟳",
   succeeded: "✓",
   failed: "✗",
+  skipped: "—",
 };
 
 // hostStateToDeployState maps the wire-level HostOpState onto the
@@ -45,6 +47,11 @@ function hostStateToDeployState(s: HostOpState): DeployNodeState["state"] {
       return "healthy";
     case "failed":
       return "failed";
+    case "skipped":
+      // The new-cluster deploy flow never emits "skipped" today — it's
+      // only used by the migrate cutover for offline hosts. Map it to
+      // pending so the UI doesn't choke if it ever does flow through.
+      return "pending";
   }
 }
 

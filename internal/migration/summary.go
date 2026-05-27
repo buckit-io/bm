@@ -11,8 +11,10 @@ import (
 // persisted MinioSnapshot keeps full fidelity for cutover/rollback.
 func Summarize(snap *domain.MinioSnapshot) domain.MinioSnapshotSummary {
 	if snap == nil {
-		return domain.MinioSnapshotSummary{}
+		return domain.MinioSnapshotSummary{Warnings: []string{}}
 	}
+	// Seed with []string{} (not nil) so a snapshot with zero warnings still
+	// marshals to JSON [] — the wire contract is non-nullable string[].
 	out := domain.MinioSnapshotSummary{
 		Buckets:         len(snap.Buckets),
 		Users:           len(snap.Users),
@@ -20,7 +22,8 @@ func Summarize(snap *domain.MinioSnapshot) domain.MinioSnapshotSummary {
 		CustomPolicies:  len(snap.Policies),
 		ServiceAccounts: len(snap.ServiceAccounts),
 		Notifications:   len(snap.Notifications),
-		Warnings:        append([]string(nil), snap.Warnings...),
+		Warnings:        append([]string{}, snap.Warnings...),
+		OfflineHosts:    append([]string(nil), snap.OfflineHosts...),
 	}
 	// Per-bucket counters: versioning, lifecycle, object-lock. Lifecycle is
 	// counted as bucket-distinct (one bucket with 4 rules counts once) so

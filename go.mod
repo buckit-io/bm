@@ -8,6 +8,7 @@ require (
 	github.com/buckit-io/minio-go/v7 v7.0.0-20260518233947-e88e1acf1753
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/oklog/ulid/v2 v2.1.0
+	github.com/shirou/gopsutil/v3 v3.24.5
 	go.etcd.io/bbolt v1.4.3
 	golang.org/x/crypto v0.51.0
 )
@@ -99,7 +100,6 @@ require (
 	github.com/safchain/ethtool v0.5.10 // indirect
 	github.com/secure-io/sio-go v0.3.1 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
-	github.com/shirou/gopsutil/v3 v3.24.5 // indirect
 	github.com/shoenig/go-m1cpu v0.1.6 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect

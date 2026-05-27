@@ -9,9 +9,24 @@ import (
 
 	"github.com/buckit-io/bm/internal/clusteradmin"
 	"github.com/buckit-io/bm/internal/clusters"
+	"github.com/buckit-io/bm/internal/domain"
 	"github.com/buckit-io/bm/internal/migration"
 	"github.com/buckit-io/bm/internal/tasks"
 )
+
+// overridesFromHosts collects each HostRow's non-nil SSHOverride into a
+// map keyed by host ID. Returns an empty map when no host has a custom
+// override — the wire shape requires the map to be present even when
+// empty.
+func overridesFromHosts(hosts []domain.HostRow) map[string]domain.SshOverrides {
+	out := make(map[string]domain.SshOverrides, len(hosts))
+	for _, h := range hosts {
+		if h.SSHOverride != nil {
+			out[h.ID] = *h.SSHOverride
+		}
+	}
+	return out
+}
 
 // migrateCutover serves POST /clusters/:id/migrate/cutover. Dispatches a
 // migrate_cutover op via the M2 orchestrator and returns the taskId.
@@ -65,6 +80,22 @@ func migrateCutover(opts Options) http.HandlerFunc {
 			return
 		}
 
+		// Persist SSH credentials to the cluster_ssh bucket if the wizard
+		// asked for it. Done at dispatch (not commit) so the credentials
+		// land before the executor even spawns — post-migration operations
+		// can read them immediately and rollback can still find them if
+		// the cutover fails mid-flight.
+		if body.PersistSsh && opts.SSHConfig != nil {
+			cfg := domain.ClusterSshConfig{
+				SSH:       body.SSH,
+				Overrides: overridesFromHosts(body.Hosts),
+			}
+			if err := opts.SSHConfig.Put(r.Context(), clusterID, cfg); err != nil {
+				writeError(w, http.StatusInternalServerError, "ssh_persist_failed", err.Error())
+				return
+			}
+		}
+
 		raw, err := json.Marshal(body)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "marshal_failed", err.Error())
@@ -93,8 +124,10 @@ func migrateCutover(opts Options) http.HandlerFunc {
 }
 
 // migrateRollback serves POST /clusters/:id/migrate/rollback. Body shape is
-// the same as cutover but the snapshot path is optional — rollback uses the
-// per-host /etc/default/minio.bm-bak file as the source of truth.
+// the same as cutover but the snapshot path is optional — rollback only
+// disables buckit.service, removes bm's drop-in, and re-enables
+// minio.service. Env files are untouched throughout (the Buckit package
+// doesn't ship or modify them), so there's nothing to restore.
 func migrateRollback(opts Options) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if opts.Tasks == nil || opts.Clusters == nil || opts.ClusterAdmin == nil {

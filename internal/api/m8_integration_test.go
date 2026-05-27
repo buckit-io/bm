@@ -94,10 +94,11 @@ func newM8Harness(t *testing.T) *m8Harness {
 	t.Cleanup(sshPool.Close)
 	adminPool := admin.NewPool()
 
+	sshHost, _ := sshSrv.HostPort()
 	infoBody := madmin.InfoMessage{
 		Mode: "online",
 		Servers: []madmin.ServerProperties{
-			{Endpoint: "node1:9000", State: "online", Version: "RELEASE.2026-01-01T00-00-00Z"},
+			{Endpoint: sshHost + ":9000", State: "online", Version: "RELEASE.2026-01-01T00-00-00Z"},
 		},
 	}
 	adminSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

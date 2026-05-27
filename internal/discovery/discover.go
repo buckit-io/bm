@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -184,10 +185,12 @@ func buildNodes(hostHint string, info *domain.ServerInfo) ([]domain.Node, topolo
 			ClusterID: clusterID,
 			Hostname:  hostname,
 			SSHPort:   22,
+			APIPort:   portFromEndpoint(s.Endpoint),
 			State:     s.State,
 			Version:   s.Version,
 			UptimeSec: s.Uptime,
 			OS:        s.OS,
+			Arch:      s.Arch,
 			Kernel:    s.Kernel,
 			CPUModel:  s.CPUModel,
 			CPUCores:  s.CPUCores,
@@ -214,6 +217,29 @@ func engineLabel(e domain.ClusterEngine) string {
 		return "MinIO"
 	}
 	return "Buckit"
+}
+
+func portFromEndpoint(ep string) int {
+	raw := strings.TrimSpace(ep)
+	if raw == "" {
+		return 0
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return 0
+	}
+	p := u.Port()
+	if p == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(p)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
 }
 
 func hostnameFromEndpoint(ep string) string {

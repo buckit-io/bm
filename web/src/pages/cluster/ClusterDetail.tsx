@@ -238,6 +238,13 @@ function clusterOpRequiresSSH(op: OperationDef): boolean {
   return op.group === "ssh";
 }
 
+const BUCKIT_ONLY_HINT =
+  "Only available on Buckit clusters. Migrate this cluster from MinIO to enable it.";
+
+function opDisabledForEngine(op: OperationDef, cluster: Cluster): boolean {
+  return !!op.buckitOnly && cluster.engine !== "buckit";
+}
+
 export function ClusterDetailLayout() {
   const { clusterId } = useParams();
   const navigate = useNavigate();
@@ -719,17 +726,24 @@ export function ClusterDetailLayout() {
           )}
           <div className="grow" />
           <div className="hstack" style={{ flexWrap: "wrap" }}>
-            {BULK_HOST_OPERATIONS.map((op) => (
-              <button
-                key={op.id}
-                className={"btn btn--sm" + (op.danger ? " btn--danger-ghost" : "")}
-                onClick={() => runHostAction(op)}
-                disabled={!hostSelectionReady}
-                title={hostActionsHint ?? undefined}
-              >
-                {op.label.replace(/…$/, "")}
-              </button>
-            ))}
+            {BULK_HOST_OPERATIONS.map((op) => {
+              const engineDisabled = opDisabledForEngine(op, cluster);
+              const disabled = !hostSelectionReady || engineDisabled;
+              const title = engineDisabled
+                ? BUCKIT_ONLY_HINT
+                : hostActionsHint ?? undefined;
+              return (
+                <button
+                  key={op.id}
+                  className={"btn btn--sm" + (op.danger ? " btn--danger-ghost" : "")}
+                  onClick={() => runHostAction(op)}
+                  disabled={disabled}
+                  title={title}
+                >
+                  {op.label.replace(/…$/, "")}
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -1012,25 +1026,30 @@ function renderActionsMenu(
       <div key={`g-${g}`} className="cdetail__menu-group">
         {GROUP_LABELS[g]}
       </div>,
-      ...items.map((op) => (
-        <button
-          key={op.id}
-          className={
-            "cdetail__menu-item cdetail__menu-item--stacked" +
-            (op.danger ? " is-danger" : "")
-          }
-          onClick={() => onPick(op)}
-          role="menuitem"
-        >
-          <div>{op.dynamicLabel ? op.dynamicLabel(cluster) : op.label}</div>
-          <div
-            className="subtle"
-            style={{ fontSize: "var(--fs-xs)", fontWeight: 400 }}
+      ...items.map((op) => {
+        const engineDisabled = opDisabledForEngine(op, cluster);
+        return (
+          <button
+            key={op.id}
+            className={
+              "cdetail__menu-item cdetail__menu-item--stacked" +
+              (op.danger ? " is-danger" : "")
+            }
+            onClick={() => onPick(op)}
+            disabled={engineDisabled}
+            title={engineDisabled ? BUCKIT_ONLY_HINT : undefined}
+            role="menuitem"
           >
-            {op.description}
-          </div>
-        </button>
-      )),
+            <div>{op.dynamicLabel ? op.dynamicLabel(cluster) : op.label}</div>
+            <div
+              className="subtle"
+              style={{ fontSize: "var(--fs-xs)", fontWeight: 400 }}
+            >
+              {op.description}
+            </div>
+          </button>
+        );
+      }),
     ];
   });
 }

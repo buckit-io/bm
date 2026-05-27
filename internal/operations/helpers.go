@@ -19,6 +19,7 @@ import (
 	"github.com/buckit-io/bm/internal/clusteradmin"
 	"github.com/buckit-io/bm/internal/clusters"
 	"github.com/buckit-io/bm/internal/deploy"
+	"github.com/buckit-io/bm/internal/discovery"
 	"github.com/buckit-io/bm/internal/domain"
 	"github.com/buckit-io/bm/internal/nodes"
 	bmssh "github.com/buckit-io/bm/internal/ssh"
@@ -428,6 +429,10 @@ func refreshClusterRow(ctx context.Context, deps Deps, clusterID string, ac *adm
 	c.UnreachableSince = nil
 	if info.Version != "" {
 		c.Version = info.Version
+		// Engine is derived from Version, so re-classify on every refresh.
+		// This also self-heals rows imported before ParseEngine learned to
+		// accept bare / RFC3339 timestamps.
+		c.Engine = discovery.ParseEngine(info.Version)
 	}
 	c.RawBytes = info.Raw
 	c.UsedBytes = info.Used

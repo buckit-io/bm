@@ -11,10 +11,11 @@ single binary that hosts a CLI plus a local web UI. Closer in spirit
 to `mc`, `gh`, or `jupyter notebook` than to a centralised cluster
 console (Rancher / Portainer / ArgoCD).
 
-This repo is in **Phase 1**. What's landed today is the M0 module
-scaffold and a clickable web UI prototype on top of an in-memory mock
-data layer. The real backend (M1 onward) hasn't shipped yet — `bm
-web` is a stub that prints "not yet implemented (M1)".
+Most of Phase 1 (M1–M8) has landed: the real Go backend, real cluster
+import/discovery via the admin API, real deploy + cutover orchestration,
+and a React UI that fetches against the real HTTP surface. Still
+outstanding: M9 (embed the React bundle into the binary, packaging,
+install scripts) and the optional remote-access mode (passcode + TLS).
 
 The product spec, implementation plan, and UI architecture all live in
 the peer `buckit/` repo:
@@ -26,7 +27,7 @@ the peer `buckit/` repo:
 - Buckit metrics-tab spec (referenced for `/admin/info` shape) — `../buckit/docs/manager/metrics.md`
 
 When in doubt about scope or behaviour, those docs are the source of
-truth. Do not extend the prototype beyond what the design docs already
+truth. Don't extend the surface beyond what the design docs already
 describe without checking with the operator.
 
 ## Common commands
@@ -37,7 +38,7 @@ make build              # build the bm binary (./bm)
 make build-all          # cross-compile for linux/darwin/windows × amd64/arm64
 make test               # go test -race -count=1 ./...
 make lint               # downloads golangci-lint into .bin/ if needed
-make run                # ./bm web (currently a stub)
+make run                # ./bm web (binds 127.0.0.1:9443, opens browser)
 
 # Web side (run in web/)
 cd web && npm run dev       # Vite dev server on :5173, proxies /api/* to :9443
@@ -45,20 +46,58 @@ cd web && npm run build     # tsc -b && vite build (output → web/dist/)
 cd web && npm run typecheck # tsc -b --noEmit
 
 # Both
-make web                # npm install + npm run build, builds the embeddable bundle
+make web                # npm install + npm run build, builds the bundle into web/dist
 ```
+
+`bm web` serves `web/dist/` from disk via a chi static handler
+(`internal/api/router.go`). Embedding into the binary is an M9 task.
 
 ## Repository layout
 
 ```
-cmd/bm/                  CLI entry point + subcommand dispatch
+cmd/bm/main.go           CLI entry point + subcommand dispatch (web, version,
+                         help; everything else is delegated to bm-cli)
+cmd/bm/web.go            `bm web` subcommand — wires the api router to bbolt
+                         + the task orchestrator, opens the browser
+internal/admin/          madmin-go wrapper. Maps the wire shapes into bm's
+                         domain types (ServerInfo, HealthInfo)
+internal/alias/          mc-style aliases (also persisted in bbolt)
+internal/api/            chi v5 HTTP surface. Handlers split by milestone:
+                         m4_handlers.go (clusters/import/discover),
+                         m5_migrate_handlers.go (snapshot/preflight),
+                         m6_handlers.go (operations + SSE event stream)
+internal/app/            top-level wire-up shared by cmd/bm/web.go
+internal/bmcli/          delegates non-native subcommands to the forked bm-cli
+internal/clusters/       cluster repo over bbolt
+internal/clusteradmin/   per-cluster admin creds, sealed with AES-GCM
+internal/config/         resolves ~/.config/bm/{config.json,bm.db,data.key}
+internal/credentials/    SSH key + admin creds helpers
+internal/deploy/         deploys a new Buckit cluster across hosts
+internal/discovery/      cluster import flow — turns URL+creds into an
+                         ImportCandidate. engine.go classifies MinIO vs Buckit
+internal/domain/         shared domain types (mirrored by web/src/api/types.ts)
+internal/migration/      MinIO → Buckit cutover: snapshot, preflight, executor,
+                         installer, rollback, verify
+internal/nodes/          node repo + per-node facts
+internal/operations/     orchestrated cluster operations (restart, upgrade,
+                         redeploy). Validates engine compatibility before
+                         dispatch
+internal/preflight/      generic preflight harness (used by deploy + migrate)
+internal/ssh/            SSH connection pool
+internal/sshconfig/      per-cluster SSH config (user, key, jump host)
+internal/sshtest/        in-process SSH server for tests
+internal/store/          bbolt wrapper. Buckets: clusters, nodes, node_facts,
+                         cluster_ssh, cluster_admin, history, settings.
+                         AES-GCM PutEncrypted/GetEncrypted for sensitive rows
+internal/tasks/          long-running operation orchestrator. Each Executor
+                         (DeployExecutor, CutoverExecutor, RollbackExecutor,
+                         …) is registered here; runs surface over SSE
 internal/version/        build-time version metadata (-ldflags fed by Makefile)
-internal/...             stub for app, api, store, tasks, ssh, deploy, cluster, auth, config, health
-                         (most of these don't exist yet — they land in M1+)
-web/                     React + Vite + TypeScript prototype
-  src/api/hooks.ts       react-query hooks; today they wrap the mock client
-  src/mock/data.ts       in-memory fixtures + computed health rules
-  src/mock/api.ts        mock API client returning Promises with simulated latency
+web/                     React 18 + Vite + TypeScript
+  src/api/client.ts      real HTTP client (every UI fetch funnels through)
+  src/api/sse.ts         SSE streaming endpoints (discover, operation events)
+  src/api/hooks.ts       react-query hooks wrapping client.ts
+  src/api/types.ts       wire types — mirrors internal/domain/
   src/layouts/           AppShell + WizardShell
   src/components/        Pill, Stepper, TaskLogStream, TaskStateIcon, TaskStepsTimeline
   src/pages/             one folder per route family (cluster/, wizards/new/, wizards/migrate/)
@@ -66,52 +105,50 @@ web/                     React + Vite + TypeScript prototype
   src/styles/            tokens.css + global.css (CSS variables, light/dark)
 scripts/lint.sh          installs golangci-lint locally + runs it
 .github/workflows/ci.yml Go matrix build + web typecheck/build
-packaging/               (planned for M9 — nfpm, install.sh, install.ps1)
 ```
+
+The `web/src/mock/` directory referenced by older notes no longer exists —
+`api/client.ts` replaced it.
 
 ## Stack
 
 | Layer | Choice | Notes |
 |---|---|---|
 | Language | Go 1.25 | matches `buckit/`; no CGO so cross-compile is clean |
-| HTTP router | `chi v5` (planned, M1) | not yet imported |
-| Storage | `bbolt` with short-lived locks (planned, M1) | data dir at `~/.config/bm/bm.db` |
+| HTTP router | `chi v5` | landed |
+| Storage | `bbolt` with short-lived locks | data dir at `~/.config/bm/bm.db`, AES-GCM seal for sensitive buckets |
+| Admin client | `buckit-io/madmin-go/v3` (forked) | wrapped by `internal/admin/` |
 | Frontend | React 18 + Vite + TypeScript | `@tanstack/react-query`, `@tanstack/react-table`, `react-router-dom` |
-| Embedding | `embed.FS` of `web/dist` (planned, M9) | single static binary at release |
-| Event stream | SSE (planned, M2) | for task event streams only |
+| Embedding | `embed.FS` of `web/dist` | planned, M9 — today the binary serves dist from disk |
+| Event stream | SSE | landed — discover stream, operation event stream |
 
-## Mock data layer
+## Wire contract
 
-The web UI is fully self-contained today. `web/src/mock/data.ts`
-defines the domain types and fixture data; `web/src/mock/api.ts`
-exposes Promise-returning functions that mirror what the future
-HTTP API will return. `web/src/api/hooks.ts` wraps those in react-query
-hooks.
+The browser talks to `bm` over HTTP at `127.0.0.1:9443` (loopback only;
+non-loopback binds are explicitly rejected by `AssertLoopback` in
+`internal/api/router.go` until the remote-access milestone). Every UI
+fetch goes through `web/src/api/client.ts`; SSE endpoints go through
+`web/src/api/sse.ts`. Wire types are mirrored in two places:
 
-**The goal is for the real backend's REST shape to fall out of what
-the UI actually fetches** — the `Cluster`, `Node`, `Task`, `HistoryEntry`,
-`HealthSummary` types in `data.ts` should be the contract documented
-under "REST API contract" in `ui-architecture.md`. When changing the
-mock, keep the doc in sync.
+- Go: `internal/domain/`
+- TS: `web/src/api/types.ts`
 
-When implementing the real Go backend, the natural seam is to swap
-`web/src/mock/api.ts` for a real `fetch`-based client; everything
-else stays the same.
+These need to stay in lockstep. When you change a domain type on either
+side, update the other in the same change. The UI's data needs are still
+the source of truth for what the REST contract looks like — keep
+`ui-architecture.md` in the peer `buckit/` repo in sync when the shape
+changes.
 
-## What's a stub today
+## What's still outstanding
 
 | Surface | Status |
 |---|---|
-| `bm version`, `bm help` | landed |
-| `bm web`, `bm server` (alias) | stubs — print "not yet implemented (M1)" |
-| `internal/api`, `internal/store`, `internal/tasks`, `internal/ssh`, `internal/app`, `internal/cluster` | not implemented |
-| Web UI (every screen + both wizards) | landed against the mock layer |
-| Embedded binary | not yet — Vite build produces `web/dist/` but it's not embedded |
-| Packaging (nfpm, install scripts) | not yet (M9) |
+| Embedded binary | not yet — `bm web` serves `web/dist/` from disk (`router.go` `staticHandler`). M9 swaps to `//go:embed`. |
+| Packaging (nfpm, install scripts) | not yet (M9). No `packaging/` directory exists yet. |
+| Remote-access mode (passcode + TLS) | not yet — `AssertLoopback` enforces 127.0.0.1-only binds. |
 
-Don't claim a feature works end-to-end unless you've traced both
-sides. If you're touching a UI screen and there's no real backend yet,
-say so explicitly when reporting work done.
+Don't claim a feature works end-to-end unless you've traced both sides
+of a change (Go + TS). If you only touch one side, say so.
 
 ## Notes for agents
 
@@ -132,10 +169,11 @@ say so explicitly when reporting work done.
 
 ## Verification before saying "done"
 
-1. `make build` succeeds and the binary is in the ~10–12 MB target
-   range (currently smaller because Go deps haven't landed yet).
+1. `make build` succeeds.
 2. `cd web && npm run build` succeeds with no TypeScript errors.
-3. `make test` passes (currently a no-op — no Go tests yet).
+3. `make test` passes (`go test -race -count=1 ./...`). The migration,
+   api, operations, discovery, store, tasks, ssh packages all have real
+   tests — don't skip them.
 4. Cross-compile sanity:
    ```sh
    for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
@@ -143,7 +181,7 @@ say so explicitly when reporting work done.
        && echo "ok $t" || echo "FAIL $t"
    done
    ```
-5. If you touched the UI prototype, verify the pages still render in
-   `npm run dev` — at minimum walk through `/clusters` →
-   `/clusters/prod-east` → one node detail page → `/clusters/new`
-   wizard step 1.
+5. If you touched the UI, walk through the affected flow in
+   `npm run dev` (Vite proxies `/api/*` to `:9443`, so keep `bm web`
+   running alongside). Remember `bm web` is long-running — Go changes
+   need a rebuild + restart before the browser sees them.

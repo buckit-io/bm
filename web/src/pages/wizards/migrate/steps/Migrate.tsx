@@ -32,7 +32,7 @@ interface Props {
 const STAGE_LABEL: Record<CutoverNodeState["state"], string> = {
   pending: "Pending",
   stopping_minio: "Stopping minio",
-  uploading_pkg: "Uploading package",
+  downloading_pkg: "Downloading package",
   installing: "Installing buckit",
   switching_unit: "Switching service",
   waiting_health: "Waiting node-healthy",
@@ -40,11 +40,13 @@ const STAGE_LABEL: Record<CutoverNodeState["state"], string> = {
   done: "Buckit healthy",
   rolled_back: "Rolled back",
   failed: "Failed",
+  skipped: "Skipped (offline)",
 };
 
 function stagePill(s: CutoverNodeState["state"]) {
   if (s === "done") return <Pill tone="success" icon="✓">{STAGE_LABEL[s]}</Pill>;
   if (s === "pending") return <Pill tone="neutral" icon="●">{STAGE_LABEL[s]}</Pill>;
+  if (s === "skipped") return <Pill tone="neutral" icon="—">{STAGE_LABEL[s]}</Pill>;
   if (s === "rolled_back") return <Pill tone="warning" icon="↺">{STAGE_LABEL[s]}</Pill>;
   if (s === "failed") return <Pill tone="danger" icon="✗">{STAGE_LABEL[s]}</Pill>;
   return <Pill tone="info" icon="⟳">{STAGE_LABEL[s]}</Pill>;
@@ -62,23 +64,53 @@ function stageFromHostStatus(hs: HostOpStatus): CutoverNodeState["state"] {
   switch (hs.state) {
     case "pending":
       return "pending";
-    case "succeeded":
+    case "succeeded": {
+      // The rollback executor finishes by marking each rolled-back host
+      // as `succeeded` (since rollback completed without error) with a
+      // detail string like "Rolled back to MinIO" or "Already on MinIO".
+      // Without this disambiguation the pill would say "Buckit healthy"
+      // for a host that's actually back on MinIO, and the wizard's
+      // anyRolledBack check would stay false — leaving the verify
+      // section spinning forever.
+      const d = (hs.detail ?? "").toLowerCase();
+      if (
+        d.includes("rolled back") ||
+        d.includes("minio restored") ||
+        d.includes("already on minio")
+      ) {
+        return "rolled_back";
+      }
       return "done";
+    }
     case "failed":
       return "failed";
+    case "skipped":
+      return "skipped";
     case "running": {
       const d = (hs.detail ?? "").toLowerCase();
+      // Rollback-path detail strings come first so they win over the
+      // cutover-side matches that could otherwise misclassify them
+      // (e.g. "Uninstalling buckit" would match the "installing"
+      // cutover keyword and flash the pill back to Installing during
+      // rollback).
+      if (
+        d.includes("stopping buckit") ||
+        d.includes("uninstalling buckit") ||
+        d.includes("removing drop-in") ||
+        d.includes("enable --now minio") ||
+        d.includes("waiting for minio") ||
+        d.includes("restoring") ||
+        d.includes("minio restored")
+      ) {
+        return "rolled_back";
+      }
       if (d.includes("backing up") || d.includes("stop minio")) return "stopping_minio";
-      if (d.includes("fetching")) return "uploading_pkg";
+      if (d.includes("fetching")) return "downloading_pkg";
       if (d.includes("installing")) return "installing";
       if (d.includes("swap") || d.includes("switching")) return "switching_unit";
       if (d.includes("/minio/health/live")) return "waiting_health";
       if (d.includes("cluster-healthy")) return "waiting_cluster";
       if (d.includes("buckit healthy")) return "done";
-      // Rollback path detail strings.
-      if (d.includes("stopping buckit") || d.includes("restoring") || d.includes("minio restored")) {
-        return "rolled_back";
-      }
       return "installing"; // generic running fallback
     }
   }
@@ -172,6 +204,7 @@ export function Migrate({ draft, update, onFinish }: Props) {
             sshOverride: h.sshOverride,
           })),
           ssh: draft.ssh,
+          persistSsh: draft.persistSsh,
           snapshotPath: path,
         };
         const res = await migrateCutover(draft.sourceClusterId, body);
@@ -203,7 +236,12 @@ export function Migrate({ draft, update, onFinish }: Props) {
           state: stage,
           durationSec: hs.durationSec,
         };
-        if (stage === "done") done++;
+        // Count anything in a terminal state (cutover-success OR
+        // rollback-success) toward overallNodesDone so the progress
+        // bar fills as either flow completes. Without this the bar
+        // stays at 0 during a successful rollback even though every
+        // host's pill says "Rolled back".
+        if (stage === "done" || stage === "rolled_back") done++;
       }
       update({
         cutover: {
@@ -294,14 +332,33 @@ export function Migrate({ draft, update, onFinish }: Props) {
     }
   }
 
+  const skippedHosts = hosts.filter(
+    (h) => draft.cutover.perNode[h.id]?.state === "skipped",
+  );
+  const attemptedCount = hosts.length - skippedHosts.length;
   const done = draft.cutover.overallNodesDone;
-  const pct = Math.round((done / Math.max(hosts.length, 1)) * 100);
+  // Progress denominator excludes skipped hosts — they'll never reach
+  // "done" on this run by design, so counting them would peg the bar
+  // below 100% even on a clean cutover.
+  const pct = Math.round((done / Math.max(attemptedCount, 1)) * 100);
   const v = draft.verify;
 
   const completedCount = rollbackEligible.length;
   const anyRolledBack = hosts.some(
     (h) => draft.cutover.perNode[h.id]?.state === "rolled_back",
   );
+  // Rollback is fully done when every attempted host has reached
+  // "rolled_back" (skipped hosts are never on Buckit so they don't
+  // count toward rollback completion either way).
+  const attemptedHosts = hosts.filter(
+    (h) => draft.cutover.perNode[h.id]?.state !== "skipped",
+  );
+  const allRolledBack =
+    anyRolledBack &&
+    attemptedHosts.length > 0 &&
+    attemptedHosts.every(
+      (h) => draft.cutover.perNode[h.id]?.state === "rolled_back",
+    );
 
   return (
     <div className="vstack" style={{ gap: "var(--s-5)" }}>
@@ -319,12 +376,22 @@ export function Migrate({ draft, update, onFinish }: Props) {
           >
             {dispatchError
               ? `✗ ${dispatchError}`
-              : cutoverDone
-                ? "Cutover complete · verifying"
-                : rollingBack
-                  ? "Rolling back…"
-                  : "● Cutover in progress"}{" "}
-            · {done}/{hosts.length} nodes
+              : allRolledBack
+                ? "↺ Rollback complete · back on MinIO"
+                : rollingBack || anyRolledBack
+                  ? "↺ Rolling back…"
+                  : cutoverDone
+                    ? "Cutover complete · verifying"
+                    : "● Cutover in progress"}{" "}
+            · {done}/{attemptedCount} nodes
+            {skippedHosts.length > 0 && (
+              <>
+                {" "}
+                <span className="subtle">
+                  · {skippedHosts.length} skipped (offline)
+                </span>
+              </>
+            )}
           </p>
         </div>
         <div className="hstack" style={{ gap: "var(--s-2)" }}>
@@ -346,7 +413,7 @@ export function Migrate({ draft, update, onFinish }: Props) {
           <div className="progress__bar" style={{ width: `${pct}%` }} />
         </div>
         <span className="subtle">
-          {done} / {hosts.length}
+          {done} / {attemptedCount}
         </span>
       </div>
 
@@ -355,6 +422,7 @@ export function Migrate({ draft, update, onFinish }: Props) {
         {hosts.map((h) => {
           const s =
             draft.cutover.perNode[h.id] ?? ({ state: "pending" } as const);
+          const isSkipped = s.state === "skipped";
           return (
             <div
               key={h.id}
@@ -362,7 +430,18 @@ export function Migrate({ draft, update, onFinish }: Props) {
               style={{ gridTemplateColumns: "200px 1fr 90px" }}
             >
               <div className="rolling-row__name">{h.hostname}</div>
-              <div>{stagePill(s.state)}</div>
+              <div className="vstack" style={{ gap: 2 }}>
+                <div>{stagePill(s.state)}</div>
+                {isSkipped && (
+                  <span
+                    className="subtle"
+                    style={{ fontSize: "var(--fs-xs)" }}
+                  >
+                    Stays on MinIO — re-run migration on this host once
+                    it's back online.
+                  </span>
+                )}
+              </div>
               <div
                 className="subtle"
                 style={{ fontSize: "var(--fs-xs)" }}
@@ -490,10 +569,9 @@ export function Migrate({ draft, update, onFinish }: Props) {
               {completedCount} node{completedCount === 1 ? "" : "s"} will
               be rolled back to MinIO:{" "}
               <span className="mono">systemctl stop buckit</span> →{" "}
-              <span className="mono">restore /etc/default/minio.bm-bak</span>{" "}
-              →{" "}
               <span className="mono">systemctl enable --now minio</span>{" "}
-              on each. Data and{" "}
+              on each. Data,{" "}
+              <span className="mono">/etc/default/minio</span>, and{" "}
               <span className="mono">.minio.sys/</span> are untouched.
             </p>
             <div className="hstack" style={{ justifyContent: "flex-end" }}>

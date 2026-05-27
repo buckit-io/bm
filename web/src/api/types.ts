@@ -93,11 +93,13 @@ export interface Node {
   clusterId: string;
   hostname: string;
   sshPort: number;
+  apiPort?: number;
   label?: string;
   state: NodeState;
   version?: string;
   uptimeSec?: number;
   os?: string;
+  arch?: string;
   kernel?: string;
   cpuModel?: string;
   cpuCores?: number;
@@ -304,6 +306,7 @@ export type OpKind =
   | "cluster_upgrade_by_systemctl"
   | "cluster_upgrade_by_admin_update"
   | "start_cluster"
+  | "stop_cluster_by_systemctl"
   | "rotate_root_creds"
   | "add_pool"
   | "systemctl_restart"
@@ -317,7 +320,12 @@ export type OpKind =
 
 export type OperationState = "running" | "succeeded" | "failed" | "canceled";
 
-export type HostOpState = "pending" | "running" | "succeeded" | "failed";
+export type HostOpState =
+  | "pending"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "skipped";
 
 export interface HostOpStatus {
   hostId: string;

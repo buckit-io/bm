@@ -39,6 +39,13 @@ type PackageManager interface {
 	// InstallCommand returns the install command for one of the actions.
 	// Downgrade is never expected here — callers reject it before invoking.
 	InstallCommand(action InstallAction) string
+
+	// UninstallCommand removes the buckit package. Idempotent (`|| true`)
+	// so calling it on a host where buckit isn't installed is a no-op.
+	// Used by the migration rollback path; does not remove the buckit
+	// system user/group (the postremove script preserves them by design
+	// so data files keep a named owner).
+	UninstallCommand() string
 }
 
 // InstallAction names the three install verbs the pipeline picks between
@@ -118,6 +125,10 @@ fi
 printf 'installed=%s\ncandidate=%s\ncmp=%s\n' "$installed" "$candidate" "$cmp"`
 }
 
+func (m rpmManager) UninstallCommand() string {
+	return m.verbOrDefault() + " remove -y buckit || true"
+}
+
 func (m rpmManager) InstallCommand(action InstallAction) string {
 	verb := m.verbOrDefault()
 	switch action {
@@ -169,6 +180,10 @@ if [ -n "$installed" ] && [ "$installed" != "$candidate" ]; then
   fi
 fi
 printf 'installed=%s\ncandidate=%s\ncmp=%s\n' "$installed" "$candidate" "$cmp"`
+}
+
+func (m debManager) UninstallCommand() string {
+	return "apt-get remove -y buckit || true"
 }
 
 func (m debManager) InstallCommand(action InstallAction) string {

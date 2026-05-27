@@ -91,11 +91,30 @@ const STOP_CLUSTER: OperationDef<Record<string, never>> = {
   opKind: "stop_cluster",
   initialParams: {},
   inputSteps: [
-    confirmStep(
-      "Stops buckit.service on every node via the admin API. The S3 API and console will be unreachable until you start the cluster again. Data and config are not affected.",
-      "Stop cluster",
-      true,
-    ),
+    {
+      id: "confirm",
+      render: () => (
+        <div className="vstack" style={{ gap: "var(--s-3)" }}>
+          <p style={{ fontSize: "var(--fs-sm)" }}>
+            Stops buckit.service on every node via the admin API. The
+            S3 API and console will be unreachable until you start the
+            cluster again. Data and config are not affected.
+          </p>
+          <div className="banner banner--warning">
+            <span>⚠</span>
+            <span>
+              If the cluster is running under a systemd service,
+              systemd will respawn the process immediately after this
+              stop. Use <b>Stop cluster (systemctl)</b> instead to
+              leave the cluster down.
+            </span>
+          </div>
+        </div>
+      ),
+      canAdvance: () => true,
+      nextLabel: "Stop cluster",
+      danger: true,
+    },
   ],
 };
 
@@ -159,16 +178,29 @@ const CLUSTER_UPGRADE_BY_ADMIN_UPDATE: OperationDef<{ version: string }> = {
   description: "Native self-update path. Downloads the new binary and restarts all nodes together.",
   flavor: "orchestrated",
   opKind: "cluster_upgrade_by_admin_update",
+  buckitOnly: true,
   initialParams: { version: "v1.0.0" },
   inputSteps: [
     {
       id: "version",
       render: ({ params, setParams }) => (
-        <VersionSelectStep
-          params={params}
-          setParams={setParams}
-          intro="Calls the Buckit Admin API update flow. Use this for clusters not managed by systemd. The selected release binary is applied cluster-wide and every node restarts together."
-        />
+        <div className="vstack" style={{ gap: "var(--s-3)" }}>
+          <VersionSelectStep
+            params={params}
+            setParams={setParams}
+            intro="Calls the Buckit Admin API update flow. Use this for clusters not managed by systemd. The selected release binary is applied cluster-wide and every node restarts together."
+          />
+          <div className="banner banner--warning">
+            <span>⚠</span>
+            <span>
+              If the cluster is running under a systemd service, use{" "}
+              <b>Upgrade Buckit systemd service</b> instead. The Admin
+              API self-update only replaces the running binary, so the
+              installed package version will end up out of sync with
+              what's actually running.
+            </span>
+          </div>
+        </div>
       ),
       canAdvance: (p) => p.version.length > 0,
       nextLabel: "Start upgrade",
@@ -181,7 +213,7 @@ const CLUSTER_UPGRADE_BY_ADMIN_UPDATE: OperationDef<{ version: string }> = {
 const ROLLING_RESTART: OperationDef<Record<string, never>> = {
   id: "rolling_restart",
   group: "ssh",
-  label: "Rolling restart",
+  label: "Rolling restart (systemctl)",
   description: "One node at a time, health-wait between. No cluster downtime.",
   flavor: "orchestrated",
   opKind: "rolling_restart",
@@ -202,6 +234,7 @@ const CLUSTER_UPGRADE_BY_SYSTEMCTL: OperationDef<{ version: string }> = {
   description: "Stage the upgrade on all nodes, then restart the cluster once.",
   flavor: "orchestrated",
   opKind: "cluster_upgrade_by_systemctl",
+  buckitOnly: true,
   initialParams: { version: "v1.0.0" },
   inputSteps: [
     {
@@ -222,7 +255,7 @@ const CLUSTER_UPGRADE_BY_SYSTEMCTL: OperationDef<{ version: string }> = {
 const START_CLUSTER: OperationDef<Record<string, never>> = {
   id: "start_cluster",
   group: "ssh",
-  label: "Start cluster",
+  label: "Start cluster (systemctl)",
   description: "Start a stopped cluster. Per-node systemctl start over SSH.",
   flavor: "orchestrated",
   opKind: "start_cluster",
@@ -232,6 +265,23 @@ const START_CLUSTER: OperationDef<Record<string, never>> = {
     confirmStep(
       "bm starts buckit.service on every node via SSH. The admin API can't be used here because there's no process to receive it.",
       "Start cluster",
+    ),
+  ],
+};
+
+const STOP_CLUSTER_BY_SYSTEMCTL: OperationDef<Record<string, never>> = {
+  id: "stop_cluster_by_systemctl",
+  group: "ssh",
+  label: "Stop cluster (systemctl)",
+  description: "Per-node systemctl stop over SSH. Cluster stays down.",
+  flavor: "orchestrated",
+  opKind: "stop_cluster_by_systemctl",
+  initialParams: {},
+  inputSteps: [
+    confirmStep(
+      "bm stops buckit.service on every node via SSH. Unlike \"Stop cluster\" (admin API), the systemd unit ends up inactive, so the Restart=always policy will not respawn it. The S3 API and console will be unreachable until you start the cluster again.",
+      "Stop cluster",
+      true,
     ),
   ],
 };
@@ -247,6 +297,7 @@ const ROTATE_ROOT_CREDS: OperationDef<{
   description: "Rewrite the cluster root password on every node, then restart the cluster.",
   flavor: "orchestrated",
   opKind: "rotate_root_creds",
+  buckitOnly: true,
   initialParams: {
     newPassword: "",
     typedName: "",
@@ -418,8 +469,9 @@ export const CLUSTER_OPERATIONS: OperationDef[] = [
   CLUSTER_UPGRADE_BY_ADMIN_UPDATE,
   // SSH
   ROLLING_RESTART,
-  CLUSTER_UPGRADE_BY_SYSTEMCTL,
   START_CLUSTER,
+  STOP_CLUSTER_BY_SYSTEMCTL,
+  CLUSTER_UPGRADE_BY_SYSTEMCTL,
   ROTATE_ROOT_CREDS,
   // ADD_POOL,  // hidden — pool-add wizard not yet shipped
   // Manager

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/buckit-io/bm/internal/admin"
@@ -45,9 +46,10 @@ func Snapshot(ctx context.Context, snapshotsDir string, clusterID string, creds 
 	}
 
 	snap := &domain.MinioSnapshot{
-		CapturedAt: time.Now().UTC(),
-		ClusterID:  clusterID,
-		Version:    info.Version,
+		CapturedAt:   time.Now().UTC(),
+		ClusterID:    clusterID,
+		Version:      info.Version,
+		OfflineHosts: offlineHostnames(info.Servers),
 	}
 
 	// ---- Buckets (S3 ListBuckets gives us creation timestamps).
@@ -143,6 +145,47 @@ func writeSnapshot(dir, clusterID string, snap *domain.MinioSnapshot) (string, e
 		return "", fmt.Errorf("snapshot: write %s: %w", path, err)
 	}
 	return path, nil
+}
+
+// offlineHostnames returns the hostnames of every server whose state isn't
+// "online" at snapshot time. The cutover filters these out before pre-stage
+// (they'd fail SSH anyway) and the verify phase doesn't wait for them.
+// Returns nil when every server is online so the JSON `omitempty` tag elides
+// the field for healthy clusters.
+func offlineHostnames(servers []domain.ServerInfoServer) []string {
+	var out []string
+	for _, s := range servers {
+		if s.State == domain.NodeOnline {
+			continue
+		}
+		host := hostnameFromMinioEndpoint(s.Endpoint)
+		if host == "" {
+			continue
+		}
+		out = append(out, host)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.Strings(out)
+	return out
+}
+
+// hostnameFromMinioEndpoint extracts the host (no scheme, no port, no path)
+// from a MinIO ServerInfo endpoint URL like "http://minio1:9000". Returns
+// "" on parse failure rather than guessing — callers treat empty as "skip".
+func hostnameFromMinioEndpoint(ep string) string {
+	host := ep
+	if i := strings.Index(host, "://"); i >= 0 {
+		host = host[i+3:]
+	}
+	if i := strings.IndexByte(host, '/'); i >= 0 {
+		host = host[:i]
+	}
+	if i := strings.IndexByte(host, ':'); i >= 0 {
+		host = host[:i]
+	}
+	return host
 }
 
 // ReadSnapshot loads a previously-written snapshot file. The cutover and

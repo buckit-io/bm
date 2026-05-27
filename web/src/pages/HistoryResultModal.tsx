@@ -208,6 +208,7 @@ function hostStatePill(s: HostOpState) {
     running: { tone: "info", icon: "⟳", label: "Running" },
     succeeded: { tone: "success", icon: "✓", label: "Succeeded" },
     failed: { tone: "danger", icon: "✗", label: "Failed" },
+    skipped: { tone: "neutral", icon: "—", label: "Skipped" },
   };
   const m = map[s];
   return <Pill tone={m.tone} icon={m.icon}>{m.label}</Pill>;

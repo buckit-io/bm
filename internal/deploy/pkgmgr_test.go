@@ -56,6 +56,21 @@ func TestRPMManagerInstallCommands(t *testing.T) {
 	})
 }
 
+func TestRPMManagerUninstallCommand(t *testing.T) {
+	if got := NewRPMManager("dnf").UninstallCommand(); got != "dnf remove -y buckit || true" {
+		t.Errorf("dnf uninstall: %q", got)
+	}
+	if got := NewRPMManager("yum").UninstallCommand(); got != "yum remove -y buckit || true" {
+		t.Errorf("yum uninstall: %q", got)
+	}
+}
+
+func TestDebManagerUninstallCommand(t *testing.T) {
+	if got := NewDebManager().UninstallCommand(); got != "apt-get remove -y buckit || true" {
+		t.Errorf("apt uninstall: %q", got)
+	}
+}
+
 func TestRPMManagerDownloadAndVerify(t *testing.T) {
 	m := rpmManager{}
 	if got := m.DownloadCommand("https://example.test/buckit.rpm"); got != "curl -fSL -o /tmp/buckit.rpm https://example.test/buckit.rpm" {

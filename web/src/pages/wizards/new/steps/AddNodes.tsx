@@ -446,6 +446,25 @@ export function AddNodes({ draft, update }: Props) {
             />
           </div>
         )}
+
+        <div className="vstack" style={{ gap: 2 }}>
+          <label className="hstack" style={{ gap: 8, alignItems: "center" }}>
+            <input
+              type="checkbox"
+              checked={draft.persistSsh}
+              onChange={(e) => update({ persistSsh: e.target.checked })}
+            />
+            <span>Save these credentials for future operations</span>
+          </label>
+          <span
+            className="field-hint"
+            style={{ paddingLeft: 24 }}
+          >
+            Stored encrypted in Buckit Manager's local database so
+            post-deploy ops (restart, upgrade, redeploy) don't have to
+            ask again. Passwords are sealed with AES-GCM.
+          </span>
+        </div>
       </div>
 
       <div>

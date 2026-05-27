@@ -62,6 +62,56 @@ func TestGetMissing(t *testing.T) {
 	}
 }
 
+func TestListSortedByHostnameNumeric(t *testing.T) {
+	r := newFixture(t)
+	ctx := context.Background()
+	// Insert in shuffled order to prove sort happens on read, not insertion.
+	for _, n := range []domain.Node{
+		{ID: "n3", ClusterID: "c", Hostname: "buckit10", SSHPort: 22},
+		{ID: "n1", ClusterID: "c", Hostname: "buckit2", SSHPort: 22},
+		{ID: "n4", ClusterID: "c", Hostname: "buckit1", SSHPort: 22},
+		{ID: "n2", ClusterID: "c", Hostname: "buckit3", SSHPort: 22},
+	} {
+		if err := r.Put(ctx, n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := r.List(ctx, "c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"buckit1", "buckit2", "buckit3", "buckit10"}
+	if len(got) != len(want) {
+		t.Fatalf("want %d nodes, got %d", len(want), len(got))
+	}
+	for i, w := range want {
+		if got[i].Hostname != w {
+			t.Errorf("position %d: want %s, got %s", i, w, got[i].Hostname)
+		}
+	}
+}
+
+func TestCollateHostnames(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want int // negative => a<b, zero => equal, positive => a>b
+	}{
+		{"buckit1", "buckit2", -1},
+		{"buckit2", "buckit10", -1},
+		{"buckit10", "buckit2", 1},
+		{"buckit1", "buckit1", 0},
+		{"BUCKIT1", "buckit2", -1}, // case-insensitive on alpha runs
+		{"host", "host1", -1},    // shorter alpha run sorts first
+		{"a1b2", "a1b10", -1},    // multi-segment numeric-aware
+	}
+	for _, tc := range cases {
+		got := collateHostnames(tc.a, tc.b)
+		if (got < 0) != (tc.want < 0) || (got > 0) != (tc.want > 0) || (got == 0) != (tc.want == 0) {
+			t.Errorf("collateHostnames(%q, %q) = %d, want sign of %d", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
 func TestDelete(t *testing.T) {
 	r := newFixture(t)
 	ctx := context.Background()

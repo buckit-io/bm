@@ -110,6 +110,99 @@ func (e *startClusterExecutor) Execute(ctx context.Context, run *tasks.Run) erro
 	return nil
 }
 
+// ---- stop_cluster_by_systemctl: parallel systemctl stop across all hosts ----
+// Unlike OpStopCluster (admin API), this leaves the unit in `inactive` state
+// so systemd's Restart= policy does NOT bring the process back up.
+
+type stopClusterBySystemctlExecutor struct{ deps Deps }
+
+func (e *stopClusterBySystemctlExecutor) Validate(req tasks.DispatchRequest) error { return nil }
+
+func (e *stopClusterBySystemctlExecutor) Execute(ctx context.Context, run *tasks.Run) error {
+	rc, err := load(ctx, e.deps, run.ClusterID)
+	if err != nil {
+		return err
+	}
+	start := time.Now()
+	unit := unitName(rc.cluster.Engine)
+	seedHostStatuses(run, rc.nodes)
+
+	var (
+		mu      sync.Mutex
+		failed  int
+		skipped int
+		failErr error
+		wg      sync.WaitGroup
+	)
+	for i, n := range rc.nodes {
+		wg.Add(1)
+		go func(i int, n domain.Node) {
+			defer wg.Done()
+			hasUnit, probeErr := hostHasSystemdUnit(ctx, e.deps, rc, n, unit)
+			if probeErr != nil {
+				setHostState(run, i, n, tasks.HostFailed, probeErr.Error())
+				run.LogError("%s: %s probe: %v", n.Hostname, unit, probeErr)
+				mu.Lock()
+				failed++
+				if failErr == nil {
+					failErr = probeErr
+				}
+				mu.Unlock()
+				return
+			}
+			if !hasUnit {
+				setHostState(run, i, n, tasks.HostSucceeded, "skipped: "+unit+" not installed")
+				run.LogInfo("%s: skipping host without %s", n.Hostname, unit)
+				mu.Lock()
+				skipped++
+				mu.Unlock()
+				return
+			}
+			setHostState(run, i, n, tasks.HostRunning, "systemctl stop")
+			cmd := sudoSystemctl(rc.sshCreds.User, "stop "+unit)
+			if _, err := runHostStep(ctx, e.deps, rc, n, cmd); err != nil {
+				setHostState(run, i, n, tasks.HostFailed, err.Error())
+				run.LogError("%s: %v", n.Hostname, err)
+				mu.Lock()
+				failed++
+				if failErr == nil {
+					failErr = err
+				}
+				mu.Unlock()
+				return
+			}
+			setHostState(run, i, n, tasks.HostSucceeded, "stopped")
+			run.LogOK("%s: stopped", n.Hostname)
+		}(i, n)
+	}
+	wg.Wait()
+
+	if failed > 0 {
+		return fmt.Errorf("%d/%d hosts failed to stop: %w", failed, len(rc.nodes), failErr)
+	}
+	if skipped == len(rc.nodes) {
+		return fmt.Errorf("stop_cluster_by_systemctl: no hosts have %s installed", unit)
+	}
+	duration := time.Since(start)
+	run.LogOK("Cluster stopped in %s", formatDuration(duration))
+	run.MutateState(func(s *tasks.OperationProgress) {
+		s.Detail = "Cluster stopped"
+		summary := []tasks.SummaryItem{
+			{Label: "Hosts", Value: fmt.Sprintf("%d", len(rc.nodes))},
+			{Label: "Stopped", Value: fmt.Sprintf("%d", len(rc.nodes)-skipped)},
+		}
+		if skipped > 0 {
+			summary = append(summary, tasks.SummaryItem{Label: "Skipped", Value: fmt.Sprintf("%d", skipped)})
+		}
+		summary = append(summary, tasks.SummaryItem{Label: "Duration", Value: formatDuration(duration)})
+		s.Summary = summary
+	})
+	// Admin API is intentionally down — don't refresh, just mark the cluster
+	// row as unreachable so the UI reflects the operator's choice.
+	markUnreachable(ctx, e.deps, run.ClusterID)
+	return nil
+}
+
 // ---- rolling_restart: sequential systemctl restart with health-wait between hosts ----
 
 type rollingRestartExecutor struct{ deps Deps }

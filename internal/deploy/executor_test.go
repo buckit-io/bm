@@ -63,7 +63,8 @@ func TestCommitPersistsSSHConfig(t *testing.T) {
 				},
 			},
 		},
-		Topology: domain.Topology{Parity: 2, SelectedMounts: []string{"/data/disk1"}},
+		Topology:   domain.Topology{Parity: 2, SelectedMounts: []string{"/data/disk1"}},
+		PersistSsh: true,
 	}
 
 	clusterID, err := exec.commit(context.Background(), params, VerifyResult{

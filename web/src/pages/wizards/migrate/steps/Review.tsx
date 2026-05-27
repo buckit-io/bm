@@ -64,10 +64,16 @@ export function Review({ draft, update }: Props) {
     update({ preflight: [] });
     try {
       const rows = await migratePreflight(draft.sourceClusterId, {
-        // The backend hydrates hosts from the cluster's node list, so
-        // the body is mostly informational. We pass discovery here in
-        // case the backend uses it for arch/os uniformity checks.
+        // Send the wizard's hosts (including any per-host SSH port or
+        // credential override). The backend prefers these over the
+        // persisted node rows so operator edits made on the SSH page
+        // take effect for the preflight SSH sessions.
         ssh: draft.ssh,
+        // Version chosen on the Overview step. Without this the
+        // backend's artifact_reachable check falls back to the stale
+        // hardcoded default and reports "no artifact URL for version
+        // v1.0.0".
+        version: draft.version,
         hosts: hosts.map((h) => ({
           id: h.id,
           hostname: h.hostname,
@@ -216,6 +222,23 @@ export function Review({ draft, update }: Props) {
             {s.notifications} notifications · {s.replicationTargets}{" "}
             replication targets
           </div>
+          {s.offlineHosts && s.offlineHosts.length > 0 && (
+            <div
+              className="card-stat__sub"
+              style={{ color: "var(--c-warning)" }}
+            >
+              <b>Offline at snapshot</b> {s.offlineHosts.length} host
+              {s.offlineHosts.length === 1 ? "" : "s"} —{" "}
+              <span className="mono">{s.offlineHosts.join(", ")}</span>
+              <div
+                className="subtle"
+                style={{ fontSize: "var(--fs-xs)", marginTop: 2 }}
+              >
+                These hosts stay on MinIO. Re-run migration on each once
+                it's back online.
+              </div>
+            </div>
+          )}
           {draft.snapshotPath && (
             <div className="card-stat__sub subtle" style={{ fontSize: "var(--fs-xs)" }}>
               <span className="mono">{draft.snapshotPath}</span>
@@ -295,31 +318,46 @@ export function Review({ draft, update }: Props) {
                 </tr>
               </thead>
               <tbody>
-                {draft.preflight.flatMap((p) => [
-                  <tr key={p.id}>
-                    <td>{p.label}</td>
-                    <td>
-                      <span
-                        className="subtle"
-                        style={{ fontSize: "var(--fs-xs)" }}
-                      >
-                        {p.severity === "blocking" ? "Blocking" : "Advisory"}
-                      </span>
-                    </td>
-                    <td>{resultPill(p.result)}</td>
-                  </tr>,
-                  p.detail && (
-                    <tr key={p.id + "-d"} className="discover__detail">
-                      <td
-                        colSpan={3}
-                        className="subtle"
-                        style={{ fontSize: "var(--fs-xs)" }}
-                      >
-                        ↳ {p.detail}
+                {draft.preflight.flatMap((p) => {
+                  const failingHosts =
+                    p.hostStatuses?.filter((s) => s.status !== "pass") ?? [];
+                  return [
+                    <tr key={p.id}>
+                      <td>{p.label}</td>
+                      <td>
+                        <span
+                          className="subtle"
+                          style={{ fontSize: "var(--fs-xs)" }}
+                        >
+                          {p.severity === "blocking" ? "Blocking" : "Advisory"}
+                        </span>
                       </td>
-                    </tr>
-                  ),
-                ])}
+                      <td>{resultPill(p.result)}</td>
+                    </tr>,
+                    (p.detail || failingHosts.length > 0) && (
+                      <tr key={p.id + "-d"} className="discover__detail">
+                        <td colSpan={3}>
+                          <div
+                            className="vstack subtle"
+                            style={{
+                              gap: 2,
+                              padding: "var(--s-2) 0",
+                              fontSize: "var(--fs-xs)",
+                            }}
+                          >
+                            {p.detail && <span>↳ {p.detail}</span>}
+                            {failingHosts.map((s) => (
+                              <span key={s.hostId}>
+                                ↳ <span className="mono">{s.hostname}</span>
+                                {s.message ? ` — ${s.message}` : ""}
+                              </span>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    ),
+                  ];
+                })}
               </tbody>
             </table>
           </div>
@@ -336,76 +374,108 @@ export function Review({ draft, update }: Props) {
       <PhaseRowView row={planPhase} />
       {planPhase.state === "done" && (
         <>
-          <div className="card card-stat">
-            <div className="card-stat__title">Plan</div>
-            <div className="card-stat__sub">
-              <b>Rolling</b> sequential, ~90 s per node
-            </div>
-            <div className="card-stat__sub">
-              <b>Total</b> ~{formatDuration(hosts.length * 90)}
-            </div>
-            <div className="card-stat__sub">
-              <b>Downtime per node</b> ~2–3 s
-            </div>
-            <div className="card-stat__sub">
-              <b>Rollback</b> available after migration
-            </div>
-          </div>
-
           <div className="card vstack" style={{ gap: "var(--s-2)" }}>
-            <h3 className="card-stat__title">For each node, in sequence</h3>
+            <h3 className="card-stat__title">
+              Phase 1 — pre-stage <span className="subtle">(no downtime)</span>
+            </h3>
+            <p className="subtle" style={{ fontSize: "var(--fs-sm)" }}>
+              Runs concurrently across every online host. MinIO keeps
+              serving. Any failure aborts the cutover with zero impact.
+            </p>
             <ol
               style={{ paddingLeft: "1.2em", fontSize: "var(--fs-sm)" }}
             >
-              <li>Wait for cluster quorum (other nodes must be healthy)</li>
               <li>
-                Backup{" "}
-                <span className="mono">/etc/default/minio</span> →{" "}
-                <span className="mono">/etc/default/minio.bm-bak</span>
+                <span className="mono">curl -fSL -o /tmp/buckit.rpm &lt;url&gt;</span>{" "}
+                <span className="subtle">(verify SHA256)</span>
               </li>
               <li>
-                <span className="mono">systemctl stop minio</span>{" "}
-                <span className="subtle">— downtime begins (~2–3 s)</span>
+                <span className="mono">dnf install -y /tmp/buckit.rpm</span>{" "}
+                <span className="subtle">
+                  (Buckit doesn't conflict with MinIO — different paths)
+                </span>
               </li>
               <li>
-                <span className="mono">curl -fSL -o /tmp/buckit.rpm &lt;url&gt;</span>
+                Write drop-in{" "}
+                <span className="mono">
+                  /etc/systemd/system/buckit.service.d/10-bm-migrated.conf
+                </span>{" "}
+                <span className="subtle">
+                  (for using minio-user to run Buckit)
+                </span>
               </li>
-              <li>
-                <span className="mono">dnf install -y /tmp/buckit.rpm</span>
-              </li>
-              <li>
-                <span className="mono">systemctl disable minio</span>
-              </li>
-              <li>
-                <span className="mono">systemctl daemon-reload</span>
-              </li>
-              <li>
-                <span className="mono">systemctl enable --now buckit</span>
-              </li>
-              <li>Wait for node-healthy probe (timeout 90 s) — downtime ends</li>
-              <li>Wait for cluster-healthy probe (timeout 120 s) before next node</li>
             </ol>
           </div>
 
           <div className="card vstack" style={{ gap: "var(--s-2)" }}>
-            <h3 className="card-stat__title">Rollback steps</h3>
+            <h3 className="card-stat__title">
+              Phase 2 — cutover{" "}
+              <span style={{ color: "var(--c-warning)" }}>
+                (downtime begins)
+              </span>
+            </h3>
+            <p className="subtle" style={{ fontSize: "var(--fs-sm)" }}>
+              Runs concurrently across every online host. Downtime is
+              bounded by the slowest single host's stop + enable, not
+              the sum.
+            </p>
             <ol
               style={{ paddingLeft: "1.2em", fontSize: "var(--fs-sm)" }}
             >
               <li>
-                <span className="mono">systemctl disable --now buckit</span>{" "}
-                <span className="subtle">— downtime begins (~2–3 s)</span>
+                <span className="mono">systemctl stop minio</span>
               </li>
               <li>
-                Restore{" "}
-                <span className="mono">/etc/default/minio.bm-bak</span> →{" "}
-                <span className="mono">/etc/default/minio</span>
+                <span className="mono">
+                  systemctl daemon-reload && systemctl disable minio &&
+                  systemctl enable --now buckit
+                </span>
+              </li>
+            </ol>
+          </div>
+
+          <div className="card vstack" style={{ gap: "var(--s-2)" }}>
+            <h3 className="card-stat__title">
+              Phase 3 — verify{" "}
+              <span className="subtle">(downtime ends when satisfied)</span>
+            </h3>
+            <p className="subtle" style={{ fontSize: "var(--fs-sm)" }}>
+              Poll admin ServerInfo until every attempted host reports{" "}
+              <span className="mono">online</span>. Default timeout 5
+              minutes. If verify times out, every attempted host is
+              auto-rolled-back to MinIO.
+            </p>
+          </div>
+
+          <div className="card vstack" style={{ gap: "var(--s-2)" }}>
+            <h3 className="card-stat__title">
+              Auto-rollback{" "}
+              <span className="subtle">(on phase 2 or 3 failure)</span>
+            </h3>
+            <ol
+              style={{ paddingLeft: "1.2em", fontSize: "var(--fs-sm)" }}
+            >
+              <li>
+                <span className="mono">systemctl disable --now buckit</span>
+              </li>
+              <li>
+                <span className="mono">dnf remove -y buckit</span>{" "}
+                <span className="subtle">
+                  (uninstalls the package; data and minio-user are
+                  preserved)
+                </span>
+              </li>
+              <li>
+                Remove drop-in directory
               </li>
               <li>
                 <span className="mono">systemctl enable --now minio</span>
               </li>
-              <li>Move to the next node</li>
             </ol>
+            <p className="subtle" style={{ fontSize: "var(--fs-sm)" }}>
+              Manual rollback after a successful cutover is also
+              available on the next step.
+            </p>
           </div>
         </>
       )}

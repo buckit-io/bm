@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/buckit-io/bm/internal/admin"
 	"github.com/buckit-io/bm/internal/clusteradmin"
 	"github.com/buckit-io/bm/internal/clusters"
@@ -95,34 +97,11 @@ func (e *RollbackExecutor) Execute(ctx context.Context, run *tasks.Run) error {
 		hostIdx[h.ID] = i
 	}
 
-	processHost := func(h domain.HostRow) error {
-		stepCh := make(chan StepEvent, 32)
-		go func() {
-			for ev := range stepCh {
-				idx := hostIdx[ev.HostID]
-				stage := ev.Stage
-				detail := ev.Detail
-				run.MutateState(func(s *tasks.OperationProgress) {
-					if idx < len(s.HostStatuses) {
-						s.HostStatuses[idx].State = stageToHostState(stage)
-						s.HostStatuses[idx].Detail = detail
-					}
-					s.CurrentStep = ev.Hostname + ": " + string(stage)
-				})
-				if ev.Err != nil {
-					run.LogError("%s: %s", ev.Hostname, ev.Err.Error())
-				} else {
-					run.LogInfo("%s: %s — %s", ev.Hostname, stage, detail)
-				}
-			}
-		}()
-		emit := func(ev StepEvent) { stepCh <- ev }
-		err := e.Installer.Rollback(ctx, h, params, emit)
-		close(stepCh)
-		return err
-	}
-
-	completed := 0
+	// Partition hosts into "running buckit" (rollback target) and
+	// "already on MinIO" (skip). Probing serially keeps the SSH pool
+	// busy modestly during a phase that's a no-op for already-on-MinIO
+	// hosts.
+	targets := make([]domain.HostRow, 0, len(params.Hosts))
 	skipped := 0
 	for _, h := range params.Hosts {
 		if err := ctx.Err(); err != nil {
@@ -131,13 +110,10 @@ func (e *RollbackExecutor) Execute(ctx context.Context, run *tasks.Run) error {
 			})
 			return err
 		}
-
-		// Probe buckit.service on the host first — if it's not active, the
-		// host is already on MinIO and we skip cleanly.
 		active, probeErr := e.probeBuckitActive(ctx, h, params)
 		if probeErr != nil {
 			run.LogWarn("%s: probe buckit.service failed: %s — assuming buckit active", h.Hostname, probeErr.Error())
-			active = true // err on the side of attempting rollback
+			active = true
 		}
 		if !active {
 			run.LogInfo("%s: buckit.service not active — skipping", h.Hostname)
@@ -150,17 +126,64 @@ func (e *RollbackExecutor) Execute(ctx context.Context, run *tasks.Run) error {
 			skipped++
 			continue
 		}
+		targets = append(targets, h)
+	}
 
-		if err := processHost(h); err != nil {
+	emitFor := func(h domain.HostRow) func(StepEvent) {
+		return func(ev StepEvent) {
+			idx, ok := hostIdx[ev.HostID]
+			if !ok {
+				return
+			}
 			run.MutateState(func(s *tasks.OperationProgress) {
-				s.FailureNote = fmt.Sprintf("rollback failed on %s: %s", h.Hostname, err.Error())
+				if idx < len(s.HostStatuses) {
+					s.HostStatuses[idx].State = stageToHostState(ev.Stage)
+					s.HostStatuses[idx].Detail = ev.Detail
+				}
+				s.CurrentStep = ev.Hostname + ": " + string(ev.Stage)
 			})
-			return fmt.Errorf("host %s: %w", h.Hostname, err)
+			if ev.Err != nil {
+				run.LogError("%s: %s", ev.Hostname, ev.Err.Error())
+			} else {
+				run.LogInfo("%s: %s — %s", ev.Hostname, ev.Stage, ev.Detail)
+			}
+		}
+	}
+
+	completed := 0
+	if len(targets) > 0 {
+		// Phase 1: stop buckit + uninstall + remove drop-in on every
+		// target in parallel. Must complete across all hosts before
+		// phase 2 starts minio — otherwise the first host to enable
+		// minio.service dials peers still running buckit, hits the
+		// distributed binary-checksum guard, and fails to start.
+		run.MutateState(func(s *tasks.OperationProgress) { s.CurrentStep = "stopping buckit" })
+		if err := e.fanOut(ctx, targets, params, emitFor, e.Installer.StopBuckit); err != nil {
+			run.MutateState(func(s *tasks.OperationProgress) {
+				s.FailureNote = fmt.Sprintf("rollback (stop buckit) failed: %s", err.Error())
+			})
+			return fmt.Errorf("stop buckit: %w", err)
 		}
 
-		completed++
+		// Phase 2: enable --now minio on every target in parallel.
+		run.MutateState(func(s *tasks.OperationProgress) { s.CurrentStep = "starting minio" })
+		if err := e.fanOut(ctx, targets, params, emitFor, e.Installer.StartMinio); err != nil {
+			run.MutateState(func(s *tasks.OperationProgress) {
+				s.FailureNote = fmt.Sprintf("rollback (start minio) failed: %s — manual intervention may be required", err.Error())
+			})
+			return fmt.Errorf("start minio: %w", err)
+		}
+		completed = len(targets)
 		c := completed
-		run.MutateState(func(s *tasks.OperationProgress) { s.Current = &c })
+		run.MutateState(func(s *tasks.OperationProgress) {
+			s.Current = &c
+			for _, h := range targets {
+				if idx := hostIdx[h.ID]; idx < len(s.HostStatuses) {
+					s.HostStatuses[idx].State = tasks.HostSucceeded
+					s.HostStatuses[idx].Detail = "Rolled back to MinIO"
+				}
+			}
+		})
 	}
 
 	// If at least one host was actually rolled back, flip the cluster row's
@@ -187,6 +210,27 @@ func (e *RollbackExecutor) Execute(ctx context.Context, run *tasks.Run) error {
 		}
 	})
 	return nil
+}
+
+// fanOut runs phaseFn against every target host in parallel and waits for
+// all to complete. Returns the first error; errgroup cancels its shared
+// context on any failure so remaining hosts abort quickly.
+func (e *RollbackExecutor) fanOut(
+	ctx context.Context,
+	targets []domain.HostRow,
+	params CutoverParams,
+	emitFor func(domain.HostRow) func(StepEvent),
+	phaseFn func(context.Context, domain.HostRow, CutoverParams, func(StepEvent)) error,
+) error {
+	g, gctx := errgroup.WithContext(ctx)
+	for _, h := range targets {
+		h := h
+		g.Go(func() error {
+			emit := emitFor(h)
+			return phaseFn(gctx, h, params, emit)
+		})
+	}
+	return g.Wait()
 }
 
 // probeBuckitActive checks whether buckit.service is currently the active

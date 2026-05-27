@@ -56,6 +56,13 @@ export function SshCredentials({ draft, update }: Props) {
       ),
     });
 
+  const setHostPort = (id: string, port: number) =>
+    update({
+      hosts: draft.hosts.map((h) =>
+        h.id === id ? { ...h, port, probe: "idle" } : h,
+      ),
+    });
+
   const probeAll = async () => {
     setProbing(true);
     update({
@@ -263,6 +270,25 @@ export function SshCredentials({ draft, update }: Props) {
             />
           </div>
         )}
+
+        <div className="vstack" style={{ gap: 2 }}>
+          <label className="hstack" style={{ gap: 8, alignItems: "center" }}>
+            <input
+              type="checkbox"
+              checked={draft.persistSsh}
+              onChange={(e) => update({ persistSsh: e.target.checked })}
+            />
+            <span>Save these credentials for future operations</span>
+          </label>
+          <span
+            className="field-hint"
+            style={{ paddingLeft: 24 }}
+          >
+            Stored encrypted in Buckit Manager's local database so
+            post-migration ops (restart, upgrade, redeploy) don't have
+            to ask again. Passwords are sealed with AES-GCM.
+          </span>
+        </div>
       </div>
 
       <div className="card card--table">
@@ -298,10 +324,25 @@ export function SshCredentials({ draft, update }: Props) {
             </tr>
           </thead>
           <tbody>
-            {draft.hosts.flatMap((h) => [
+            {[...draft.hosts]
+              .sort((a, b) =>
+                a.hostname.localeCompare(b.hostname, undefined, { numeric: true }),
+              )
+              .flatMap((h) => [
               <tr key={h.id}>
                 <td className="mono">{h.hostname}</td>
-                <td className="mono subtle">{h.port}</td>
+                <td>
+                  <input
+                    className="input"
+                    type="number"
+                    min={1}
+                    max={65535}
+                    value={h.port}
+                    onChange={(e) =>
+                      setHostPort(h.id, parseInt(e.target.value, 10) || 22)
+                    }
+                  />
+                </td>
                 <td>
                   <input
                     type="checkbox"
@@ -326,7 +367,7 @@ export function SshCredentials({ draft, update }: Props) {
                   </td>
                 </tr>
               ),
-            ])}
+              ])}
           </tbody>
         </table>
       </div>

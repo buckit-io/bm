@@ -3,6 +3,7 @@ import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { WizardShell } from "../../../layouts/WizardShell";
 import { useCluster, useNodes } from "../../../api/hooks";
 import { emptyMigration, HostRow, MigrationDraft, STEPS } from "./state";
+import { Overview } from "./steps/Overview";
 import { SshCredentials } from "./steps/SshCredentials";
 import { Review } from "./steps/Review";
 import { Migrate } from "./steps/Migrate";
@@ -58,18 +59,26 @@ function MigrationWizardInner({ sourceId, navigate }: InnerProps) {
 
   const nextDisabled = useMemo(() => {
     if (!draft) return true;
-    // Review step (index 1): block on any blocking preflight failure.
+    // Overview step (index 0): block until a Buckit version is chosen.
+    // The Overview step seeds this from the artifact catalog on mount;
+    // if the catalog fetch failed, the operator can't proceed until it
+    // recovers — better than running preflight with an empty version
+    // tag that resolves to no artifact URL.
+    if (index === 0) {
+      return !draft.version;
+    }
+    // Review step (index 2): block on any blocking preflight failure.
     // Preflight must have run at least once.
-    if (index === 1) {
+    if (index === 2) {
       if (draft.preflight.length === 0) return true;
       return draft.preflight.some(
         (p) => p.severity === "blocking" && p.result === "fail",
       );
     }
-    // Migrate step (index 2): block Next while cutover is still running.
+    // Migrate step (index 3): block Next while cutover is still running.
     // (It's the last step anyway, so onNext is undefined — included for
     // safety in case routing changes later.)
-    if (index === 2) {
+    if (index === 3) {
       const totalHosts = draft.hosts.filter((h) => h.hostname.trim()).length;
       return draft.cutover.overallNodesDone < totalHosts;
     }
@@ -95,9 +104,10 @@ function MigrationWizardInner({ sourceId, navigate }: InnerProps) {
 
   const body = (() => {
     switch (index) {
-      case 0: return <SshCredentials draft={draft} update={update} />;
-      case 1: return <Review draft={draft} update={update} />;
-      case 2: return (
+      case 0: return <Overview draft={draft} update={update} />;
+      case 1: return <SshCredentials draft={draft} update={update} />;
+      case 2: return <Review draft={draft} update={update} />;
+      case 3: return (
         <Migrate
           draft={draft}
           update={update}
@@ -119,7 +129,7 @@ function MigrationWizardInner({ sourceId, navigate }: InnerProps) {
       nextDisabled={nextDisabled}
       nextLabel={
         // Review step: clicking Next here kicks off cutover.
-        index === 1 ? "Start migration" : "Next →"
+        index === 2 ? "Start migration" : "Next →"
       }
     >
       <div className="wizard__inner">{body}</div>

@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
+	"unicode"
 
 	"go.etcd.io/bbolt"
 
@@ -27,8 +29,12 @@ type Repo struct {
 // New returns a Repo against s.
 func New(s *store.Store) *Repo { return &Repo{s: s} }
 
-// List returns every node for clusterID, in undefined order. Callers that want
-// a stable ordering should sort by hostname/pool client-side.
+// List returns every node for clusterID, sorted by hostname in
+// numeric-aware order (minio2 < minio10). The repo enforces a stable
+// order at the data-access boundary so callers — the migrate wizard, the
+// cluster detail page, operation executors — don't have to. Callers that
+// need a different sort (e.g. the detail page's pool-aware compareNodes)
+// re-sort the returned slice.
 func (r *Repo) List(ctx context.Context, clusterID string) ([]domain.Node, error) {
 	prefix := []byte(clusterID + ":")
 	var out []domain.Node
@@ -50,7 +56,63 @@ func (r *Repo) List(ctx context.Context, clusterID string) ([]domain.Node, error
 	if out == nil {
 		out = []domain.Node{}
 	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return collateHostnames(out[i].Hostname, out[j].Hostname) < 0
+	})
 	return out, err
+}
+
+// collateHostnames is a numeric-aware hostname comparator: "minio2"
+// sorts before "minio10". Splits each side into runs of digits vs
+// non-digits and compares run-by-run — digit runs compared as integers,
+// non-digit runs compared lexicographically (case-insensitive). Mirrors
+// the front-end's localeCompare(..., {numeric: true}) behavior so the
+// order an operator sees in the wizard's host table matches what the
+// cluster detail page renders.
+func collateHostnames(a, b string) int {
+	for len(a) > 0 && len(b) > 0 {
+		aDigit := unicode.IsDigit(rune(a[0]))
+		bDigit := unicode.IsDigit(rune(b[0]))
+		if aDigit != bDigit {
+			// Digit run vs alpha run — fall back to byte compare to
+			// keep the result deterministic.
+			return strings.Compare(a, b)
+		}
+		aRun, aRest := takeRun(a, aDigit)
+		bRun, bRest := takeRun(b, bDigit)
+		if aDigit {
+			// Compare numerically by trimming leading zeros, then by
+			// length, then by string value. ("002" == "2" but sorts
+			// stably; "10" > "2".)
+			aTrim := strings.TrimLeft(aRun, "0")
+			bTrim := strings.TrimLeft(bRun, "0")
+			if len(aTrim) != len(bTrim) {
+				return len(aTrim) - len(bTrim)
+			}
+			if c := strings.Compare(aTrim, bTrim); c != 0 {
+				return c
+			}
+		} else {
+			aL := strings.ToLower(aRun)
+			bL := strings.ToLower(bRun)
+			if c := strings.Compare(aL, bL); c != 0 {
+				return c
+			}
+		}
+		a, b = aRest, bRest
+	}
+	return len(a) - len(b)
+}
+
+// takeRun splits s into a leading run of digit-or-non-digit chars and
+// the remainder, depending on isDigit. Used by collateHostnames.
+func takeRun(s string, isDigit bool) (run, rest string) {
+	for i := 0; i < len(s); i++ {
+		if unicode.IsDigit(rune(s[i])) != isDigit {
+			return s[:i], s[i:]
+		}
+	}
+	return s, ""
 }
 
 // Get returns one node by id. ErrNotFound when absent.

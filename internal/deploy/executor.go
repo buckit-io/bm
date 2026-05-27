@@ -271,8 +271,15 @@ func (e *Executor) commit(ctx context.Context, p DeployParams, verify VerifyResu
 	}); err != nil {
 		return "", err
 	}
-	if err := e.SSHConfig.Put(ctx, clusterID, sshConfigFromParams(clusterID, p)); err != nil {
-		return "", err
+	// PersistSsh defaults true (preserves the pre-flag behavior — every
+	// deploy before this flag landed always persisted). The wizard's
+	// checkbox sets it explicitly; older callers that don't send it get
+	// the previous semantics via a default applied at the executor's
+	// Validate step.
+	if p.PersistSsh {
+		if err := e.SSHConfig.Put(ctx, clusterID, sshConfigFromParams(clusterID, p)); err != nil {
+			return "", err
+		}
 	}
 	return clusterID, nil
 }

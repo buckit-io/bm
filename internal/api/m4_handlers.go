@@ -10,6 +10,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os/exec"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -38,11 +41,15 @@ const refreshDialTimeout = 2 * time.Second
 // the test that triggered it.)
 type tcpProbeFn func(ctx context.Context, address string) bool
 type httpProbeFn func(ctx context.Context, client *http.Client, rawURL string) bool
+type icmpProbeFn func(ctx context.Context, hostname string) bool
 
 var (
 	refreshTCPProbe  atomic.Pointer[tcpProbeFn]
 	refreshHTTPProbe atomic.Pointer[httpProbeFn]
+	refreshICMPProbe atomic.Pointer[icmpProbeFn]
 )
+
+const icmpProbeTimeout = 1 * time.Second
 
 func init() {
 	tcp := tcpProbeFn(func(ctx context.Context, address string) bool {
@@ -70,6 +77,35 @@ func init() {
 		return resp.StatusCode >= 200 && resp.StatusCode < 400
 	})
 	refreshHTTPProbe.Store(&httpProbe)
+
+	icmp := icmpProbeFn(shellPing)
+	refreshICMPProbe.Store(&icmp)
+}
+
+// shellPing invokes the OS `ping` binary with a single packet and a 1s
+// timeout. Avoids raw-socket privileges by delegating to the OS, which has
+// already worked out the unprivileged-ICMP story per platform (setuid on
+// Linux, native on macOS, IcmpSendEcho2 on Windows). Returns true iff ping
+// exits 0.
+func shellPing(ctx context.Context, hostname string) bool {
+	hostname = strings.TrimSpace(hostname)
+	if hostname == "" {
+		return false
+	}
+	pingCtx, cancel := context.WithTimeout(ctx, icmpProbeTimeout)
+	defer cancel()
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.CommandContext(pingCtx, "ping", "-n", "1", "-w", "1000", hostname)
+	case "linux":
+		// iputils-ping: -W is seconds.
+		cmd = exec.CommandContext(pingCtx, "ping", "-c", "1", "-W", "1", hostname)
+	default:
+		// macOS / BSD: -W is milliseconds; use -t for whole-run timeout.
+		cmd = exec.CommandContext(pingCtx, "ping", "-c", "1", "-t", "1", hostname)
+	}
+	return cmd.Run() == nil
 }
 
 // ---- read paths ----
@@ -456,7 +492,7 @@ func refreshOne(ctx context.Context, opts Options, c domain.Cluster, includeProb
 					}
 				}
 				if includeProbes && len(nodeList) > 0 {
-					startAsyncNodeProbeRefresh(opts, c.ID, nodeList, creds)
+					startAsyncNodeProbeRefresh(opts, c.ID, nodeList, creds, portFromEndpoint(c.ConsoleURL))
 				}
 			}
 		}
@@ -478,6 +514,10 @@ func refreshOne(ctx context.Context, opts Options, c domain.Cluster, includeProb
 	c.UnreachableSince = nil
 	if info.Version != "" {
 		c.Version = info.Version
+		// Engine is derived from Version, so re-classify on every refresh.
+		// This also self-heals rows imported before ParseEngine learned to
+		// accept bare / RFC3339 timestamps.
+		c.Engine = discovery.ParseEngine(info.Version)
 	}
 	if info.ConsoleURL != "" {
 		c.ConsoleURL = info.ConsoleURL
@@ -496,7 +536,7 @@ func refreshOne(ctx context.Context, opts Options, c domain.Cluster, includeProb
 	c.Health = clusters.Rollup(c, summary)
 	_ = opts.Clusters.Put(ctx, c)
 	if includeProbes {
-		startAsyncNodeProbeRefresh(opts, c.ID, nodeList, creds)
+		startAsyncNodeProbeRefresh(opts, c.ID, nodeList, creds, portFromEndpoint(c.ConsoleURL))
 	}
 }
 
@@ -530,10 +570,16 @@ func mergeAdminNodeFacts(existing []domain.Node, info *domain.ServerInfo) []doma
 		}
 		used[idx] = struct{}{}
 		n := existing[idx]
+		if p := portFromEndpoint(s.Endpoint); p > 0 {
+			n.APIPort = p
+		}
 		n.State = s.State
 		n.Version = s.Version
 		n.UptimeSec = s.Uptime
 		n.OS = s.OS
+		if s.Arch != "" {
+			n.Arch = s.Arch
+		}
 		n.Kernel = s.Kernel
 		n.CPUModel = s.CPUModel
 		n.CPUCores = s.CPUCores
@@ -564,7 +610,7 @@ func mergeAdminNodeFacts(existing []domain.Node, info *domain.ServerInfo) []doma
 	return out
 }
 
-func startAsyncNodeProbeRefresh(opts Options, clusterID string, nodeList []domain.Node, creds domain.AdminCreds) {
+func startAsyncNodeProbeRefresh(opts Options, clusterID string, nodeList []domain.Node, creds domain.AdminCreds, consolePort int) {
 	if opts.Nodes == nil || len(nodeList) == 0 {
 		return
 	}
@@ -572,13 +618,14 @@ func startAsyncNodeProbeRefresh(opts Options, clusterID string, nodeList []domai
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), refreshProbeTimeout)
 		defer cancel()
-		_ = refreshNodeConnectivity(ctx, opts, clusterID, snapshot, creds)
+		_ = refreshNodeConnectivity(ctx, opts, clusterID, snapshot, creds, consolePort)
 	}()
 }
 
-func refreshNodeConnectivity(ctx context.Context, opts Options, _ string, nodeList []domain.Node, creds domain.AdminCreds) error {
+func refreshNodeConnectivity(ctx context.Context, opts Options, _ string, nodeList []domain.Node, creds domain.AdminCreds, consolePort int) error {
 	httpClient := refreshProbeHTTPClient(creds)
 	secure := refreshProbeSecure(creds.URL)
+	cPort := consolePortOrDefault(consolePort)
 
 	sem := make(chan struct{}, refreshProbeConcurrency)
 	var wg sync.WaitGroup
@@ -590,10 +637,11 @@ func refreshNodeConnectivity(ctx context.Context, opts Options, _ string, nodeLi
 			defer func() { <-sem }()
 
 			tcp := *refreshTCPProbe.Load()
+			apiPort := apiPortOrDefault(node.APIPort)
 			next := node
 			next.Pingable = probePing(ctx, node)
-			next.APIAccessible = probeHTTP(ctx, httpClient, secure, node.Hostname, 9000, "/minio/health/live")
-			next.ConsoleAccessible = probeHTTP(ctx, httpClient, secure, node.Hostname, 9001, "/")
+			next.APIAccessible = probeHTTP(ctx, httpClient, secure, node.Hostname, apiPort, "/minio/health/live")
+			next.ConsoleAccessible = probeHTTP(ctx, httpClient, secure, node.Hostname, cPort, "/")
 			next.Sshable = tcp(ctx, net.JoinHostPort(node.Hostname, fmt.Sprintf("%d", sshPortOrDefault(node.SSHPort))))
 			_ = opts.Nodes.Put(ctx, next)
 		}(node)
@@ -603,11 +651,19 @@ func refreshNodeConnectivity(ctx context.Context, opts Options, _ string, nodeLi
 }
 
 func probePing(ctx context.Context, node domain.Node) bool {
+	icmp := *refreshICMPProbe.Load()
+	if icmp(ctx, node.Hostname) {
+		return true
+	}
+	// ICMP may be blocked by firewall, unsupported by the runtime user, or
+	// the `ping` binary may be missing. Fall back to TCP probes on the
+	// ports we already know about — a service that accepts TCP is
+	// reachable for any practical operator purpose.
 	tcp := *refreshTCPProbe.Load()
 	if tcp(ctx, net.JoinHostPort(node.Hostname, fmt.Sprintf("%d", sshPortOrDefault(node.SSHPort)))) {
 		return true
 	}
-	return tcp(ctx, net.JoinHostPort(node.Hostname, "9000"))
+	return tcp(ctx, net.JoinHostPort(node.Hostname, fmt.Sprintf("%d", apiPortOrDefault(node.APIPort))))
 }
 
 func probeHTTP(ctx context.Context, client *http.Client, secure bool, hostname string, port int, path string) bool {
@@ -663,6 +719,46 @@ func sshPortOrDefault(port int) int {
 		return port
 	}
 	return 22
+}
+
+func apiPortOrDefault(port int) int {
+	if port > 0 {
+		return port
+	}
+	return 9000
+}
+
+func consolePortOrDefault(port int) int {
+	if port > 0 {
+		return port
+	}
+	return 9001
+}
+
+// portFromEndpoint extracts the TCP port from a MinIO server endpoint
+// (e.g. "http://minio1:9000" or "minio1:9000"). Returns 0 if absent or
+// unparseable, in which case callers fall back to apiPortOrDefault.
+func portFromEndpoint(ep string) int {
+	raw := strings.TrimSpace(ep)
+	if raw == "" {
+		return 0
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return 0
+	}
+	p := u.Port()
+	if p == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(p)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
 }
 
 func hostnameFromEndpoint(ep string) string {

@@ -260,3 +260,49 @@ func fakeMinioForSnapshot(t *testing.T) *httptest.Server {
 	})
 	return httptest.NewServer(mux)
 }
+
+func TestOfflineHostnames(t *testing.T) {
+	servers := []domain.ServerInfoServer{
+		{Endpoint: "http://buckit1:9000", State: domain.NodeOnline},
+		{Endpoint: "http://buckit2:9000", State: domain.NodeOffline},
+		{Endpoint: "https://buckit3:9000/", State: domain.NodeDegraded},
+		{Endpoint: "buckit4:9000", State: domain.NodeOnline},
+		{Endpoint: "http://buckit5:9000/healthz", State: domain.NodeUnknown},
+	}
+	got := offlineHostnames(servers)
+	want := []string{"buckit2", "buckit3", "buckit5"}
+	if len(got) != len(want) {
+		t.Fatalf("want %v, got %v", want, got)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("position %d: want %s, got %s", i, w, got[i])
+		}
+	}
+}
+
+func TestOfflineHostnamesAllOnlineReturnsNil(t *testing.T) {
+	servers := []domain.ServerInfoServer{
+		{Endpoint: "http://buckit1:9000", State: domain.NodeOnline},
+		{Endpoint: "http://buckit2:9000", State: domain.NodeOnline},
+	}
+	if got := offlineHostnames(servers); got != nil {
+		t.Fatalf("want nil for all-online cluster, got %v", got)
+	}
+}
+
+func TestHostnameFromMinioEndpoint(t *testing.T) {
+	cases := map[string]string{
+		"http://buckit1:9000":             "buckit1",
+		"https://buckit2:9000/":           "buckit2",
+		"http://buckit3:9000/healthz":     "buckit3",
+		"buckit4:9000":                    "buckit4",
+		"buckit5":                         "buckit5",
+		"":                                "",
+	}
+	for in, want := range cases {
+		if got := hostnameFromMinioEndpoint(in); got != want {
+			t.Errorf("hostnameFromMinioEndpoint(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

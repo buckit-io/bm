@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -291,12 +292,20 @@ func newCutoverFixture(t *testing.T, hostCount int) *cutoverFixture {
 	}
 
 	// Admin server that returns canned ServerInfo + AccountInfo so the
-	// post-cutover Verify pass produces sensible counts.
+	// post-cutover Verify pass produces sensible counts. The endpoints
+	// match the SSH-test host so the new partitionHosts/verify path
+	// considers every test host online.
+	servers := make([]madmin.ServerProperties, 0, hostCount)
+	for i := 0; i < hostCount; i++ {
+		servers = append(servers, madmin.ServerProperties{
+			Endpoint: fmt.Sprintf("%s:9000", host),
+			State:    "online",
+			Version:  "RELEASE.2026-01-01T00-00-00Z",
+		})
+	}
 	infoBody := madmin.InfoMessage{
-		Mode: "online",
-		Servers: []madmin.ServerProperties{
-			{Endpoint: "node1:9000", State: "online", Version: "RELEASE.2026-01-01T00-00-00Z"},
-		},
+		Mode:    "online",
+		Servers: servers,
 	}
 	adminSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {

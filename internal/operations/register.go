@@ -22,6 +22,7 @@ func RegisterAll(deps Deps) {
 
 	// Orchestrated (cluster-wide)
 	tasks.OverwriteRegister(tasks.OpStartCluster, &startClusterExecutor{deps: deps})
+	tasks.OverwriteRegister(tasks.OpStopClusterBySystemctl, &stopClusterBySystemctlExecutor{deps: deps})
 	tasks.OverwriteRegister(tasks.OpRollingRestart, &rollingRestartExecutor{deps: deps})
 	tasks.OverwriteRegister(tasks.OpClusterUpgradeBySystemctl, &clusterUpgradeBySystemctlExecutor{deps: deps})
 	tasks.OverwriteRegister(tasks.OpRotateRootCreds, &rotateRootCredsExecutor{deps: deps})

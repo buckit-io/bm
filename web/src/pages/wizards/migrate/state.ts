@@ -32,6 +32,12 @@ export interface MigrationDraft {
 
   hosts: HostRow[];
   ssh: SshCreds;
+  // When true, the migrate-cutover dispatch handler also persists
+  // ssh + per-host overrides to the cluster_ssh bucket so future
+  // post-migration ops (restart, upgrade, redeploy) can reuse them
+  // without re-prompting. Bound to a checkbox on the SSH credentials
+  // step; default true.
+  persistSsh: boolean;
 
   discovery: Record<string, DiscoveryResult>;
   minioDetection: Record<string, MinioNodeInfo>;
@@ -72,6 +78,10 @@ export interface MinioSnapshot {
   notifications: number;
   replicationTargets: number;
   warnings: string[];
+  // Hostnames whose admin-API state was not "online" at snapshot time.
+  // Empty/undefined when every node is healthy. The cutover skips these
+  // hosts and the verify phase doesn't wait for them.
+  offlineHosts?: string[];
 }
 
 export interface MigrationPlan {
@@ -91,14 +101,15 @@ export interface CutoverNodeState {
   state:
     | "pending"
     | "stopping_minio"
-    | "uploading_pkg"
+    | "downloading_pkg"
     | "installing"
     | "switching_unit"
     | "waiting_health"
     | "waiting_cluster"
     | "done"
     | "rolled_back"
-    | "failed";
+    | "failed"
+    | "skipped";
   cutoverStartedAt?: string;
   durationSec?: number;
 }
@@ -125,9 +136,13 @@ export function emptyMigration(
     sourceClusterId: source.id,
     name: source.name,
     description: source.description ?? "",
-    version: "v1.0.0",
+    // Seeded on mount by the Overview step from the artifact catalog —
+    // hardcoding a tag here gets stale (e.g. "v1.0.0" doesn't exist) and
+    // fails the migration preflight's artifact_reachable check.
+    version: "",
     hosts: source.hosts,
     ssh: { authMethod: "agent", user: "", sudo: true },
+    persistSsh: false,
     discovery: {},
     minioDetection: {},
     snapshot: null,
@@ -145,6 +160,7 @@ export function emptyMigration(
 }
 
 export const STEPS = [
+  { id: "overview", label: "Overview" },
   { id: "ssh", label: "SSH credentials" },
   { id: "review", label: "Preflight Check" },
   { id: "migrate", label: "Migrate" },

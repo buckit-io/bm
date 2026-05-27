@@ -27,6 +27,11 @@ type DeployParams struct {
 	TLS         domain.TLSConfig                        `json:"tls,omitempty"`
 	Discovery   map[string]domain.WizardDiscoveryResult `json:"discovery,omitempty"`
 	Topology    domain.Topology                         `json:"topology"`
+	// PersistSsh asks the deploy executor's commit step to save the SSH
+	// config to the cluster_ssh bucket so post-deploy ops can reuse it.
+	// Defaults to true (preserves the pre-flag behavior — every deploy
+	// before this flag landed always saved).
+	PersistSsh bool `json:"persistSsh"`
 }
 
 // FromDraft turns a NewClusterDraft into the executor's DeployParams. Drops
@@ -73,6 +78,7 @@ func FromDraft(d domain.NewClusterDraft) DeployParams {
 		TLS:         tls,
 		Discovery:   d.Discovery,
 		Topology:    d.Topology,
+		PersistSsh:  d.PersistSsh,
 	}
 }
 

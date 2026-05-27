@@ -89,7 +89,19 @@ func migratePreflight(opts Options) http.HandlerFunc {
 		if r.ContentLength > 0 {
 			_ = json.NewDecoder(r.Body).Decode(&draft)
 		}
-		draft.Hosts = hostsFromClusterNodes(opts, r.Context(), clusterID)
+		// Prefer the body's hosts when the client provided them — that's
+		// where wizard-level edits like per-host SSH port and credential
+		// overrides live. Fall back to the persisted cluster nodes only
+		// when the body is empty (e.g. direct API callers).
+		if len(draft.Hosts) == 0 {
+			draft.Hosts = hostsFromClusterNodes(opts, r.Context(), clusterID)
+		}
+		// Hydrate draft.Discovery from cluster node rows so the arch/os
+		// uniformity checks have data to read. The migrate flow has no
+		// host-SSH discovery step (the cluster was imported via the admin
+		// API), so without this the OS/Arch checks would always fail with
+		// "re-run discovery" — there's nothing for the operator to re-run.
+		hydrateDiscoveryFromNodes(opts, r.Context(), clusterID, &draft)
 
 		ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 		defer cancel()
@@ -103,6 +115,33 @@ func migratePreflight(opts Options) http.HandlerFunc {
 		}
 
 		writeJSON(w, http.StatusOK, results)
+	}
+}
+
+// hydrateDiscoveryFromNodes fills draft.Discovery with WizardDiscoveryResult
+// entries derived from the cluster's node rows (OS, Arch). Skips nodes that
+// already have an entry in the body, so a future migrate flow that does run
+// host-SSH discovery wouldn't be overwritten.
+func hydrateDiscoveryFromNodes(opts Options, ctx context.Context, clusterID string, draft *domain.NewClusterDraft) {
+	if opts.Nodes == nil {
+		return
+	}
+	ns, err := opts.Nodes.List(ctx, clusterID)
+	if err != nil {
+		return
+	}
+	if draft.Discovery == nil {
+		draft.Discovery = make(map[string]domain.WizardDiscoveryResult, len(ns))
+	}
+	for _, n := range ns {
+		if _, ok := draft.Discovery[n.ID]; ok {
+			continue
+		}
+		draft.Discovery[n.ID] = domain.WizardDiscoveryResult{
+			State: domain.WizardDiscoveryDone,
+			OS:    n.OS,
+			Arch:  n.Arch,
+		}
 	}
 }
 

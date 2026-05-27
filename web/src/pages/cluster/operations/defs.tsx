@@ -56,6 +56,10 @@ export interface OperationDef<P = any> {
   visible?: (cluster: Cluster) => boolean;
   // Marks the item as destructive — danger styling in the menu.
   danger?: boolean;
+  // Op only applies to Buckit clusters (mirrors the backend buckitOnly
+  // map in internal/operations/helpers.go). Menus disable the entry
+  // with a tooltip when the cluster's engine is "minio".
+  buckitOnly?: boolean;
   // Whether the running phase exposes a Cancel button. Signal ops are
   // never cancellable (the dispatch IS the op). Orchestrated ops that
   // leave the cluster in a recoverable state when stopped mid-flight
