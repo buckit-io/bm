@@ -160,6 +160,7 @@ jobs:
           base="pages/manager/bm/release"
 
           rm -rf "$base"
+          mkdir -p pages/manager/bm/archives
           mkdir -p \
             "$base/linux-amd64" \
             "$base/linux-arm64" \
@@ -181,13 +182,200 @@ jobs:
 
           sha=$(awk '{print $1}' "artifacts/bm-windows-amd64.exe.${tag}.sha256sum")
           echo "${sha}  bm.exe.${tag}" > "$base/windows-amd64/bm.sha256sum"
+      - name: Generate release index page
+        run: |
+          set -euo pipefail
+
+          tag="${{ github.ref_name }}"
+          base="https://github.com/buckit-io/bm/releases/download/${tag}"
+
+          cat > pages/manager/bm/release/index.html <<HTML
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <title>bm ${tag}</title>
+            <style>
+              body { font-family: sans-serif; max-width: 860px; margin: 2em auto; padding: 0 1em; }
+              h2 { margin-bottom: 0.25em; }
+              p { margin-top: 0.25em; color: #555; }
+              table { border-collapse: collapse; width: 100%; margin-bottom: 2em; }
+              th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #ddd; }
+              th { background: #f4f4f4; font-weight: 600; }
+              a { color: #0366d6; text-decoration: none; }
+              a:hover { text-decoration: underline; }
+            </style>
+          </head>
+          <body>
+            <h2>bm ${tag}</h2>
+            <p>Latest stable release — <a href="../archives/">all releases &rarr;</a></p>
+            <table>
+              <tr><th>Platform</th><th>Binary</th><th>Checksum</th><th>Signature</th><th>Pointer</th></tr>
+              <tr>
+                <td>Linux x86_64</td>
+                <td><a href="${base}/bm-linux-amd64.${tag}">bm-linux-amd64</a></td>
+                <td><a href="${base}/bm-linux-amd64.${tag}.sha256sum">.sha256sum</a></td>
+                <td><a href="${base}/bm-linux-amd64.${tag}.minisig">.minisig</a></td>
+                <td><a href="./linux-amd64/bm.sha256sum">latest pointer</a></td>
+              </tr>
+              <tr>
+                <td>Linux arm64</td>
+                <td><a href="${base}/bm-linux-arm64.${tag}">bm-linux-arm64</a></td>
+                <td><a href="${base}/bm-linux-arm64.${tag}.sha256sum">.sha256sum</a></td>
+                <td><a href="${base}/bm-linux-arm64.${tag}.minisig">.minisig</a></td>
+                <td><a href="./linux-arm64/bm.sha256sum">latest pointer</a></td>
+              </tr>
+              <tr>
+                <td>macOS x86_64</td>
+                <td><a href="${base}/bm-darwin-amd64.${tag}">bm-darwin-amd64</a></td>
+                <td><a href="${base}/bm-darwin-amd64.${tag}.sha256sum">.sha256sum</a></td>
+                <td><a href="${base}/bm-darwin-amd64.${tag}.minisig">.minisig</a></td>
+                <td><a href="./darwin-amd64/bm.sha256sum">latest pointer</a></td>
+              </tr>
+              <tr>
+                <td>macOS arm64</td>
+                <td><a href="${base}/bm-darwin-arm64.${tag}">bm-darwin-arm64</a></td>
+                <td><a href="${base}/bm-darwin-arm64.${tag}.sha256sum">.sha256sum</a></td>
+                <td><a href="${base}/bm-darwin-arm64.${tag}.minisig">.minisig</a></td>
+                <td><a href="./darwin-arm64/bm.sha256sum">latest pointer</a></td>
+              </tr>
+              <tr>
+                <td>Windows x86_64</td>
+                <td><a href="${base}/bm-windows-amd64.exe.${tag}">bm-windows-amd64.exe</a></td>
+                <td><a href="${base}/bm-windows-amd64.exe.${tag}.sha256sum">.sha256sum</a></td>
+                <td><a href="${base}/bm-windows-amd64.exe.${tag}.minisig">.minisig</a></td>
+                <td><a href="./windows-amd64/bm.sha256sum">latest pointer</a></td>
+              </tr>
+            </table>
+          </body>
+          </html>
+          HTML
+      - name: Generate archives index page
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          gh api repos/buckit-io/bm/releases --paginate \
+            --jq '.[] | select(.prerelease == false) | {tag: .tag_name, date: .published_at[:10], url: .html_url}' \
+            > /tmp/bm-releases.jsonl
+
+          python3 - /tmp/bm-releases.jsonl pages/manager/bm/archives/index.html <<'PYEOF'
+          import html, json, sys
+
+          releases = [json.loads(line) for line in open(sys.argv[1]) if line.strip()]
+
+          rows = '\n'.join(
+              f'<tr>'
+              f'<td>{html.escape(r["date"])}</td>'
+              f'<td><a href="{html.escape(r["url"])}">{html.escape(r["tag"])}</a></td>'
+              f'<td><a href="{html.escape(r["url"])}">Assets &rarr;</a></td>'
+              f'</tr>'
+              for r in releases
+          )
+
+          page = f'''<!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <title>bm Releases</title>
+            <style>
+              body {{ font-family: sans-serif; max-width: 860px; margin: 2em auto; padding: 0 1em; }}
+              table {{ border-collapse: collapse; width: 100%; }}
+              th, td {{ text-align: left; padding: 8px 12px; border-bottom: 1px solid #ddd; }}
+              th {{ background: #f4f4f4; font-weight: 600; }}
+              a {{ color: #0366d6; text-decoration: none; }}
+              a:hover {{ text-decoration: underline; }}
+            </style>
+          </head>
+          <body>
+            <h2>bm Releases</h2>
+            <p><a href="../release/">Latest release &rarr;</a></p>
+            <table>
+              <tr><th>Date</th><th>Release</th><th>Downloads</th></tr>
+              {rows}
+            </table>
+          </body>
+          </html>'''
+
+          with open(sys.argv[2], 'w') as f:
+              f.write(page)
+          PYEOF
+      - name: Generate directory index pages
+        run: |
+          set -euo pipefail
+
+          cat > pages/index.html <<'HTML'
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <title>bm Pages</title>
+            <style>
+              body { font-family: sans-serif; max-width: 860px; margin: 2em auto; padding: 0 1em; }
+              a { color: #0366d6; text-decoration: none; }
+              a:hover { text-decoration: underline; }
+            </style>
+          </head>
+          <body>
+            <h2>bm Pages</h2>
+            <ul>
+              <li><a href="./manager/">Manager</a></li>
+            </ul>
+          </body>
+          </html>
+          HTML
+
+          mkdir -p pages/manager
+          cat > pages/manager/index.html <<'HTML'
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <title>bm Manager</title>
+            <style>
+              body { font-family: sans-serif; max-width: 860px; margin: 2em auto; padding: 0 1em; }
+              a { color: #0366d6; text-decoration: none; }
+              a:hover { text-decoration: underline; }
+            </style>
+          </head>
+          <body>
+            <h2>bm Manager</h2>
+            <ul>
+              <li><a href="./bm/">Self-update artifacts</a></li>
+            </ul>
+          </body>
+          </html>
+          HTML
+
+          cat > pages/manager/bm/index.html <<'HTML'
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <title>bm Artifacts</title>
+            <style>
+              body { font-family: sans-serif; max-width: 860px; margin: 2em auto; padding: 0 1em; }
+              a { color: #0366d6; text-decoration: none; }
+              a:hover { text-decoration: underline; }
+            </style>
+          </head>
+          <body>
+            <h2>bm Artifacts</h2>
+            <ul>
+              <li><a href="./release/">Latest stable release</a></li>
+              <li><a href="./archives/">Release archive</a></li>
+            </ul>
+          </body>
+          </html>
+          HTML
       - name: Commit gh-pages update
         run: |
           set -euo pipefail
           cd pages
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add manager/bm/release
+          git add index.html manager/index.html manager/bm/index.html manager/bm/release manager/bm/archives
           if git diff --cached --quiet; then
             echo "No gh-pages changes to commit"
             exit 0
