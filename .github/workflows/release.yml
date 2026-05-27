@@ -188,10 +188,13 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add manager/bm/release
+          if git diff --cached --quiet; then
+            echo "No gh-pages changes to commit"
+            exit 0
+          fi
           git commit -m "Update bm release pointers for ${{ github.ref_name }}"
-      - name: Deploy to gh-pages
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./pages
-          force_orphan: true
+      - name: Push gh-pages update
+        run: |
+          set -euo pipefail
+          cd pages
+          git push origin gh-pages

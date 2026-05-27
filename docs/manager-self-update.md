@@ -206,6 +206,9 @@ implementation should follow the release process in
 - GitHub Pages hosts the stable per-platform pointer file
 - GitHub Releases hosts the real binary, checksum sidecar, and minisign
   signature
+- default minisign verification uses the same Buckit public key already
+  published in `../buckit/buckit.pub`, with `BM_UPDATE_MINISIGN_PUBKEY`
+  as an override for rotation/testing
 
 Default pointer URLs:
 

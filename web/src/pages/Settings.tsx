@@ -1,16 +1,30 @@
 import { useState } from "react";
+import { useApplyManagerUpdate, useManagerUpdateStatus, useSettings } from "../api/hooks";
 import "./Settings.css";
 
 export function Settings() {
+  const [checkRequested, setCheckRequested] = useState(false);
+  const { data: settings } = useSettings();
+  const {
+    data: updateStatus,
+    error: updateError,
+    isFetching: updateChecking,
+    refetch: refetchUpdateStatus,
+  } = useManagerUpdateStatus(checkRequested);
+  const applyUpdate = useApplyManagerUpdate();
+
+  /*
   const [remoteOn, setRemoteOn] = useState(false);
   const [bindAddr, setBindAddr] = useState("0.0.0.0:9443");
   const [passcode, setPasscode] = useState("");
   const [certMode, setCertMode] = useState<"auto" | "custom">("auto");
+  */
 
   return (
     <section className="settings">
       <h1>Settings</h1>
 
+      {/* Remote access is planned for a future release.
       <div className="card settings__group">
         <h2 className="settings__group-title">Remote access</h2>
         <p className="subtle" style={{ fontSize: "var(--fs-sm)" }}>
@@ -99,15 +113,56 @@ export function Settings() {
           </>
         )}
       </div>
+      */}
 
       <div className="card settings__group">
         <h2 className="settings__group-title">About</h2>
         <div className="settings__row">
           <div>
             <div className="field-label">Version</div>
-            <div className="settings__value mono">bm dev</div>
+            <div className="settings__value mono">{settings?.version ?? "unknown"}</div>
+            {updateStatus?.installedVersion &&
+              updateStatus.installedVersion !== updateStatus.currentVersion && (
+                <div className="subtle settings__note">
+                  Installed on disk: <span className="mono">{updateStatus.installedVersion}</span>
+                </div>
+              )}
+            {updateStatus?.latestVersion && (
+              <div className="subtle settings__note">
+                Latest stable: <span className="mono">{updateStatus.latestVersion}</span>
+              </div>
+            )}
+            {updateStatus?.reason && (
+              <div className="subtle settings__note">{updateStatus.reason}</div>
+            )}
+            {updateError instanceof Error && (
+              <div className="subtle settings__note">{updateError.message}</div>
+            )}
+            {applyUpdate.data?.message && (
+              <div className="subtle settings__note">{applyUpdate.data.message}</div>
+            )}
           </div>
-          <button className="btn btn--sm">Check for updates</button>
+          <div className="settings__actions">
+            <button
+              className="btn btn--sm"
+              onClick={() => {
+                setCheckRequested(true);
+                void refetchUpdateStatus();
+              }}
+              disabled={updateChecking || applyUpdate.isPending}
+            >
+              {updateChecking ? "Checking..." : "Check for updates"}
+            </button>
+            {updateStatus?.updateAvailable && updateStatus.canApply && (
+              <button
+                className="btn btn--sm"
+                onClick={() => applyUpdate.mutate()}
+                disabled={applyUpdate.isPending || updateChecking}
+              >
+                {applyUpdate.isPending ? "Installing..." : "Install update"}
+              </button>
+            )}
+          </div>
         </div>
         <div className="settings__row">
           <div>

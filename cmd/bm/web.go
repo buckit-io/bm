@@ -28,6 +28,7 @@ import (
 	"github.com/buckit-io/bm/internal/sshconfig"
 	"github.com/buckit-io/bm/internal/store"
 	"github.com/buckit-io/bm/internal/tasks"
+	"github.com/buckit-io/bm/internal/update"
 )
 
 const defaultAddr = "127.0.0.1:9443"
@@ -143,6 +144,7 @@ func runWeb(rawArgs []string) error {
 		ClusterAdmin: clusterAdminRepo,
 		AdminPool:    adminPool,
 		AliasPath:    paths.AliasFile,
+		Updater:      update.NewService(),
 		WebDist:      *webDist,
 	})
 	srv := &http.Server{

@@ -12,6 +12,8 @@ import type {
   ClusterSshConfig,
   HealthInfo,
   HistoryEntry,
+  ManagerSettings,
+  ManagerUpdateStatus,
   Node,
   NodeLogsRange,
   NodeLogsResponse,
@@ -85,6 +87,35 @@ export function useLogout() {
       return { ok: true } as const;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["me"] }),
+  });
+}
+
+// ---- settings ----
+
+export function useSettings() {
+  return useQuery<ManagerSettings>({
+    queryKey: ["settings"],
+    queryFn: ({ signal }) => client.getSettings(signal),
+  });
+}
+
+export function useManagerUpdateStatus(enabled = true) {
+  return useQuery<ManagerUpdateStatus>({
+    queryKey: ["manager-update"],
+    queryFn: ({ signal }) => client.getManagerUpdateStatus(signal),
+    enabled,
+    retry: false,
+  });
+}
+
+export function useApplyManagerUpdate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => client.applyManagerUpdate(),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["manager-update"] });
+      qc.invalidateQueries({ queryKey: ["settings"] });
+    },
   });
 }
 

@@ -30,6 +30,7 @@ import (
 	"github.com/buckit-io/bm/internal/sshconfig"
 	"github.com/buckit-io/bm/internal/store"
 	"github.com/buckit-io/bm/internal/tasks"
+	"github.com/buckit-io/bm/internal/update"
 	"github.com/buckit-io/bm/internal/version"
 )
 
@@ -52,6 +53,7 @@ type Options struct {
 	// WebDist optionally overrides the embedded UI assets with files from disk.
 	// Used for local development against a freshly built web/dist tree.
 	WebDist string
+	Updater *update.Service
 }
 
 // resolveAliasSync returns opts.AliasSync or the package default.
@@ -87,6 +89,8 @@ func New(opts Options) http.Handler {
 		r.Get("/clusters", listClusters(opts.Clusters))
 		r.Get("/clusters/{id}", getCluster(opts.Clusters))
 		r.Get("/settings", currentSettings)
+		r.Get("/manager/update", getManagerUpdate(opts.Updater))
+		r.Post("/manager/update/apply", postManagerUpdateApply(opts.Updater))
 		r.Get("/sessions/me", loopbackMe)
 
 		// M4: discovery + cluster lifecycle.
@@ -284,10 +288,11 @@ func loopbackMe(w http.ResponseWriter, _ *http.Request) {
 
 func currentSettings(w http.ResponseWriter, _ *http.Request) {
 	// Default settings struct until /PATCH-settings persistence lands in a
-	// later milestone. Shape matches web/src/mock/data.ts's settings expectations.
+	// later milestone.
 	writeJSON(w, http.StatusOK, map[string]any{
 		"remoteAccess": map[string]any{"enabled": false},
 		"versionPin":   nil,
+		"version":      version.Version,
 	})
 }
 

@@ -29,6 +29,8 @@ import type {
   Node,
   OperationProgress,
   SessionMe,
+  ManagerUpdateApplyResult,
+  ManagerUpdateStatus,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -118,6 +120,12 @@ export const me = (signal?: AbortSignal) => get<SessionMe>("/sessions/me", signa
 
 export const getSettings = (signal?: AbortSignal) =>
   get<ManagerSettings>("/settings", signal);
+
+export const getManagerUpdateStatus = (signal?: AbortSignal) =>
+  get<ManagerUpdateStatus>("/manager/update", signal);
+
+export const applyManagerUpdate = (signal?: AbortSignal) =>
+  post<ManagerUpdateApplyResult>("/manager/update/apply", undefined, signal);
 
 // ---- clusters ----
 

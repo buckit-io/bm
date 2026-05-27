@@ -42,3 +42,15 @@
 .settings__sel {
   max-width: 240px;
 }
+
+.settings__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.settings__note {
+  margin-top: var(--s-1);
+}

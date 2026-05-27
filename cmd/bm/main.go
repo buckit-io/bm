@@ -41,6 +41,12 @@ func main() {
 			os.Exit(1)
 		}
 		return
+	case "update":
+		if err := runUpdate(args[1:]); err != nil {
+			fmt.Fprintf(os.Stderr, "bm update: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	// Hand off everything else to the forked bm-cli. We swap in the bm
@@ -64,6 +70,7 @@ Usage:
 
 Native commands:
   web       Start the local web UI (foreground; opens default browser)
+  update    Check for or apply a bm self-update
   version   Print the build version
   help      Print this message
 

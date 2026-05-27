@@ -52,13 +52,13 @@ const (
 
 // Drive mirrors web/src/mock/data.ts:Drive.
 type Drive struct {
-	Mount       string     `json:"mount"`
-	Device      string     `json:"device"`
-	SizeBytes   int64      `json:"sizeBytes"`
-	UsedBytes   int64      `json:"usedBytes"`
-	State       DriveState `json:"state"`
-	HealingPct  *float64   `json:"healingPct,omitempty"`
-	IsBoot      bool       `json:"isBoot,omitempty"`
+	Mount      string     `json:"mount"`
+	Device     string     `json:"device"`
+	SizeBytes  int64      `json:"sizeBytes"`
+	UsedBytes  int64      `json:"usedBytes"`
+	State      DriveState `json:"state"`
+	HealingPct *float64   `json:"healingPct,omitempty"`
+	IsBoot     bool       `json:"isBoot,omitempty"`
 }
 
 // NIC mirrors the nic struct embedded in web/src/mock/data.ts:Node.
@@ -114,4 +114,15 @@ type HostRef struct {
 	ID       string `json:"id"`
 	Hostname string `json:"hostname"`
 	Port     int    `json:"port,omitempty"`
+}
+
+// ManagerSettings mirrors the minimal settings payload the UI reads today.
+type ManagerSettings struct {
+	RemoteAccess RemoteAccessSettings `json:"remoteAccess"`
+	VersionPin   *string              `json:"versionPin"`
+	Version      string               `json:"version"`
+}
+
+type RemoteAccessSettings struct {
+	Enabled bool `json:"enabled"`
 }

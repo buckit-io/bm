@@ -517,6 +517,27 @@ export interface SessionMe {
 export interface ManagerSettings {
   remoteAccess: { enabled: boolean };
   versionPin: string | null;
+  version: string;
+}
+
+export interface ManagerUpdateStatus {
+  currentVersion: string;
+  installedVersion: string;
+  latestVersion?: string;
+  updateAvailable: boolean;
+  downloadUrl?: string;
+  canApply: boolean;
+  reason?: string;
+  restartRequired: boolean;
+}
+
+export interface ManagerUpdateApplyResult {
+  applied: boolean;
+  currentVersion: string;
+  installedVersion: string;
+  latestVersion?: string;
+  restartRequired: boolean;
+  message: string;
 }
 
 // ---- error envelope ----
