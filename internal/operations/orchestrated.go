@@ -2,6 +2,7 @@ package operations
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -621,14 +622,13 @@ func (e *redeployExecutor) Execute(ctx context.Context, run *tasks.Run) error {
 	if err := validateEngineCompat(rc.cluster, tasks.OpKind("redeploy_software")); err != nil {
 		return err
 	}
-	var p rollingUpgradeParams
-	if len(run.Params) > 0 {
-		if err := json.Unmarshal(run.Params, &p); err != nil {
-			return fmt.Errorf("redeploy_software: invalid params: %w", err)
-		}
-	}
-	if p.Version == "" {
-		return errors.New("redeploy_software: version required")
+	// Redeploy always installs the cluster's currently-reported version
+	// so the target ends up matching its peers. The user-supplied
+	// params (if any) are ignored — the UI no longer surfaces a
+	// version picker for this op.
+	version, err := resolveRedeployVersion(rc.cluster.Version)
+	if err != nil {
+		return fmt.Errorf("redeploy_software: %w", err)
 	}
 	start := time.Now()
 	seedHostStatuses(run, rc.nodes)
@@ -652,7 +652,7 @@ func (e *redeployExecutor) Execute(ctx context.Context, run *tasks.Run) error {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
 			return fmt.Errorf("%s config bootstrap: %w", n.Hostname, err)
 		}
-		artifact, err := resolveArtifactForNode(ctx, e.deps, rc, n, p.Version, p.CustomURL, pkgMgr.Kind())
+		artifact, err := resolveArtifactForNode(ctx, e.deps, rc, n, version, "", pkgMgr.Kind())
 		if err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
 			return fmt.Errorf("%s version resolve: %w", n.Hostname, err)
@@ -728,18 +728,33 @@ func (e *redeployExecutor) Execute(ctx context.Context, run *tasks.Run) error {
 }
 
 // bootstrapBuckitConfigFromPeer makes sure target has the runtime
-// config files buckit.service reads (/etc/default/minio and
-// /etc/minio/config.env, plus the TLS material under /etc/minio/certs
-// when present). If the target already has /etc/default/minio it's a
-// no-op. Otherwise the function picks any peer node that does have the
-// file, pulls each artefact as base64-over-stdout, and writes it onto
-// the target with the same mode. Single-node clusters with no peer to
-// copy from are surfaced as a clear error so the operator knows to use
-// the new-cluster wizard for cold bootstraps.
+// config files buckit.service reads. The primary env-file path is
+// derived from systemd (`systemctl show buckit.service
+// EnvironmentFile(s)`) so a custom unit that points at a non-default
+// location is honoured. The secondary env file (MINIO_CONFIG_ENV_FILE)
+// and the certs directory (from --certs-dir inside MINIO_OPTS) are
+// parsed out of the primary env-file content on the source peer. If
+// the target already has the primary env file it's a no-op. Otherwise
+// the function picks a peer that has it, copies each artefact via
+// base64-over-stdout, and writes it onto the target. Single-node
+// clusters with no peer to copy from are surfaced as a clear error so
+// the operator knows to use the new-cluster wizard for cold
+// bootstraps.
 func bootstrapBuckitConfigFromPeer(ctx context.Context, deps Deps, rc *runCtx, target domain.Node) error {
-	primary := "/etc/default/minio"
-	secondary := "/etc/minio/config.env"
-	certsDir := "/etc/minio/certs"
+	// Derive env-file paths from systemd. Try target first (cheapest,
+	// no extra ssh hop) and fall back to peers when target has no
+	// buckit.service loaded yet — e.g. on a fresh node being added.
+	envFiles, _ := probeBuckitEnvironmentFiles(ctx, deps, rc, target)
+	if len(envFiles) == 0 {
+		envFiles = probeEnvironmentFilesFromAnyPeer(ctx, deps, rc, target)
+	}
+	if len(envFiles) == 0 {
+		return fmt.Errorf(
+			"%s and its peers have no buckit.service unit loaded — for a fresh single-node cluster use the new-cluster wizard, not redeploy",
+			target.Hostname,
+		)
+	}
+	primary := envFiles[0]
 
 	have, err := remoteFileExists(ctx, deps, rc, target, primary)
 	if err != nil {
@@ -755,20 +770,139 @@ func bootstrapBuckitConfigFromPeer(ctx context.Context, deps Deps, rc *runCtx, t
 			target.Hostname, primary,
 		)
 	}
+	// Read the primary env file body on the peer once and derive
+	// secondary + certs-dir from its content rather than hardcoding.
+	body, err := readRemoteFileText(ctx, deps, rc, peer, primary)
+	if err != nil {
+		return fmt.Errorf("read %s from %s: %w", primary, peer.Hostname, err)
+	}
 	if err := copyRemoteFile(ctx, deps, rc, peer, target, primary, "600"); err != nil {
 		return fmt.Errorf("copy %s from %s: %w", primary, peer.Hostname, err)
 	}
-	if secondaryOnPeer, _ := remoteFileExists(ctx, deps, rc, peer, secondary); secondaryOnPeer {
-		if err := copyRemoteFile(ctx, deps, rc, peer, target, secondary, "600"); err != nil {
-			return fmt.Errorf("copy %s from %s: %w", secondary, peer.Hostname, err)
+	if secondary := extractEnvVar(body, "MINIO_CONFIG_ENV_FILE"); secondary != "" {
+		if onPeer, _ := remoteFileExists(ctx, deps, rc, peer, secondary); onPeer {
+			if err := copyRemoteFile(ctx, deps, rc, peer, target, secondary, "600"); err != nil {
+				return fmt.Errorf("copy %s from %s: %w", secondary, peer.Hostname, err)
+			}
 		}
 	}
-	if certsOnPeer, _ := remoteFileExists(ctx, deps, rc, peer, certsDir); certsOnPeer {
-		if err := copyRemoteTarball(ctx, deps, rc, peer, target, "/etc/minio", "certs"); err != nil {
-			return fmt.Errorf("copy %s from %s: %w", certsDir, peer.Hostname, err)
+	if certsDir := extractCertsDirFromOpts(body); certsDir != "" {
+		if onPeer, _ := remoteFileExists(ctx, deps, rc, peer, certsDir); onPeer {
+			parent := pathDir(certsDir)
+			entry := pathBase(certsDir)
+			if err := copyRemoteTarball(ctx, deps, rc, peer, target, parent, entry); err != nil {
+				return fmt.Errorf("copy %s from %s: %w", certsDir, peer.Hostname, err)
+			}
 		}
 	}
 	return nil
+}
+
+// probeBuckitEnvironmentFiles asks systemd on n which EnvironmentFile
+// paths buckit.service is configured to load. Returns the paths in
+// unit-file order. An empty slice means buckit.service is not loaded
+// on n (systemctl show prints empty values + exits 0 in that case).
+func probeBuckitEnvironmentFiles(ctx context.Context, deps Deps, rc *runCtx, n domain.Node) ([]string, error) {
+	cmd := sudoBash(rc.sshCreds.User, "systemctl show buckit.service -p EnvironmentFiles -p EnvironmentFile")
+	out, err := runHostStep(ctx, deps, rc, n, cmd)
+	if err != nil {
+		return nil, err
+	}
+	return deploy.ParseUnitProps(out).EnvironmentFiles, nil
+}
+
+// probeEnvironmentFilesFromAnyPeer queries peers' systemd for the
+// buckit.service EnvironmentFile(s). Online peers are preferred; if
+// none answer, any other reachable peer is tried. Returns nil when no
+// peer has the unit loaded.
+func probeEnvironmentFilesFromAnyPeer(ctx context.Context, deps Deps, rc *runCtx, target domain.Node) []string {
+	for _, n := range rc.nodes {
+		if n.ID == target.ID || n.State != domain.NodeOnline {
+			continue
+		}
+		if files, err := probeBuckitEnvironmentFiles(ctx, deps, rc, n); err == nil && len(files) > 0 {
+			return files
+		}
+	}
+	for _, n := range rc.nodes {
+		if n.ID == target.ID || n.State == domain.NodeOnline {
+			continue
+		}
+		if files, err := probeBuckitEnvironmentFiles(ctx, deps, rc, n); err == nil && len(files) > 0 {
+			return files
+		}
+	}
+	return nil
+}
+
+// readRemoteFileText reads a small text file via base64-over-stdout to
+// avoid mangling and returns the decoded body as a string.
+func readRemoteFileText(ctx context.Context, deps Deps, rc *runCtx, n domain.Node, path string) (string, error) {
+	cmd := sudoBash(rc.sshCreds.User, "base64 -w0 "+shellQuote(path))
+	out, err := runHostStep(ctx, deps, rc, n, cmd)
+	if err != nil {
+		return "", err
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(out))
+	if err != nil {
+		return "", fmt.Errorf("decode %s on %s: %w", path, n.Hostname, err)
+	}
+	return string(decoded), nil
+}
+
+// extractEnvVar returns the (last) assignment of `name=` in body,
+// stripped of surrounding quotes. Tolerates an `export` prefix and
+// `KEY=value` / `KEY="value"` / `KEY='value'` forms. Inline `#`
+// comments after an unquoted value are stripped; quoted values keep
+// any `#` they contain. Later assignments win (shell semantics).
+func extractEnvVar(body, name string) string {
+	var found string
+	prefix := name + "="
+	for _, raw := range strings.Split(body, "\n") {
+		line := strings.TrimSpace(raw)
+		line = strings.TrimPrefix(line, "export ")
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		v := line[len(prefix):]
+		if len(v) > 0 && (v[0] == '"' || v[0] == '\'') {
+			quote := v[0]
+			if end := strings.IndexByte(v[1:], quote); end >= 0 {
+				v = v[1 : 1+end]
+			} else {
+				v = v[1:]
+			}
+		} else {
+			if i := strings.IndexByte(v, '#'); i >= 0 {
+				v = v[:i]
+			}
+			v = strings.TrimSpace(v)
+		}
+		found = v
+	}
+	return found
+}
+
+// extractCertsDirFromOpts pulls the --certs-dir argument out of
+// MINIO_OPTS in body, if any. Returns "" when MINIO_OPTS is absent or
+// doesn't carry the flag. Handles both `--certs-dir /path` and
+// `--certs-dir=/path` spellings.
+func extractCertsDirFromOpts(body string) string {
+	opts := extractEnvVar(body, "MINIO_OPTS")
+	if opts == "" {
+		return ""
+	}
+	fields := strings.Fields(opts)
+	for i, f := range fields {
+		switch {
+		case f == "--certs-dir" && i+1 < len(fields):
+			return fields[i+1]
+		case strings.HasPrefix(f, "--certs-dir="):
+			return strings.TrimPrefix(f, "--certs-dir=")
+		}
+	}
+	return ""
 }
 
 // pickConfigSourcePeer chooses a node to copy bootstrap config from.
@@ -865,6 +999,14 @@ func pathDir(p string) string {
 	return "."
 }
 
+func pathBase(p string) string {
+	p = strings.TrimRight(p, "/")
+	if i := strings.LastIndexByte(p, '/'); i >= 0 {
+		return p[i+1:]
+	}
+	return p
+}
+
 // ---- shared helpers for the orchestrated flavor ----
 
 func seedHostStatuses(run *tasks.Run, ns []domain.Node) {
@@ -930,6 +1072,24 @@ func replaceSingleQuotes(s string) string {
 		}
 	}
 	return out
+}
+
+// resolveRedeployVersion picks the GitHub release tag whose name
+// contains the cluster's currently-reported ServerInfo.Version. The
+// catalog is iterated newest-first so the most recent matching tag
+// wins. No normalization — the cluster version must appear verbatim
+// inside the tag.
+func resolveRedeployVersion(clusterVersion string) (string, error) {
+	needle := strings.TrimSpace(clusterVersion)
+	if needle == "" {
+		return "", errors.New("cluster has not reported a version yet; refresh the cluster and retry")
+	}
+	for _, v := range deploy.SupportedVersions() {
+		if strings.Contains(v.Tag, needle) {
+			return v.Tag, nil
+		}
+	}
+	return "", fmt.Errorf("no release in the catalog matches cluster version %q", clusterVersion)
 }
 
 // resolveArtifactForNode resolves the Artifact (URL + sha256 sidecar

@@ -6,7 +6,6 @@
 // fetch + controls, not a locked-until-done modal.
 
 import { OperationDef } from "./defs";
-import { VersionSelectStep } from "./catalog";
 
 function confirmStep(message: string, nextLabel: string, danger?: boolean) {
   return {
@@ -72,26 +71,29 @@ const SYSTEMCTL_START: OperationDef<Record<string, never>> = {
 
 // ── Software ─────────────────────────────────────────────────────
 
-const REDEPLOY_SOFTWARE: OperationDef<{ version: string }> = {
+const REDEPLOY_SOFTWARE: OperationDef<Record<string, never>> = {
   id: "node_redeploy_software",
   group: "software",
   label: "Redeploy software…",
-  description: "Reinstall Buckit on this node.",
+  description: "Reinstall Buckit on this node, matching the cluster's current version.",
   flavor: "orchestrated",
   opKind: "redeploy_software",
   buckitOnly: true,
-  initialParams: { version: "v1.0.0" },
+  initialParams: {},
   inputSteps: [
     {
-      id: "version",
-      render: ({ params, setParams }) => (
-        <VersionSelectStep
-          params={params}
-          setParams={setParams}
-          intro="bm scp's the package to this host, installs it, then restarts buckit.service."
-        />
+      id: "confirm",
+      render: ({ cluster }) => (
+        <p style={{ fontSize: "var(--fs-sm)" }}>
+          Reinstalls Buckit on this host at version{" "}
+          <span className="mono">{cluster.version || "(unknown)"}</span>{" "}
+          — matching what the cluster's other nodes are running. bm
+          downloads the package, installs it, and restarts
+          buckit.service. To change versions, use the cluster-wide
+          upgrade flows instead.
+        </p>
       ),
-      canAdvance: (p) => p.version.length > 0,
+      canAdvance: () => true,
       nextLabel: "Start redeploy",
     },
   ],

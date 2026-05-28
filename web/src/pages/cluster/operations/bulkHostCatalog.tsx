@@ -4,7 +4,6 @@
 // targetHostIds prop (set from the row checkboxes).
 
 import { OperationDef } from "./defs";
-import { VersionSelectStep } from "./catalog";
 
 function confirmStep(message: string, nextLabel: string, danger?: boolean) {
   return {
@@ -62,26 +61,29 @@ const SYSTEMCTL_RESTART: OperationDef<Record<string, never>> = {
   ],
 };
 
-const REDEPLOY_SOFTWARE: OperationDef<{ version: string }> = {
+const REDEPLOY_SOFTWARE: OperationDef<Record<string, never>> = {
   id: "bulk_redeploy_software",
   group: "ssh",
   label: "Redeploy software…",
-  description: "Reinstall Buckit on the selected hosts.",
+  description: "Reinstall Buckit on the selected hosts, matching the cluster's current version.",
   flavor: "orchestrated",
   opKind: "redeploy_software",
   buckitOnly: true,
-  initialParams: { version: "v1.0.0" },
+  initialParams: {},
   inputSteps: [
     {
-      id: "version",
-      render: ({ params, setParams }) => (
-        <VersionSelectStep
-          params={params}
-          setParams={setParams}
-          intro="bm will scp the package to each selected host, install it, then restart buckit.service with health-wait between hosts."
-        />
+      id: "confirm",
+      render: ({ cluster }) => (
+        <p style={{ fontSize: "var(--fs-sm)" }}>
+          Reinstalls Buckit on each selected host at version{" "}
+          <span className="mono">{cluster.version || "(unknown)"}</span>{" "}
+          — matching what the cluster is currently running. bm installs
+          one host at a time and waits for it to report healthy before
+          moving on. To change versions, use the cluster-wide upgrade
+          flows instead.
+        </p>
       ),
-      canAdvance: (p) => p.version.length > 0,
+      canAdvance: () => true,
       nextLabel: "Start redeploy",
     },
   ],
