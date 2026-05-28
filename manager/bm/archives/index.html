@@ -22,10 +22,15 @@
     th, td { text-align: left; padding: 14px 16px; border-bottom: 1px solid var(--border); }
     th { background: #eef2f7; font-weight: 600; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
     tbody tr:last-child td { border-bottom: 0; }
-    .release-date { color: var(--muted); white-space: nowrap; }
     .release-tag { font-weight: 600; }
+    .release-date { color: var(--muted); white-space: nowrap; }
     a { color: var(--link); text-decoration: none; }
     a:hover { text-decoration: underline; }
+    @media (max-width: 720px) {
+      .page { padding: 24px 16px 48px; }
+      .hero, .panel { padding: 20px; }
+      h1 { font-size: 28px; }
+    }
   </style>
 </head>
 <body>
@@ -45,11 +50,8 @@
             <tr><th>Date</th><th>Release</th><th>Downloads</th></tr>
           </thead>
           <tbody>
-            <tr>
-              <td class="release-date">2026-05-27</td>
-              <td class="release-tag"><a href="https://github.com/buckit-io/bm/releases/tag/RELEASE.2026-05-27T22-43-42Z">RELEASE.2026-05-27T22-43-42Z</a></td>
-              <td><a href="https://github.com/buckit-io/bm/releases/tag/RELEASE.2026-05-27T22-43-42Z">Assets →</a></td>
-            </tr>
+            <tr><td>2026-05-28</td><td><a href="https://github.com/buckit-io/bm/releases/tag/RELEASE.2026-05-28T00-58-02Z">RELEASE.2026-05-28T00-58-02Z</a></td><td><a href="https://github.com/buckit-io/bm/releases/tag/RELEASE.2026-05-28T00-58-02Z">Assets &rarr;</a></td></tr>
+<tr><td>2026-05-27</td><td><a href="https://github.com/buckit-io/bm/releases/tag/RELEASE.2026-05-27T22-43-42Z">RELEASE.2026-05-27T22-43-42Z</a></td><td><a href="https://github.com/buckit-io/bm/releases/tag/RELEASE.2026-05-27T22-43-42Z">Assets &rarr;</a></td></tr>
           </tbody>
         </table>
       </div>
