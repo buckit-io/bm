@@ -642,6 +642,14 @@ func (e *redeployExecutor) Execute(ctx context.Context, run *tasks.Run) error {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
 			return fmt.Errorf("%s detect package manager: %w", n.Hostname, err)
 		}
+		// Reject hosts that already carry config / data the redeploy
+		// would clobber. Runs before bootstrap so a dirty host fails
+		// without any state change on the target.
+		setHostState(run, i, n, tasks.HostRunning, "preflight: clean host")
+		if err := preflightHostIsClean(ctx, e.deps, rc, n); err != nil {
+			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			return fmt.Errorf("%s preflight: %w", n.Hostname, err)
+		}
 		// Bootstrap missing /etc/default/minio + /etc/minio/config.env
 		// (+ certs) from a peer *before* we touch anything
 		// irreversible. Failing here leaves the target untouched —
@@ -651,6 +659,42 @@ func (e *redeployExecutor) Execute(ctx context.Context, run *tasks.Run) error {
 		if err := bootstrapBuckitConfigFromPeer(ctx, e.deps, rc, n); err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
 			return fmt.Errorf("%s config bootstrap: %w", n.Hostname, err)
+		}
+		// Ensure the service user/group exist on the target BEFORE
+		// the package install. The buckit package's postinstall would
+		// create `buckit:buckit`, but a migrated cluster may run as
+		// `minio-user:minio-user` (wired via the migration drop-in we
+		// just copied) — the package wouldn't create that, so
+		// buckit.service would fail to start. Idempotent: if the
+		// account is already present (existing buckit host) this is a
+		// no-op.
+		setHostState(run, i, n, tasks.HostRunning, "ensuring service user/group")
+		user, group := resolveServiceIdentity(ctx, e.deps, rc, n)
+		if err := ensureBuckitUserAndGroup(ctx, e.deps, rc, n, user, group); err != nil {
+			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			return fmt.Errorf("%s ensure user/group: %w", n.Hostname, err)
+		}
+		// Create the MINIO_VOLUMES local paths (the per-drive
+		// /buckit subdirs) under the service user/group. Preflight
+		// already verified each path is absent or empty, so this is
+		// strictly additive — no risk of clobbering existing data.
+		setHostState(run, i, n, tasks.HostRunning, "preparing data dirs")
+		dataPaths, err := dataPathsFromPeer(ctx, e.deps, rc, n)
+		if err != nil {
+			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			return fmt.Errorf("%s data dirs discovery: %w", n.Hostname, err)
+		}
+		// Verify each data path's parent is a real mount point before
+		// mkdir runs. Without this, mkdir -p would silently create the
+		// dir in the rootfs whenever the intended drive isn't mounted,
+		// and buckit would happily write data to the system disk.
+		if err := preflightDataMountsAttached(ctx, e.deps, rc, n, dataPaths); err != nil {
+			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			return fmt.Errorf("%s: %w", n.Hostname, err)
+		}
+		if err := prepareBuckitDataDirs(ctx, e.deps, rc, n, dataPaths, user, group); err != nil {
+			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			return fmt.Errorf("%s prepare data dirs: %w", n.Hostname, err)
 		}
 		artifact, err := resolveArtifactForNode(ctx, e.deps, rc, n, version, "", pkgMgr.Kind())
 		if err != nil {
@@ -795,44 +839,122 @@ func bootstrapBuckitConfigFromPeer(ctx context.Context, deps Deps, rc *runCtx, t
 			}
 		}
 	}
+	// Persistent systemd drop-ins (e.g. /etc/systemd/system/buckit.service.d/*.conf)
+	// belong to the operator, not the package — the package install in
+	// the next step won't restore them. Copy each one individually so
+	// the target gets the same unit-level overrides (Restart=, resource
+	// limits, etc.) as the peer.
+	dropIns, err := probeBuckitDropInPaths(ctx, deps, rc, peer)
+	if err != nil {
+		return fmt.Errorf("probe drop-ins on %s: %w", peer.Hostname, err)
+	}
+	for _, p := range dropIns {
+		if err := copyRemoteFile(ctx, deps, rc, peer, target, p, "644"); err != nil {
+			return fmt.Errorf("copy %s from %s: %w", p, peer.Hostname, err)
+		}
+	}
 	return nil
 }
 
-// probeBuckitEnvironmentFiles asks systemd on n which EnvironmentFile
-// paths buckit.service is configured to load. Returns the paths in
-// unit-file order. An empty slice means buckit.service is not loaded
-// on n (systemctl show prints empty values + exits 0 in that case).
+// probeBuckitUnitProps asks systemd on n for buckit.service's User,
+// Group, and EnvironmentFile(s). Returns the parsed UnitProps. An
+// empty result (all fields blank) means buckit.service is not loaded
+// on n — systemctl show prints empty values and exits 0 for unknown
+// units, which the caller interprets as "no unit here".
+func probeBuckitUnitProps(ctx context.Context, deps Deps, rc *runCtx, n domain.Node) (deploy.UnitProps, error) {
+	cmd := sudoBash(rc.sshCreds.User, "systemctl show buckit.service -p User -p Group -p EnvironmentFiles -p EnvironmentFile")
+	out, err := runHostStep(ctx, deps, rc, n, cmd)
+	if err != nil {
+		return deploy.UnitProps{}, err
+	}
+	return deploy.ParseUnitProps(out), nil
+}
+
+// probeBuckitEnvironmentFiles is a thin convenience wrapper for
+// callers that only need the EnvironmentFile list.
 func probeBuckitEnvironmentFiles(ctx context.Context, deps Deps, rc *runCtx, n domain.Node) ([]string, error) {
-	cmd := sudoBash(rc.sshCreds.User, "systemctl show buckit.service -p EnvironmentFiles -p EnvironmentFile")
+	props, err := probeBuckitUnitProps(ctx, deps, rc, n)
+	if err != nil {
+		return nil, err
+	}
+	return props.EnvironmentFiles, nil
+}
+
+// probeUnitPropsFromAnyPeer queries peers' systemd for the
+// buckit.service UnitProps. Selection mirrors pickConfigSourcePeer's
+// ordering — same-pool online > same-pool any > cross-pool online >
+// cross-pool any — so the unit-file User/Group/EnvironmentFile values
+// we adopt come from a peer whose package + drop-ins are most likely
+// to match the target's. Returns zero-value props when no peer has
+// the unit loaded.
+func probeUnitPropsFromAnyPeer(ctx context.Context, deps Deps, rc *runCtx, target domain.Node) deploy.UnitProps {
+	for _, sameScope := range []bool{true, false} {
+		for _, onlineOnly := range []bool{true, false} {
+			for _, n := range rc.nodes {
+				if n.ID == target.ID {
+					continue
+				}
+				if sameScope && n.Pool != target.Pool {
+					continue
+				}
+				if !sameScope && n.Pool == target.Pool {
+					continue
+				}
+				if onlineOnly && n.State != domain.NodeOnline {
+					continue
+				}
+				if !onlineOnly && n.State == domain.NodeOnline {
+					continue
+				}
+				if props, err := probeBuckitUnitProps(ctx, deps, rc, n); err == nil && (len(props.EnvironmentFiles) > 0 || props.User != "" || props.Group != "") {
+					return props
+				}
+			}
+		}
+	}
+	return deploy.UnitProps{}
+}
+
+// probeEnvironmentFilesFromAnyPeer is a back-compat wrapper for
+// callers that only need the EnvironmentFile list.
+func probeEnvironmentFilesFromAnyPeer(ctx context.Context, deps Deps, rc *runCtx, target domain.Node) []string {
+	return probeUnitPropsFromAnyPeer(ctx, deps, rc, target).EnvironmentFiles
+}
+
+// probeBuckitDropInPaths asks systemd on n for buckit.service's
+// drop-in file paths. Filters to /etc/* — package-shipped paths under
+// /usr/* are restored by the package install step, and runtime paths
+// under /run/* are transient and shouldn't be persisted across hosts.
+// Returns nil when the unit has no operator-added drop-ins.
+func probeBuckitDropInPaths(ctx context.Context, deps Deps, rc *runCtx, n domain.Node) ([]string, error) {
+	cmd := sudoBash(rc.sshCreds.User, "systemctl show buckit.service -p DropInPaths")
 	out, err := runHostStep(ctx, deps, rc, n, cmd)
 	if err != nil {
 		return nil, err
 	}
-	return deploy.ParseUnitProps(out).EnvironmentFiles, nil
+	return parseDropInPaths(out), nil
 }
 
-// probeEnvironmentFilesFromAnyPeer queries peers' systemd for the
-// buckit.service EnvironmentFile(s). Online peers are preferred; if
-// none answer, any other reachable peer is tried. Returns nil when no
-// peer has the unit loaded.
-func probeEnvironmentFilesFromAnyPeer(ctx context.Context, deps Deps, rc *runCtx, target domain.Node) []string {
-	for _, n := range rc.nodes {
-		if n.ID == target.ID || n.State != domain.NodeOnline {
+// parseDropInPaths consumes `systemctl show -p DropInPaths` output and
+// returns the persistent operator-owned drop-in files (those under
+// /etc/). Exported separately from probeBuckitDropInPaths so the
+// filter logic can be unit-tested without an ssh transport.
+func parseDropInPaths(out string) []string {
+	var paths []string
+	for _, raw := range strings.Split(out, "\n") {
+		line := strings.TrimSpace(raw)
+		if !strings.HasPrefix(line, "DropInPaths=") {
 			continue
 		}
-		if files, err := probeBuckitEnvironmentFiles(ctx, deps, rc, n); err == nil && len(files) > 0 {
-			return files
+		v := strings.TrimSpace(strings.TrimPrefix(line, "DropInPaths="))
+		for _, p := range strings.Fields(v) {
+			if !strings.HasPrefix(p, "/etc/") {
+				continue
+			}
+			paths = append(paths, p)
 		}
 	}
-	for _, n := range rc.nodes {
-		if n.ID == target.ID || n.State == domain.NodeOnline {
-			continue
-		}
-		if files, err := probeBuckitEnvironmentFiles(ctx, deps, rc, n); err == nil && len(files) > 0 {
-			return files
-		}
-	}
-	return nil
+	return paths
 }
 
 // readRemoteFileText reads a small text file via base64-over-stdout to
@@ -906,21 +1028,57 @@ func extractCertsDirFromOpts(body string) string {
 }
 
 // pickConfigSourcePeer chooses a node to copy bootstrap config from.
-// Online peers come first (the admin API said so as of the last
-// refresh), with any other reachable peer that still has the marker
-// file as a fallback. Falling back matters when the cluster admin
-// state is stale or the only file-holders happen to be in a degraded
-// state but are still SSH-reachable — we'd rather copy stale config
-// than refuse to redeploy.
+// Selection priority (highest first):
+//
+//  1. same-pool, online, has marker
+//  2. same-pool, any state, has marker
+//  3. cross-pool, online, has marker
+//  4. cross-pool, any state, has marker
+//
+// Pool affinity wins over the admin API's online/offline signal
+// because per-host SSH overrides, unit-file drop-ins and mount layout
+// are more likely to match within a pool than across pools — a
+// cross-pool peer that happens to be online but uses different
+// credentials would fail mid-bootstrap. Falling back to offline same-
+// pool peers matters when the cluster admin state is stale or the
+// only file-holders happen to be in a degraded state but are still
+// SSH-reachable: we'd rather try stale config than refuse to redeploy.
 func pickConfigSourcePeer(ctx context.Context, deps Deps, rc *runCtx, target domain.Node, marker string) (domain.Node, bool) {
+	return pickConfigSourcePeerWith(rc.nodes, target, func(n domain.Node) bool {
+		ok, _ := remoteFileExists(ctx, deps, rc, n, marker)
+		return ok
+	})
+}
+
+// pickConfigSourcePeerWith is the dependency-injected core of
+// pickConfigSourcePeer: takes the candidate node list and an
+// existence-probe callback so unit tests can pin the priorities
+// without an SSH transport. See pickConfigSourcePeer for the full
+// priority order.
+func pickConfigSourcePeerWith(nodes []domain.Node, target domain.Node, peerHasMarker func(domain.Node) bool) (domain.Node, bool) {
+	if peer, ok := pickPeerInPoolScope(nodes, target, peerHasMarker, true); ok {
+		return peer, true
+	}
+	return pickPeerInPoolScope(nodes, target, peerHasMarker, false)
+}
+
+// pickPeerInPoolScope does one pass over nodes restricted to either
+// same-pool peers (samePool=true) or cross-pool peers (samePool=false).
+// Within scope, online wins over the offline fallback.
+func pickPeerInPoolScope(nodes []domain.Node, target domain.Node, peerHasMarker func(domain.Node) bool, samePool bool) (domain.Node, bool) {
 	var fallback domain.Node
 	var haveFallback bool
-	for _, n := range rc.nodes {
+	for _, n := range nodes {
 		if n.ID == target.ID {
 			continue
 		}
-		ok, _ := remoteFileExists(ctx, deps, rc, n, marker)
-		if !ok {
+		if samePool && n.Pool != target.Pool {
+			continue
+		}
+		if !samePool && n.Pool == target.Pool {
+			continue
+		}
+		if !peerHasMarker(n) {
 			continue
 		}
 		if n.State == domain.NodeOnline {

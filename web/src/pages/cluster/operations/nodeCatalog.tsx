@@ -74,8 +74,8 @@ const SYSTEMCTL_START: OperationDef<Record<string, never>> = {
 const REDEPLOY_SOFTWARE: OperationDef<Record<string, never>> = {
   id: "node_redeploy_software",
   group: "software",
-  label: "Redeploy software…",
-  description: "Reinstall Buckit on this node, matching the cluster's current version.",
+  label: "Redeploy replacement node…",
+  description: "Bootstrap a clean host into the cluster from a same-pool peer.",
   flavor: "orchestrated",
   opKind: "redeploy_software",
   buckitOnly: true,
@@ -84,14 +84,65 @@ const REDEPLOY_SOFTWARE: OperationDef<Record<string, never>> = {
     {
       id: "confirm",
       render: ({ cluster }) => (
-        <p style={{ fontSize: "var(--fs-sm)" }}>
-          Reinstalls Buckit on this host at version{" "}
-          <span className="mono">{cluster.version || "(unknown)"}</span>{" "}
-          — matching what the cluster's other nodes are running. bm
-          downloads the package, installs it, and restarts
-          buckit.service. To change versions, use the cluster-wide
-          upgrade flows instead.
-        </p>
+        <div className="vstack" style={{ gap: "var(--s-3)" }}>
+          <p style={{ fontSize: "var(--fs-sm)" }}>
+            Brings a clean replacement host online as a full member of
+            this cluster. bm mirrors the configuration of a same-pool
+            peer onto the target and installs Buckit{" "}
+            <span className="mono">
+              {cluster.version || "(unknown)"}
+            </span>
+            . To change cluster versions, use the cluster-wide upgrade
+            flows instead.
+          </p>
+          <p style={{ fontSize: "var(--fs-sm)" }}>
+            <b>What bm will do:</b>
+          </p>
+          <ol
+            style={{
+              fontSize: "var(--fs-sm)",
+              marginTop: 0,
+              paddingLeft: "var(--s-4)",
+            }}
+          >
+            <li>
+              Verify the host is clean — no leftover config files,
+              systemd drop-ins, or data on the data drives.
+            </li>
+            <li>
+              Copy <span className="mono">/etc/default/minio</span>,{" "}
+              <span className="mono">/etc/minio/config.env</span>,{" "}
+              TLS certs, and any{" "}
+              <span className="mono">
+                /etc/systemd/system/buckit.service.d/
+              </span>{" "}
+              drop-ins from a same-pool peer.
+            </li>
+            <li>
+              Create the Buckit service user/group and the
+              MINIO_VOLUMES data directories owned by that user.
+            </li>
+            <li>
+              Install the Buckit package, start{" "}
+              <span className="mono">buckit.service</span>, and wait
+              for the node to report healthy.
+            </li>
+          </ol>
+          <div className="banner banner--warning">
+            <span>⚠</span>
+            <span>
+              <b>Prerequisites.</b> The target must be a clean host:
+              no existing buckit / minio config files, no operator
+              drop-ins under{" "}
+              <span className="mono">/etc/systemd/system/</span>, and
+              every data drive mounted at its intended mount point
+              with the buckit subdir empty or absent. At least one
+              healthy peer in the same pool must already be in the
+              cluster — bm reads the unit identity, env files, certs,
+              and volume layout from it.
+            </span>
+          </div>
+        </div>
       ),
       canAdvance: () => true,
       nextLabel: "Start redeploy",
