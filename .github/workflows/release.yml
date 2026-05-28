@@ -83,14 +83,14 @@ jobs:
 
           COMMIT="$(git rev-parse --short HEAD)"
           DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          BIN="bm-${{ matrix.platform }}${{ matrix.ext }}.${{ github.ref_name }}"
+          BIN="bm-${{ matrix.platform }}.${{ github.ref_name }}${{ matrix.ext }}"
           LDFLAGS="-s -w -X 'github.com/buckit-io/bm/internal/version.Version=${VERSION}' -X 'github.com/buckit-io/bm/internal/version.Commit=${COMMIT}' -X 'github.com/buckit-io/bm/internal/version.Date=${DATE}'"
 
           go build -trimpath -ldflags "$LDFLAGS" -o "$BIN" ./cmd/bm
       - name: Generate checksum
         run: |
           set -euo pipefail
-          BIN="bm-${{ matrix.platform }}${{ matrix.ext }}.${{ github.ref_name }}"
+          BIN="bm-${{ matrix.platform }}.${{ github.ref_name }}${{ matrix.ext }}"
           sha256sum "$BIN" > "$BIN.sha256sum"
       - name: Sign with minisign
         env:
@@ -98,7 +98,7 @@ jobs:
           MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
         run: |
           set -euo pipefail
-          BIN="bm-${{ matrix.platform }}${{ matrix.ext }}.${{ github.ref_name }}"
+          BIN="bm-${{ matrix.platform }}.${{ github.ref_name }}${{ matrix.ext }}"
 
           go install aead.dev/minisign/cmd/minisign@v0.3.0
           echo "$MINISIGN_PRIVATE_KEY" | base64 -d > /tmp/minisign.key
@@ -108,9 +108,9 @@ jobs:
         with:
           name: build-${{ matrix.platform }}
           path: |
-            bm-${{ matrix.platform }}${{ matrix.ext }}.${{ github.ref_name }}
-            bm-${{ matrix.platform }}${{ matrix.ext }}.${{ github.ref_name }}.sha256sum
-            bm-${{ matrix.platform }}${{ matrix.ext }}.${{ github.ref_name }}.minisig
+            bm-${{ matrix.platform }}.${{ github.ref_name }}${{ matrix.ext }}
+            bm-${{ matrix.platform }}.${{ github.ref_name }}${{ matrix.ext }}.sha256sum
+            bm-${{ matrix.platform }}.${{ github.ref_name }}${{ matrix.ext }}.minisig
           if-no-files-found: error
 
   publish:
@@ -180,7 +180,7 @@ jobs:
           sha=$(awk '{print $1}' "artifacts/bm-darwin-arm64.${tag}.sha256sum")
           echo "${sha}  bm.${tag}" > "$base/darwin-arm64/bm.sha256sum"
 
-          sha=$(awk '{print $1}' "artifacts/bm-windows-amd64.exe.${tag}.sha256sum")
+          sha=$(awk '{print $1}' "artifacts/bm-windows-amd64.${tag}.exe.sha256sum")
           echo "${sha}  bm.exe.${tag}" > "$base/windows-amd64/bm.sha256sum"
       - name: Generate release index page
         run: |
@@ -194,7 +194,7 @@ jobs:
           <html>
           <head>
             <meta charset="utf-8">
-            <title>bm ${tag}</title>
+            <title>Buckit Manager ${tag}</title>
             <style>
               body { font-family: sans-serif; max-width: 860px; margin: 2em auto; padding: 0 1em; }
               h2 { margin-bottom: 0.25em; }
@@ -207,7 +207,7 @@ jobs:
             </style>
           </head>
           <body>
-            <h2>bm ${tag}</h2>
+            <h2>Buckit Manager ${tag}</h2>
             <p>Latest stable release — <a href="../archives/">all releases &rarr;</a></p>
             <table>
               <tr><th>Platform</th><th>Binary</th><th>Checksum</th><th>Signature</th><th>Pointer</th></tr>
@@ -216,35 +216,35 @@ jobs:
                 <td><a href="${base}/bm-linux-amd64.${tag}">bm-linux-amd64</a></td>
                 <td><a href="${base}/bm-linux-amd64.${tag}.sha256sum">.sha256sum</a></td>
                 <td><a href="${base}/bm-linux-amd64.${tag}.minisig">.minisig</a></td>
-                <td><a href="./linux-amd64/bm.sha256sum">latest pointer</a></td>
+                <td><a href="./linux-amd64/bm.sha256sum">version pointer</a></td>
               </tr>
               <tr>
                 <td>Linux arm64</td>
                 <td><a href="${base}/bm-linux-arm64.${tag}">bm-linux-arm64</a></td>
                 <td><a href="${base}/bm-linux-arm64.${tag}.sha256sum">.sha256sum</a></td>
                 <td><a href="${base}/bm-linux-arm64.${tag}.minisig">.minisig</a></td>
-                <td><a href="./linux-arm64/bm.sha256sum">latest pointer</a></td>
+                <td><a href="./linux-arm64/bm.sha256sum">version pointer</a></td>
               </tr>
               <tr>
                 <td>macOS x86_64</td>
                 <td><a href="${base}/bm-darwin-amd64.${tag}">bm-darwin-amd64</a></td>
                 <td><a href="${base}/bm-darwin-amd64.${tag}.sha256sum">.sha256sum</a></td>
                 <td><a href="${base}/bm-darwin-amd64.${tag}.minisig">.minisig</a></td>
-                <td><a href="./darwin-amd64/bm.sha256sum">latest pointer</a></td>
+                <td><a href="./darwin-amd64/bm.sha256sum">version pointer</a></td>
               </tr>
               <tr>
                 <td>macOS arm64</td>
                 <td><a href="${base}/bm-darwin-arm64.${tag}">bm-darwin-arm64</a></td>
                 <td><a href="${base}/bm-darwin-arm64.${tag}.sha256sum">.sha256sum</a></td>
                 <td><a href="${base}/bm-darwin-arm64.${tag}.minisig">.minisig</a></td>
-                <td><a href="./darwin-arm64/bm.sha256sum">latest pointer</a></td>
+                <td><a href="./darwin-arm64/bm.sha256sum">version pointer</a></td>
               </tr>
               <tr>
                 <td>Windows x86_64</td>
-                <td><a href="${base}/bm-windows-amd64.exe.${tag}">bm-windows-amd64.exe</a></td>
-                <td><a href="${base}/bm-windows-amd64.exe.${tag}.sha256sum">.sha256sum</a></td>
-                <td><a href="${base}/bm-windows-amd64.exe.${tag}.minisig">.minisig</a></td>
-                <td><a href="./windows-amd64/bm.sha256sum">latest pointer</a></td>
+                <td><a href="${base}/bm-windows-amd64.${tag}.exe">bm-windows-amd64.${tag}.exe</a></td>
+                <td><a href="${base}/bm-windows-amd64.${tag}.exe.sha256sum">.sha256sum</a></td>
+                <td><a href="${base}/bm-windows-amd64.${tag}.exe.minisig">.minisig</a></td>
+                <td><a href="./windows-amd64/bm.sha256sum">version pointer</a></td>
               </tr>
             </table>
           </body>
@@ -278,7 +278,7 @@ jobs:
           <html>
           <head>
             <meta charset="utf-8">
-            <title>bm Releases</title>
+            <title>Buckit Manager Releases</title>
             <style>
               body {{ font-family: sans-serif; max-width: 860px; margin: 2em auto; padding: 0 1em; }}
               table {{ border-collapse: collapse; width: 100%; }}
@@ -289,7 +289,7 @@ jobs:
             </style>
           </head>
           <body>
-            <h2>bm Releases</h2>
+            <h2>Buckit Manager Releases</h2>
             <p><a href="../release/">Latest release &rarr;</a></p>
             <table>
               <tr><th>Date</th><th>Release</th><th>Downloads</th></tr>
@@ -310,7 +310,7 @@ jobs:
           <html>
           <head>
             <meta charset="utf-8">
-            <title>bm Pages</title>
+            <title>Buckit Manager Pages</title>
             <style>
               body { font-family: sans-serif; max-width: 860px; margin: 2em auto; padding: 0 1em; }
               a { color: #0366d6; text-decoration: none; }
@@ -318,7 +318,7 @@ jobs:
             </style>
           </head>
           <body>
-            <h2>bm Pages</h2>
+            <h2>Buckit Manager Pages</h2>
             <ul>
               <li><a href="./manager/">Manager</a></li>
             </ul>
@@ -332,7 +332,7 @@ jobs:
           <html>
           <head>
             <meta charset="utf-8">
-            <title>bm Manager</title>
+            <title>Buckit Manager</title>
             <style>
               body { font-family: sans-serif; max-width: 860px; margin: 2em auto; padding: 0 1em; }
               a { color: #0366d6; text-decoration: none; }
@@ -340,7 +340,7 @@ jobs:
             </style>
           </head>
           <body>
-            <h2>bm Manager</h2>
+            <h2>Buckit Manager</h2>
             <ul>
               <li><a href="./bm/">Self-update artifacts</a></li>
             </ul>

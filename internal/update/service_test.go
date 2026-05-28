@@ -41,7 +41,7 @@ func TestCheckReportsRestartRequiredAfterApply(t *testing.T) {
 		switch req.URL.Path {
 		case "/" + platform() + "/bm.sha256sum":
 			return textResponse(hex.EncodeToString(sum[:]) + "  bm.RELEASE.2026-06-01T00-00-00Z"), nil
-		case "/RELEASE.2026-06-01T00-00-00Z/bm-" + platform() + binaryExt() + ".RELEASE.2026-06-01T00-00-00Z":
+		case "/RELEASE.2026-06-01T00-00-00Z/bm-" + platform() + ".RELEASE.2026-06-01T00-00-00Z" + binaryExt():
 			return bytesResponse(newBytes), nil
 		default:
 			return &http.Response{

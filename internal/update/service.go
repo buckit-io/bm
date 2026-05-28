@@ -287,7 +287,7 @@ func (s *Service) downloadURL(tag string) string {
 	if runtime.GOOS == "windows" {
 		ext = ".exe"
 	}
-	return base + "/" + url.PathEscape(tag) + "/bm-" + platform() + ext + "." + tag
+	return base + "/" + url.PathEscape(tag) + "/bm-" + platform() + "." + tag + ext
 }
 
 func (s *Service) minisignPublicKey() string {
