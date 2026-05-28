@@ -12,6 +12,26 @@ export function Settings() {
     refetch: refetchUpdateStatus,
   } = useManagerUpdateStatus(checkRequested);
   const applyUpdate = useApplyManagerUpdate();
+  const noUpdateMessage =
+    checkRequested &&
+    updateStatus &&
+    !updateStatus.updateAvailable &&
+    !updateStatus.restartRequired
+      ? "No updates available."
+      : null;
+
+  async function handleCheckForUpdates() {
+    setCheckRequested(true);
+    const result = await refetchUpdateStatus();
+    const status = result.data;
+    if (!status || !status.updateAvailable || !status.canApply) {
+      return;
+    }
+    if (!window.confirm(`Install ${status.latestVersion ?? "the latest update"} now? bm web will keep running until you restart it.`)) {
+      return;
+    }
+    await applyUpdate.mutateAsync();
+  }
 
   /*
   const [remoteOn, setRemoteOn] = useState(false);
@@ -127,11 +147,13 @@ export function Settings() {
                   Installed on disk: <span className="mono">{updateStatus.installedVersion}</span>
                 </div>
               )}
-            {updateStatus?.latestVersion && (
+            {updateStatus?.latestVersion &&
+              (updateStatus.updateAvailable || updateStatus.restartRequired) && (
               <div className="subtle settings__note">
                 Latest stable: <span className="mono">{updateStatus.latestVersion}</span>
               </div>
             )}
+            {noUpdateMessage && <div className="subtle settings__note">{noUpdateMessage}</div>}
             {updateStatus?.reason && (
               <div className="subtle settings__note">{updateStatus.reason}</div>
             )}
@@ -142,27 +164,19 @@ export function Settings() {
               <div className="subtle settings__note">{applyUpdate.data.message}</div>
             )}
           </div>
-          <div className="settings__actions">
-            <button
-              className="btn btn--sm"
-              onClick={() => {
-                setCheckRequested(true);
-                void refetchUpdateStatus();
-              }}
-              disabled={updateChecking || applyUpdate.isPending}
-            >
-              {updateChecking ? "Checking..." : "Check for updates"}
-            </button>
-            {updateStatus?.updateAvailable && updateStatus.canApply && (
+          {!applyUpdate.isPending && (
+            <div className="settings__actions">
               <button
                 className="btn btn--sm"
-                onClick={() => applyUpdate.mutate()}
-                disabled={applyUpdate.isPending || updateChecking}
+                onClick={() => {
+                  void handleCheckForUpdates();
+                }}
+                disabled={updateChecking}
               >
-                {applyUpdate.isPending ? "Installing..." : "Install update"}
+                {updateChecking ? "Checking..." : "Check for updates"}
               </button>
-            )}
-          </div>
+            </div>
+          )}
         </div>
         <div className="settings__row">
           <div>

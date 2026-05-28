@@ -138,6 +138,63 @@ func TestCheckDeniesApplyForDevBuild(t *testing.T) {
 	}
 }
 
+func TestCheckDoesNotInventInstalledReleaseForDirtyBuild(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "bm")
+	current := "RELEASE.2026-05-27T22-43-42Z-6-g1afed1d-dirty"
+	if err := os.WriteFile(target, []byte("binary "+current+" payload"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	sum := sha256.Sum256([]byte("release binary"))
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path == "/"+platform()+"/bm.sha256sum" {
+			return textResponse(hex.EncodeToString(sum[:]) + "  bm.RELEASE.2026-05-27T22-43-42Z"), nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusNotFound,
+			Status:     "404 Not Found",
+			Body:       io.NopCloser(strings.NewReader("not found")),
+			Header:     make(http.Header),
+		}, nil
+	})}
+
+	svc := &Service{
+		Client:                       client,
+		PointerBaseURL:               "https://updates.test",
+		ReleasesBaseURL:              "https://updates.test",
+		CurrentVersion:               current,
+		TargetPath:                   target,
+		DisableSignatureVerification: true,
+	}
+
+	status, err := svc.Check(context.Background())
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if status.InstalledVersion != current {
+		t.Fatalf("installed version = %q, want %q", status.InstalledVersion, current)
+	}
+	if status.RestartRequired {
+		t.Fatalf("expected no restart required")
+	}
+	if status.UpdateAvailable {
+		t.Fatalf("expected no update available for same-timestamp dirty build")
+	}
+}
+
+func TestCompareReleaseTagsTreatsSameTimestampDirtyBuildAsCurrent(t *testing.T) {
+	a := "RELEASE.2026-05-27T22-43-42Z"
+	b := "RELEASE.2026-05-27T22-43-42Z-6-g1afed1d-dirty"
+
+	if got := compareReleaseTags(a, b); got != 0 {
+		t.Fatalf("compareReleaseTags(%q, %q) = %d, want 0", a, b, got)
+	}
+	if got := compareReleaseTags(b, a); got != 0 {
+		t.Fatalf("compareReleaseTags(%q, %q) = %d, want 0", b, a, got)
+	}
+}
+
 func binaryExt() string {
 	if runtime.GOOS == "windows" {
 		return ".exe"

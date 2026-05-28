@@ -49,6 +49,11 @@
   gap: var(--s-2);
   flex-wrap: wrap;
   justify-content: flex-end;
+  flex: 0 0 auto;
+}
+
+.settings__actions .btn {
+  white-space: nowrap;
 }
 
 .settings__note {

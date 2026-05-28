@@ -1,6 +1,7 @@
 package update
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	_ "crypto/sha256"
@@ -31,6 +32,7 @@ const (
 )
 
 var releaseTagRegex = regexp.MustCompile(`RELEASE\.\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z(?:\.[A-Za-z0-9._-]+)?`)
+var binaryVersionRegex = regexp.MustCompile(`RELEASE\.\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z(?:\.[A-Za-z0-9._-]+|-\d+-g[0-9a-f]+(?:-dirty)?)?`)
 
 type Status struct {
 	CurrentVersion   string `json:"currentVersion"`
@@ -223,7 +225,10 @@ func (s *Service) installedVersion(targetPath, fallback string) string {
 	if err != nil {
 		return fallback
 	}
-	tag := releaseTagRegex.Find(data)
+	if fallback != "" && bytes.Contains(data, []byte(fallback)) {
+		return fallback
+	}
+	tag := binaryVersionRegex.Find(data)
 	if len(tag) == 0 {
 		return fallback
 	}
@@ -350,6 +355,14 @@ func compareReleaseTags(a, b string) int {
 	if pa.timestamp.After(pb.timestamp) {
 		return 1
 	}
+	if pa.gitBuild != pb.gitBuild {
+		if pa.gitBuild && pb.stable {
+			return 0
+		}
+		if pb.gitBuild && pa.stable {
+			return 0
+		}
+	}
 	switch {
 	case pa.stable && !pb.stable:
 		return 1
@@ -363,6 +376,7 @@ type parsedReleaseTag struct {
 	timestamp time.Time
 	suffix    string
 	stable    bool
+	gitBuild  bool
 }
 
 func parseReleaseTag(v string) (parsedReleaseTag, bool) {
@@ -370,14 +384,35 @@ func parseReleaseTag(v string) (parsedReleaseTag, bool) {
 		return parsedReleaseTag{}, false
 	}
 	rest := strings.TrimPrefix(v, "RELEASE.")
-	parts := strings.SplitN(rest, ".", 2)
-	ts, err := time.Parse("2006-01-02T15-04-05Z", parts[0])
+	z := strings.Index(rest, "Z")
+	if z < 0 {
+		return parsedReleaseTag{}, false
+	}
+	tsPart := rest[:z+1]
+	remainder := rest[z+1:]
+	suffix := ""
+	gitBuild := false
+	stable := true
+
+	if strings.HasPrefix(remainder, "-") && strings.Contains(remainder, "-g") {
+		candidate := remainder[1:]
+		if candidate != "" {
+			suffix = candidate
+			gitBuild = true
+			stable = false
+		}
+	}
+	if !gitBuild {
+		if strings.HasPrefix(remainder, ".") {
+			suffix = remainder[1:]
+			stable = false
+		}
+	}
+
+	ts, err := time.Parse("2006-01-02T15-04-05Z", tsPart)
 	if err != nil {
 		return parsedReleaseTag{}, false
 	}
-	out := parsedReleaseTag{timestamp: ts, stable: len(parts) == 1}
-	if len(parts) == 2 {
-		out.suffix = parts[1]
-	}
+	out := parsedReleaseTag{timestamp: ts, stable: stable, suffix: suffix, gitBuild: gitBuild}
 	return out, true
 }
