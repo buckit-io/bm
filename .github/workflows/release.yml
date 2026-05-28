@@ -264,7 +264,7 @@ jobs:
 
               <section class="panel">
                 <h2 class="section-title">Downloads</h2>
-                <p class="section-copy">Choose the binary for your OS and architecture. Each platform card includes the signed artifact, checksum, and signature.</p>
+                <p class="section-copy">Choose the binary for your OS and architecture. Each platform card includes the signed artifact and checksum.</p>
                 <div class="cards">
                   <article class="card">
                     <h3>Linux x86_64</h3>
@@ -273,7 +273,6 @@ jobs:
                       <a class="download" href="${base}/bm-linux-amd64.${tag}">Download binary</a>
                       <div class="aux-links">
                         <a href="${base}/bm-linux-amd64.${tag}.sha256sum">Checksum</a>
-                        <a href="${base}/bm-linux-amd64.${tag}.minisig">Signature</a>
                       </div>
                     </div>
                   </article>
@@ -284,7 +283,6 @@ jobs:
                       <a class="download" href="${base}/bm-linux-arm64.${tag}">Download binary</a>
                       <div class="aux-links">
                         <a href="${base}/bm-linux-arm64.${tag}.sha256sum">Checksum</a>
-                        <a href="${base}/bm-linux-arm64.${tag}.minisig">Signature</a>
                       </div>
                     </div>
                   </article>
@@ -295,7 +293,6 @@ jobs:
                       <a class="download" href="${base}/bm-darwin-amd64.${tag}">Download binary</a>
                       <div class="aux-links">
                         <a href="${base}/bm-darwin-amd64.${tag}.sha256sum">Checksum</a>
-                        <a href="${base}/bm-darwin-amd64.${tag}.minisig">Signature</a>
                       </div>
                     </div>
                   </article>
@@ -306,7 +303,6 @@ jobs:
                       <a class="download" href="${base}/bm-darwin-arm64.${tag}">Download binary</a>
                       <div class="aux-links">
                         <a href="${base}/bm-darwin-arm64.${tag}.sha256sum">Checksum</a>
-                        <a href="${base}/bm-darwin-arm64.${tag}.minisig">Signature</a>
                       </div>
                     </div>
                   </article>
@@ -317,7 +313,6 @@ jobs:
                       <a class="download" href="${base}/bm-windows-amd64.${tag}.exe">Download binary</a>
                       <div class="aux-links">
                         <a href="${base}/bm-windows-amd64.${tag}.exe.sha256sum">Checksum</a>
-                        <a href="${base}/bm-windows-amd64.${tag}.exe.minisig">Signature</a>
                       </div>
                     </div>
                   </article>
@@ -326,38 +321,33 @@ jobs:
                 <div class="table-wrap">
                   <table>
                     <thead>
-                      <tr><th>Platform</th><th>Artifact</th><th>Checksum</th><th>Signature</th></tr>
+                      <tr><th>Platform</th><th>Artifact</th><th>Checksum</th></tr>
                     </thead>
                     <tbody>
                       <tr>
                         <td><strong>Linux x86_64</strong>Standard Linux</td>
                         <td><a href="${base}/bm-linux-amd64.${tag}">bm-linux-amd64.${tag}</a></td>
                         <td><a href="${base}/bm-linux-amd64.${tag}.sha256sum">.sha256sum</a></td>
-                        <td><a href="${base}/bm-linux-amd64.${tag}.minisig">.minisig</a></td>
                       </tr>
                       <tr>
                         <td><strong>Linux arm64</strong>ARM64 Linux</td>
                         <td><a href="${base}/bm-linux-arm64.${tag}">bm-linux-arm64.${tag}</a></td>
                         <td><a href="${base}/bm-linux-arm64.${tag}.sha256sum">.sha256sum</a></td>
-                        <td><a href="${base}/bm-linux-arm64.${tag}.minisig">.minisig</a></td>
                       </tr>
                       <tr>
                         <td><strong>macOS x86_64</strong>Intel Macs</td>
                         <td><a href="${base}/bm-darwin-amd64.${tag}">bm-darwin-amd64.${tag}</a></td>
                         <td><a href="${base}/bm-darwin-amd64.${tag}.sha256sum">.sha256sum</a></td>
-                        <td><a href="${base}/bm-darwin-amd64.${tag}.minisig">.minisig</a></td>
                       </tr>
                       <tr>
                         <td><strong>macOS arm64</strong>Apple Silicon</td>
                         <td><a href="${base}/bm-darwin-arm64.${tag}">bm-darwin-arm64.${tag}</a></td>
                         <td><a href="${base}/bm-darwin-arm64.${tag}.sha256sum">.sha256sum</a></td>
-                        <td><a href="${base}/bm-darwin-arm64.${tag}.minisig">.minisig</a></td>
                       </tr>
                       <tr>
                         <td><strong>Windows x86_64</strong>64-bit Windows</td>
                         <td><a href="${base}/bm-windows-amd64.${tag}.exe">bm-windows-amd64.${tag}.exe</a></td>
                         <td><a href="${base}/bm-windows-amd64.${tag}.exe.sha256sum">.sha256sum</a></td>
-                        <td><a href="${base}/bm-windows-amd64.${tag}.exe.minisig">.minisig</a></td>
                       </tr>
                     </tbody>
                   </table>
