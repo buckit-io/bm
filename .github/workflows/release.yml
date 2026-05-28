@@ -246,7 +246,7 @@ jobs:
               <section class="hero">
                 <span class="eyebrow">Latest Stable Release</span>
                 <h1>Buckit Manager</h1>
-                <p class="subhead">Signed desktop binaries for operating Buckit clusters locally. Download the build for your platform, verify it with the checksum or minisign signature, or use the per-platform version pointer for scripted updates.</p>
+                <p class="subhead">Signed desktop binaries for operating Buckit clusters locally. Download the build for your platform and verify it with the checksum or minisign signature.</p>
                 <div class="hero-actions">
                   <a class="button" href="../archives/">Browse release archive</a>
                 </div>
@@ -268,7 +268,7 @@ jobs:
 
               <section class="panel">
                 <h2 class="section-title">Downloads</h2>
-                <p class="section-copy">Choose the binary for your OS and architecture. Each platform card includes the signed artifact, checksum, signature, and the stable version pointer used by self-update clients.</p>
+                <p class="section-copy">Choose the binary for your OS and architecture. Each platform card includes the signed artifact, checksum, and signature.</p>
                 <div class="cards">
                   <article class="card">
                     <h3>Linux x86_64</h3>
@@ -278,7 +278,6 @@ jobs:
                       <div class="aux-links">
                         <a href="${base}/bm-linux-amd64.${tag}.sha256sum">Checksum</a>
                         <a href="${base}/bm-linux-amd64.${tag}.minisig">Signature</a>
-                        <a href="./linux-amd64/bm.sha256sum">Version pointer</a>
                       </div>
                     </div>
                   </article>
@@ -290,7 +289,6 @@ jobs:
                       <div class="aux-links">
                         <a href="${base}/bm-linux-arm64.${tag}.sha256sum">Checksum</a>
                         <a href="${base}/bm-linux-arm64.${tag}.minisig">Signature</a>
-                        <a href="./linux-arm64/bm.sha256sum">Version pointer</a>
                       </div>
                     </div>
                   </article>
@@ -302,7 +300,6 @@ jobs:
                       <div class="aux-links">
                         <a href="${base}/bm-darwin-amd64.${tag}.sha256sum">Checksum</a>
                         <a href="${base}/bm-darwin-amd64.${tag}.minisig">Signature</a>
-                        <a href="./darwin-amd64/bm.sha256sum">Version pointer</a>
                       </div>
                     </div>
                   </article>
@@ -314,7 +311,6 @@ jobs:
                       <div class="aux-links">
                         <a href="${base}/bm-darwin-arm64.${tag}.sha256sum">Checksum</a>
                         <a href="${base}/bm-darwin-arm64.${tag}.minisig">Signature</a>
-                        <a href="./darwin-arm64/bm.sha256sum">Version pointer</a>
                       </div>
                     </div>
                   </article>
@@ -326,7 +322,6 @@ jobs:
                       <div class="aux-links">
                         <a href="${base}/bm-windows-amd64.${tag}.exe.sha256sum">Checksum</a>
                         <a href="${base}/bm-windows-amd64.${tag}.exe.minisig">Signature</a>
-                        <a href="./windows-amd64/bm.sha256sum">Version pointer</a>
                       </div>
                     </div>
                   </article>
@@ -335,7 +330,7 @@ jobs:
                 <div class="table-wrap">
                   <table>
                     <thead>
-                      <tr><th>Platform</th><th>Artifact</th><th>Checksum</th><th>Signature</th><th>Pointer</th></tr>
+                      <tr><th>Platform</th><th>Artifact</th><th>Checksum</th><th>Signature</th></tr>
                     </thead>
                     <tbody>
                       <tr>
@@ -343,35 +338,30 @@ jobs:
                         <td><a href="${base}/bm-linux-amd64.${tag}">bm-linux-amd64.${tag}</a></td>
                         <td><a href="${base}/bm-linux-amd64.${tag}.sha256sum">.sha256sum</a></td>
                         <td><a href="${base}/bm-linux-amd64.${tag}.minisig">.minisig</a></td>
-                        <td><a href="./linux-amd64/bm.sha256sum">Version pointer</a></td>
                       </tr>
                       <tr>
                         <td><strong>Linux arm64</strong>ARM64 Linux</td>
                         <td><a href="${base}/bm-linux-arm64.${tag}">bm-linux-arm64.${tag}</a></td>
                         <td><a href="${base}/bm-linux-arm64.${tag}.sha256sum">.sha256sum</a></td>
                         <td><a href="${base}/bm-linux-arm64.${tag}.minisig">.minisig</a></td>
-                        <td><a href="./linux-arm64/bm.sha256sum">Version pointer</a></td>
                       </tr>
                       <tr>
                         <td><strong>macOS x86_64</strong>Intel Macs</td>
                         <td><a href="${base}/bm-darwin-amd64.${tag}">bm-darwin-amd64.${tag}</a></td>
                         <td><a href="${base}/bm-darwin-amd64.${tag}.sha256sum">.sha256sum</a></td>
                         <td><a href="${base}/bm-darwin-amd64.${tag}.minisig">.minisig</a></td>
-                        <td><a href="./darwin-amd64/bm.sha256sum">Version pointer</a></td>
                       </tr>
                       <tr>
                         <td><strong>macOS arm64</strong>Apple Silicon</td>
                         <td><a href="${base}/bm-darwin-arm64.${tag}">bm-darwin-arm64.${tag}</a></td>
                         <td><a href="${base}/bm-darwin-arm64.${tag}.sha256sum">.sha256sum</a></td>
                         <td><a href="${base}/bm-darwin-arm64.${tag}.minisig">.minisig</a></td>
-                        <td><a href="./darwin-arm64/bm.sha256sum">Version pointer</a></td>
                       </tr>
                       <tr>
                         <td><strong>Windows x86_64</strong>64-bit Windows</td>
                         <td><a href="${base}/bm-windows-amd64.${tag}.exe">bm-windows-amd64.${tag}.exe</a></td>
                         <td><a href="${base}/bm-windows-amd64.${tag}.exe.sha256sum">.sha256sum</a></td>
                         <td><a href="${base}/bm-windows-amd64.${tag}.exe.minisig">.minisig</a></td>
-                        <td><a href="./windows-amd64/bm.sha256sum">Version pointer</a></td>
                       </tr>
                     </tbody>
                   </table>
