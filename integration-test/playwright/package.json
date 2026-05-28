@@ -1,0 +1,13 @@
+{
+  "name": "bm-integration-playwright",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.50.1",
+    "@types/node": "20.16.11"
+  }
+}

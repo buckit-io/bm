@@ -520,7 +520,7 @@ export function ClusterDetailLayout() {
         {/* title row: name+meta on the left, action buttons on the right */}
         <div className="cdetail__header-row">
           <div>
-            <h1 className="cdetail__name">
+            <h1 className="cdetail__name" data-testid="cluster-title">
               {cluster.name}
               {clusterHealthPill(cluster)}
               <div className="cdetail__gear-wrap" ref={settingsMenuRef}>
@@ -549,7 +549,9 @@ export function ClusterDetailLayout() {
               </div>
             </h1>
             <p className="muted cdetail__meta">
-              {cluster.version} · {cluster.nodeCount} nodes · {cluster.poolCount} pool ·
+              <span data-testid="cluster-meta">
+                {cluster.version} · {cluster.nodeCount} nodes · {cluster.poolCount} pool ·
+              </span>
               EC:{cluster.parity}
               {cluster.migratedFrom &&
                 ` · migrated from MinIO ${cluster.migratedFrom.version}`}

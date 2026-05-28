@@ -4,6 +4,9 @@
 /web/node_modules/
 /web/tsconfig.tsbuildinfo
 /.bin/
+/integration-test/.generated/
+/integration-test/playwright/node_modules/
+/integration-test/playwright/test-results/
 *.test
 *.out
 .DS_Store

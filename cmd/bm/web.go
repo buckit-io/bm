@@ -36,6 +36,7 @@ const defaultAddr = "127.0.0.1:9443"
 func runWeb(rawArgs []string) error {
 	fs := flag.NewFlagSet("bm web", flag.ContinueOnError)
 	addr := fs.String("addr", defaultAddr, "listen address (loopback only in M1)")
+	allowNonLoopback := fs.Bool("allow-non-loopback", false, "allow non-loopback listen addresses for local test/lab use")
 	noBrowser := fs.Bool("no-browser", false, "do not open the default browser on startup")
 	dataDir := fs.String("data-dir", "", "override config dir (default: ~/.config/bm)")
 	webDist := fs.String("web-dist", defaultWebDist(), "override embedded UI assets with a built web/dist directory")
@@ -43,8 +44,13 @@ func runWeb(rawArgs []string) error {
 		return err
 	}
 
-	if err := api.AssertLoopback(*addr); err != nil {
-		return err
+	if !*allowNonLoopback {
+		if err := api.AssertLoopback(*addr); err != nil {
+			return err
+		}
+	}
+	if *allowNonLoopback && *addr == defaultAddr {
+		fmt.Fprintf(os.Stderr, "bm: --allow-non-loopback set but %s is already loopback-only\n", *addr)
 	}
 
 	paths, err := config.Resolve(*dataDir)

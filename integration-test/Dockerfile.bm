@@ -1,0 +1,24 @@
+ARG TARGETARCH
+
+FROM golang:1.25-bookworm AS build
+ARG TARGETARCH
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN arch="${TARGETARCH:-$(go env GOARCH)}" && \
+    CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -o /out/bm ./cmd/bm
+
+FROM debian:bookworm-slim
+
+WORKDIR /app
+
+COPY --from=build /out/bm /app/bm
+COPY web/dist /app/web/dist
+
+EXPOSE 9443
+
+ENTRYPOINT ["/app/bm", "web", "--addr", "0.0.0.0:9443", "--allow-non-loopback", "--no-browser", "--data-dir", "/var/lib/bm", "--web-dist", "/app/web/dist"]

@@ -1,0 +1,21 @@
+name: bm-e2e
+
+services:
+  bm:
+    build:
+      context: ..
+      dockerfile: integration-test/Dockerfile.bm
+    container_name: bm-e2e-bm
+    ports:
+      - "127.0.0.1::9443"
+    volumes:
+      - bm-data:/var/lib/bm
+    networks:
+      - e2e
+
+volumes:
+  bm-data:
+
+networks:
+  e2e:
+    name: bm-e2e-net

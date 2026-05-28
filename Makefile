@@ -14,7 +14,7 @@ GO           ?= go
 GOOS         ?= $(shell $(GO) env GOOS)
 GOARCH       ?= $(shell $(GO) env GOARCH)
 
-.PHONY: all build web build-all test lint tidy clean run help
+.PHONY: all build web build-all test lint tidy clean run help e2e-import e2e-up e2e-down
 
 all: build
 
@@ -53,9 +53,21 @@ tidy:
 run: build
 	./$(BIN) web
 
+## e2e-import: run the Buckit import end-to-end test
+e2e-import:
+	bash ./integration-test/scripts/run-import.sh
+
+## e2e-up: build and start the e2e lab without running browser tests
+e2e-up: web
+	bash ./integration-test/scripts/up-import.sh
+
+## e2e-down: tear down the e2e lab
+e2e-down:
+	bash ./integration-test/scripts/down.sh
+
 ## clean: remove build artifacts
 clean:
-	rm -rf $(BIN) dist web/dist web/node_modules
+	rm -rf $(BIN) dist web/dist web/node_modules integration-test/playwright/node_modules integration-test/.generated
 
 ## help: print this message
 help:

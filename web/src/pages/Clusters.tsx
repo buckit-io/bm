@@ -92,7 +92,7 @@ export function Clusters() {
   return (
     <section className="clusters">
       <header className="clusters__header">
-        <h1>Clusters</h1>
+        <h1 data-testid="clusters-page-title">Clusters</h1>
         <div className="hstack">
           <span
             className="clusters__stale"
@@ -121,7 +121,7 @@ export function Clusters() {
           <Link to="/clusters/new" className="btn btn--primary">
             + Deploy new cluster
           </Link>
-          <Link to="/clusters/import" className="btn btn--primary">
+          <Link to="/clusters/import" className="btn btn--primary" data-testid="clusters-import-link">
             + Import cluster
           </Link>
         </div>

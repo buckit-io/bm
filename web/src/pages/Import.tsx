@@ -115,14 +115,14 @@ export function Import() {
   return (
     <div className="import">
       <header className="import__header">
-        <h1>Import existing Buckit or MinIO cluster</h1>
+        <h1 data-testid="import-page-title">Import existing Buckit or MinIO cluster</h1>
         <p className="muted">
           Provide the cluster's S3 endpoint and root credentials. We'll
           discover every node, drive, and pool.
         </p>
       </header>
 
-      <form className="card import__card" onSubmit={onSubmit}>
+      <form className="card import__card" onSubmit={onSubmit} data-testid="import-form">
         <div className="field">
           <label className="field-label" htmlFor="url">
             Cluster URL
@@ -130,6 +130,7 @@ export function Import() {
           <input
             id="url"
             className="input"
+            data-testid="import-url"
             placeholder="https://node1.example.com:9000"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
@@ -150,6 +151,7 @@ export function Import() {
           <input
             id="username"
             className="input"
+            data-testid="import-username"
             placeholder="MINIO_ROOT_USER"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
@@ -169,6 +171,7 @@ export function Import() {
             id="password"
             type="password"
             className="input"
+            data-testid="import-password"
             placeholder="MINIO_ROOT_PASSWORD"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
@@ -185,10 +188,11 @@ export function Import() {
             type="button"
             className="btn"
             onClick={() => navigate(-1)}
+            data-testid="import-cancel"
           >
             Cancel
           </button>
-          <button type="submit" className="btn btn--primary">
+          <button type="submit" className="btn btn--primary" data-testid="import-submit">
             Add cluster
           </button>
         </div>
@@ -239,6 +243,7 @@ function ImportModal({ phase, onChangeName, onSave, onClose }: ImportModalProps)
     <div className="modal-backdrop" onClick={onBackdrop}>
       <div
         className="card modal modal--lg import__modal"
+        data-testid="import-modal"
         onClick={(e) => e.stopPropagation()}
       >
         <header className="import__modal-header">
@@ -287,11 +292,11 @@ function ImportModal({ phase, onChangeName, onSave, onClose }: ImportModalProps)
 
         {phase.kind === "error" && (
           <div className="vstack" style={{ gap: "var(--s-3)" }}>
-            <div className="import__error" role="alert">
+            <div className="import__error" role="alert" data-testid="import-error">
               {phase.error.message}
             </div>
             <div className="hstack" style={{ justifyContent: "flex-end" }}>
-              <button className="btn btn--primary" onClick={onClose}>
+              <button className="btn btn--primary" onClick={onClose} data-testid="import-error-close">
                 Close
               </button>
             </div>
@@ -340,6 +345,7 @@ function ImportSummary({
         <input
           id="cluster-name"
           className="input"
+          data-testid="import-cluster-name"
           value={chosenName}
           onChange={(e) => onChangeName(e.target.value)}
           placeholder={candidate.suggestedName}
@@ -352,7 +358,7 @@ function ImportSummary({
       </div>
 
       <div className="hstack" style={{ justifyContent: "flex-end" }}>
-        <button type="button" className="btn" onClick={onClose}>
+        <button type="button" className="btn" onClick={onClose} data-testid="import-ready-cancel">
           Cancel
         </button>
         <button
@@ -360,6 +366,7 @@ function ImportSummary({
           className="btn btn--primary"
           onClick={onSave}
           disabled={!chosenName.trim()}
+          data-testid="import-save"
         >
           Save
         </button>

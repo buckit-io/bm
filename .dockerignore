@@ -1,0 +1,9 @@
+.git
+.github
+.bin
+.gocache
+bm
+dist
+integration-test/.generated
+integration-test/playwright/node_modules
+web/node_modules
