@@ -153,6 +153,7 @@ func postDiscover() http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 			return
 		}
+		logAction(r, "import.discover", "url", req.URL, "username", req.Username, "insecure", req.Insecure)
 
 		flusher, ok := w.(http.Flusher)
 		if !ok {
@@ -190,11 +191,13 @@ func postDiscover() http.HandlerFunc {
 		if err != nil {
 			var ie *discovery.ImportError
 			if errors.As(err, &ie) {
+				logAction(r, "import.discover", "result", "failed", "kind", ie.Inner.Kind, "message", ie.Inner.Message)
 				body, _ := json.Marshal(map[string]any{"ok": false, "error": ie.Inner})
 				writeSSE(w, eventID, "result", string(body))
 				flusher.Flush()
 				return
 			}
+			logAction(r, "import.discover", "result", "failed", "message", err.Error())
 			body, _ := json.Marshal(map[string]any{
 				"ok":    false,
 				"error": domain.ImportError{Kind: domain.ImportErrUnreachable, Message: err.Error()},
@@ -204,6 +207,7 @@ func postDiscover() http.HandlerFunc {
 			return
 		}
 
+		logAction(r, "import.discover", "result", "ok", "engine", candidate.Engine, "nodes", len(candidate.Nodes), "pools", candidate.PoolCount)
 		body, _ := json.Marshal(map[string]any{"ok": true, "candidate": candidate})
 		writeSSE(w, eventID, "result", string(body))
 		flusher.Flush()
@@ -302,6 +306,7 @@ func postCommit(opts Options) http.HandlerFunc {
 		}
 
 		syncAlias(r.Context(), opts)
+		logAction(r, "import.commit", "result", "ok", "cluster_id", clusterID, "name", chosen, "engine", req.Candidate.Engine, "nodes", len(nodeList))
 
 		writeJSON(w, http.StatusOK, map[string]string{"clusterId": clusterID})
 	}

@@ -6,8 +6,9 @@
 //   - Unformatted drives are excluded — they have no mountpoint to
 //     intersect on. The operator must prepare them first (case C).
 //   - System mounts (/, /boot, /home, /var, /etc, /tmp, /usr) are
-//     excluded so an admin who happens to put a data drive under one of
-//     those by accident gets caught.
+//     excluded by default so accidental selections are caught. When the
+//     operator sets a specific data volume root, mounts under that root
+//     are allowed even if they live under a system prefix.
 //
 // Result shape:
 //   common         — sorted list of mountpoints present on EVERY host
@@ -35,10 +36,21 @@ const SYSTEM_MOUNT_PREFIXES = [
 ];
 
 export function isEligibleMount(d: DiscoveredDrive): boolean {
+  return isEligibleMountUnderRoot(d, "");
+}
+
+export function isEligibleMountUnderRoot(
+  d: DiscoveredDrive,
+  preferredRoot: string,
+): boolean {
   if (d.isBoot) return false;
   if (!d.mount) return false;
   // A drive with a mountpoint is clearly formatted even if fsType wasn't
   // detected (e.g. loop devices where lsblk doesn't report fstype).
+  if (hasSpecificRoot(preferredRoot)) {
+    return mountUnderRoot(d.mount, preferredRoot);
+  }
+  if (d.isSystem) return false;
   if (SYSTEM_MOUNT_PREFIXES.includes(d.mount)) return false;
   return true;
 }
@@ -51,6 +63,7 @@ export interface IntersectionResult {
 
 export function intersectMounts(
   perHost: Record<string, DiscoveredDrive[]>,
+  preferredRoot = "",
 ): IntersectionResult {
   const hostIds = Object.keys(perHost);
   if (hostIds.length === 0) {
@@ -61,7 +74,7 @@ export function intersectMounts(
   const eligibleByHost: Record<string, number> = {};
   for (const hid of hostIds) {
     const mounts = (perHost[hid] ?? [])
-      .filter(isEligibleMount)
+      .filter((d) => isEligibleMountUnderRoot(d, preferredRoot))
       .map((d) => d.mount);
     eligibleSets[hid] = new Set(mounts);
     eligibleByHost[hid] = mounts.length;
@@ -87,6 +100,23 @@ export function intersectMounts(
     extrasByHost,
     eligibleByHost,
   };
+}
+
+function mountUnderRoot(mount: string, root: string): boolean {
+  const trimmedMount = trimSlash(mount);
+  const trimmedRoot = trimSlash(root);
+  return trimmedMount === trimmedRoot || trimmedMount.startsWith(trimmedRoot + "/");
+}
+
+function hasSpecificRoot(root: string): boolean {
+  const trimmedRoot = trimSlash(root);
+  return trimmedRoot !== "" && trimmedRoot !== "/";
+}
+
+function trimSlash(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed === "/" || trimmed === "") return trimmed;
+  return trimmed.replace(/\/+$/, "");
 }
 
 // Natural sort so /data/disk2 < /data/disk10 (avoids the default

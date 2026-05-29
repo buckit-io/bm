@@ -6,15 +6,16 @@ LOG_DIR="$ROOT_DIR/integration-test/.generated"
 
 cleanup() {
   mkdir -p "$LOG_DIR"
-  bash "$ROOT_DIR/integration-test/scripts/compose.sh" logs --no-color >"$LOG_DIR/compose.import.log" 2>&1 || true
-  bash "$ROOT_DIR/integration-test/scripts/down.sh"
+  BM_E2E_SCENARIO=import \
+    bash "$ROOT_DIR/integration-test/scripts/compose.sh" logs --no-color >"$LOG_DIR/compose.import.log" 2>&1 || true
+  BM_E2E_SCENARIO=import bash "$ROOT_DIR/integration-test/scripts/down.sh"
 }
 
 trap cleanup EXIT
 
 resolve_bm_base_url() {
   local mapping host_port
-  mapping="$(bash "$ROOT_DIR/integration-test/scripts/compose.sh" port bm 9443 | tail -n1)"
+  mapping="$(BM_E2E_SCENARIO=import bash "$ROOT_DIR/integration-test/scripts/compose.sh" port bm 9443 | tail -n1)"
   if [[ -z "$mapping" ]]; then
     echo "Could not resolve published bm port" >&2
     return 1
@@ -40,7 +41,7 @@ wait_for_container_health() {
   local service="$1"
   local attempts="${2:-60}"
   local container_id health
-  container_id="$(bash "$ROOT_DIR/integration-test/scripts/compose.sh" ps -q "$service" | tail -n1)"
+  container_id="$(BM_E2E_SCENARIO=import bash "$ROOT_DIR/integration-test/scripts/compose.sh" ps -q "$service" | tail -n1)"
   if [[ -z "$container_id" ]]; then
     echo "Could not resolve container id for service $service" >&2
     return 1

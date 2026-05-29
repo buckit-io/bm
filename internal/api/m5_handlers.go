@@ -24,12 +24,14 @@ const (
 // ---- versions endpoint ----
 
 func listVersions() http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
 		versions := deploy.SupportedVersions()
 		if versions == nil {
+			logAction(r, "versions.fetch", "result", "failed", "reason", "github_unreachable")
 			writeError(w, http.StatusBadGateway, "github_unreachable", "could not fetch releases from GitHub")
 			return
 		}
+		logAction(r, "versions.fetch", "result", "ok", "count", len(versions))
 		writeJSON(w, http.StatusOK, versions)
 	}
 }
@@ -49,25 +51,30 @@ func validateArtifact() http.HandlerFunc {
 		}
 		u := strings.TrimSpace(req.URL)
 		if u == "" {
+			logAction(r, "artifact.validate", "result", "failed", "reason", "empty_url")
 			writeJSON(w, http.StatusOK, domain.CustomUrlCheck{State: domain.CustomUrlError, Message: "URL is required."})
 			return
 		}
+		logAction(r, "artifact.validate", "url", u)
 		ctx, cancel := context.WithTimeout(r.Context(), artifactValidateTimeout)
 		defer cancel()
 
 		client := &http.Client{Timeout: artifactValidateTimeout}
 		req2, err := http.NewRequestWithContext(ctx, http.MethodHead, u, nil)
 		if err != nil {
+			logAction(r, "artifact.validate", "result", "failed", "url", u, "reason", err.Error())
 			writeJSON(w, http.StatusOK, domain.CustomUrlCheck{State: domain.CustomUrlError, Message: err.Error()})
 			return
 		}
 		resp, err := client.Do(req2)
 		if err != nil {
+			logAction(r, "artifact.validate", "result", "failed", "url", u, "reason", err.Error())
 			writeJSON(w, http.StatusOK, domain.CustomUrlCheck{State: domain.CustomUrlError, Message: err.Error()})
 			return
 		}
 		_ = resp.Body.Close()
 		if resp.StatusCode >= 400 {
+			logAction(r, "artifact.validate", "result", "failed", "url", u, "status", resp.StatusCode)
 			writeJSON(w, http.StatusOK, domain.CustomUrlCheck{State: domain.CustomUrlError, Message: fmt.Sprintf("HTTP %d", resp.StatusCode)})
 			return
 		}
@@ -79,9 +86,11 @@ func validateArtifact() http.HandlerFunc {
 		// Try a sibling .sha256.
 		if sha, ok := fetchSidecar(ctx, client, u+".sha256"); ok {
 			check.SHA256 = sha
+			logAction(r, "artifact.validate", "result", "valid", "url", u, "size_bytes", resp.ContentLength, "sha256", sha)
 		} else {
 			check.State = domain.CustomUrlWarn
 			check.Message = "Reachable, but no sha256 sidecar found at " + u + ".sha256"
+			logAction(r, "artifact.validate", "result", "warn", "url", u, "size_bytes", resp.ContentLength, "reason", check.Message)
 		}
 		writeJSON(w, http.StatusOK, check)
 	}
@@ -132,6 +141,7 @@ func newClusterDiscover(pool *bmssh.Pool) http.HandlerFunc {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 		defer cancel()
+		logAction(r, "new_cluster.discover", "hosts", len(req.Hosts), "ssh_user", req.SSH.User, "auth", req.SSH.AuthMethod)
 
 		out := make(map[string]domain.WizardDiscoveryResult, len(req.Hosts))
 		var mu sync.Mutex
@@ -167,6 +177,17 @@ func newClusterDiscover(pool *bmssh.Pool) http.HandlerFunc {
 			}(h)
 		}
 		wg.Wait()
+		okCount := 0
+		failCount := 0
+		for hostID, result := range out {
+			if result.State == domain.WizardDiscoveryDone {
+				okCount++
+				continue
+			}
+			failCount++
+			logAction(r, "new_cluster.discover.host", "host_id", hostID, "state", result.State, "error", result.Error)
+		}
+		logAction(r, "new_cluster.discover", "result", "complete", "ok_hosts", okCount, "failed_hosts", failCount)
 		writeJSON(w, http.StatusOK, out)
 	}
 }
@@ -185,6 +206,8 @@ func newClusterPreflight(pool *bmssh.Pool) http.HandlerFunc {
 
 		conn := &poolHostConn{pool: pool, ssh: draft.SSH, httpClient: &http.Client{Timeout: 10 * time.Second}}
 		results := preflight.RunAll(ctx, conn, draft)
+		logAction(r, "new_cluster.preflight", "cluster", draft.Name, "hosts", len(draft.Hosts), "mounts", len(draft.Topology.SelectedMounts))
+		logPreflightResults(r, "new_cluster.preflight", results)
 		writeJSON(w, http.StatusOK, results)
 	}
 }

@@ -100,6 +100,24 @@ func TestRenderConfigEnvOmitsRootCredsAndPointsAtSecondary(t *testing.T) {
 	if !strings.Contains(got, `MINIO_CONFIG_ENV_FILE="/etc/minio/config.env"`) {
 		t.Fatalf("renderConfigEnv() missing MINIO_CONFIG_ENV_FILE pointer:\n%s", got)
 	}
+	if strings.Contains(got, "MINIO_SERVER_URL=") {
+		t.Fatalf("renderConfigEnv() must not synthesize MINIO_SERVER_URL when serverUrl is unset:\n%s", got)
+	}
+}
+
+func TestRenderConfigEnvIncludesExplicitServerURL(t *testing.T) {
+	params := DeployParams{
+		Credentials: domain.Credentials{RootUser: "root", RootPassword: "secret"},
+		API:         domain.APIPorts{Port: 9000, ConsolePort: 9001},
+		Region:      "us-east-1",
+		ServerURL:   "https://lb.example.com:9000",
+		Hosts:       []domain.HostRow{{Hostname: "node1"}},
+		Topology:    domain.Topology{SelectedMounts: []string{"/data/drive0"}},
+	}
+	got := renderConfigEnv(params, domain.HostRow{Hostname: "node1"})
+	if !strings.Contains(got, `MINIO_SERVER_URL="https://lb.example.com:9000"`) {
+		t.Fatalf("renderConfigEnv() missing explicit MINIO_SERVER_URL:\n%s", got)
+	}
 }
 
 func TestRenderSecondaryConfigEnvCarriesRootCreds(t *testing.T) {

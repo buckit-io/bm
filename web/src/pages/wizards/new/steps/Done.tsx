@@ -64,7 +64,7 @@ export function Done({ draft, update, onFinish }: Props) {
     <div className="vstack" style={{ gap: "var(--s-5)", maxWidth: 720 }}>
       <header>
         <h2 style={{ fontSize: "var(--fs-2xl)", fontWeight: 600 }}>
-          ✓ {draft.name || "cluster"} is up
+          <span data-testid="new-cluster-done-title">✓ {draft.name || "cluster"} is up</span>
         </h2>
       </header>
 
@@ -78,6 +78,7 @@ export function Done({ draft, update, onFinish }: Props) {
               target="_blank"
               rel="noreferrer"
               className="mono"
+              data-testid="new-cluster-console-url"
             >
               {d.consoleUrl}
             </a>

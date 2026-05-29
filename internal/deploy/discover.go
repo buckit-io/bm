@@ -50,8 +50,13 @@ func RichProbe(ctx context.Context, client *ssh.Client) domain.WizardDiscoveryRe
 			out.RamGiB = &g
 		}
 	}
-	if v, ok := runOK(ctx, client, "lsblk -bJ -o NAME,KNAME,PATH,SIZE,MOUNTPOINT,FSTYPE,TYPE,ROTA"); ok {
-		if drives := parseLsblk(v); drives != nil {
+
+	mountSizes := map[string]int64{}
+	if v, ok := runOK(ctx, client, "df -B1 --output=target,size"); ok {
+		mountSizes = parseMountSizes(v)
+	}
+	if v, ok := runOK(ctx, client, "cat /proc/self/mountinfo"); ok {
+		if drives := parseMountInfoDrives(v, mountSizes); len(drives) > 0 {
 			out.Drives = drives
 		}
 	}
@@ -144,138 +149,60 @@ func parseMemTotalGiB(meminfo string) int {
 	return 0
 }
 
-// lsblkOutput captures the subset of `lsblk -bJ` fields we parse.
-type lsblkOutput struct {
-	BlockDevices []lsblkDevice `json:"blockdevices"`
-}
-
-type lsblkDevice struct {
-	Name       string        `json:"name"`
-	Path       string        `json:"path"`
-	Size       interface{}   `json:"size"`
-	Mountpoint string        `json:"mountpoint"`
-	Fstype     string        `json:"fstype"`
-	Type       string        `json:"type"`
-	Children   []lsblkDevice `json:"children"`
-}
-
-func parseLsblk(jsonBody string) []domain.DiscoveredDrive {
-	var top lsblkOutput
-	if err := json.Unmarshal([]byte(jsonBody), &top); err != nil {
-		return nil
-	}
-	var out []domain.DiscoveredDrive
-	var bootMount = bootMountFromDevs(top.BlockDevices)
-	for _, d := range top.BlockDevices {
-		// Include real disks and loop devices that are mounted under a data
-		// path. Loop devices are used in dev/test environments (loopback
-		// files backing XFS mounts) and in some container setups.
-		switch d.Type {
-		case "disk":
-			// always include
-		case "loop":
-			// only include if mounted under /data (data drives in dev/test)
-			if !strings.HasPrefix(d.Mountpoint, "/data") {
-				continue
-			}
-		default:
+func parseMountInfoDrives(mountInfo string, mountSizes map[string]int64) []domain.DiscoveredDrive {
+	entries := parseMountInfo(mountInfo)
+	out := make([]domain.DiscoveredDrive, 0, len(entries))
+	for _, e := range entries {
+		mount := normalizeMountPath(e.MountPoint)
+		if mount == "" {
 			continue
 		}
-		// Skip CD-ROMs and similar by checking that the device has some size.
-		size := lsblkInt(d.Size)
-		if size <= 0 {
+		if isPseudoMountType(e.FSType) {
 			continue
 		}
-		// Decide the mountpoint for this disk. If it has children (partitions),
-		// pick the data-mountpoint child (the one that's not /boot and not /).
-		mount, fs := pickDataMount(d, bootMount)
-		isBoot := isBootDisk(d, bootMount)
 		out = append(out, domain.DiscoveredDrive{
-			Device:    devicePath(d),
+			Device:    strings.TrimSpace(e.Source),
 			Mount:     mount,
-			SizeBytes: size,
-			FsType:    fs,
-			IsBoot:    isBoot,
+			SizeBytes: mountSizes[mount],
+			FsType:    e.FSType,
+			IsBoot:    mount == "/" || mount == "/boot" || strings.HasPrefix(mount, "/boot/"),
+			IsSystem:  isSystemMountPath(mount),
 		})
 	}
 	return out
 }
 
-func devicePath(d lsblkDevice) string {
-	if d.Path != "" {
-		return d.Path
+func isPseudoMountType(fsType string) bool {
+	switch fsType {
+	case "proc", "sysfs", "devtmpfs", "devpts", "tmpfs", "cgroup", "cgroup2", "pstore", "securityfs", "debugfs", "tracefs", "bpf", "mqueue", "hugetlbfs", "fusectl", "configfs", "overlay", "nsfs", "autofs", "rpc_pipefs":
+		return true
+	default:
+		return false
 	}
-	if d.Name != "" {
-		return "/dev/" + d.Name
-	}
-	return ""
 }
 
-// lsblkInt accepts either a number (newer lsblk) or a string (older lsblk).
-func lsblkInt(v interface{}) int64 {
-	switch n := v.(type) {
-	case float64:
-		return int64(n)
-	case string:
-		i, _ := strconv.ParseInt(n, 10, 64)
-		return i
+func isSystemMountPath(mount string) bool {
+	mount = normalizeMountPath(mount)
+	if mount == "" {
+		return false
 	}
-	return 0
-}
-
-// bootMountFromDevs returns the disk that hosts /boot or / so the rest of the
-// drive list can flag the boot disk explicitly.
-func bootMountFromDevs(devs []lsblkDevice) string {
-	for _, d := range devs {
-		if d.Mountpoint == "/" {
-			return devicePath(d)
-		}
-		for _, c := range d.Children {
-			if c.Mountpoint == "/" || c.Mountpoint == "/boot" {
-				return devicePath(d)
-			}
-		}
-	}
-	return ""
-}
-
-func isBootDisk(d lsblkDevice, bootDevice string) bool {
-	if d.Mountpoint == "/" || d.Mountpoint == "/boot" {
+	if mount == "/" {
 		return true
 	}
-	if bootDevice != "" && devicePath(d) == bootDevice {
-		return true
-	}
-	for _, c := range d.Children {
-		if c.Mountpoint == "/" || c.Mountpoint == "/boot" {
+	for _, prefix := range []string{"/boot", "/home", "/var", "/etc", "/tmp", "/usr", "/root"} {
+		if mount == prefix || strings.HasPrefix(mount, prefix+"/") {
 			return true
 		}
 	}
 	return false
 }
 
-// pickDataMount returns the most plausible "data drive" mount for the disk
-// (preferring non-root partitions) and the matching fstype.
-func pickDataMount(d lsblkDevice, bootDevice string) (string, string) {
-	if d.Mountpoint != "" && d.Mountpoint != "/" && d.Mountpoint != "/boot" {
-		return d.Mountpoint, d.Fstype
+func normalizeMountPath(mount string) string {
+	mount = strings.TrimSpace(mount)
+	if mount == "" || mount == "/" {
+		return mount
 	}
-	for _, c := range d.Children {
-		if c.Mountpoint == "" || c.Mountpoint == "/" || c.Mountpoint == "/boot" || strings.HasPrefix(c.Mountpoint, "/boot/") {
-			continue
-		}
-		return c.Mountpoint, c.Fstype
-	}
-	// Unmounted disk — return empty mount but preserve fstype if present.
-	if d.Fstype != "" {
-		return "", d.Fstype
-	}
-	for _, c := range d.Children {
-		if c.Fstype != "" {
-			return "", c.Fstype
-		}
-	}
-	return "", ""
+	return strings.TrimRight(mount, "/")
 }
 
 // ipLinkOutput is the JSON shape of `ip -j link`.

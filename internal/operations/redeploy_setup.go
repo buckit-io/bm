@@ -79,19 +79,21 @@ fi
 	return nil
 }
 
-// preflightDataMountsAttached verifies that the parent of each data
-// path is a real mount point on n. Catches the "intended drive not
-// mounted" case where mkdir -p would otherwise create the data dir
-// in the rootfs and buckit would silently write data to the system
-// disk until it fills the root partition.
+// preflightDataMountsAttached verifies that each data path lands on a
+// real mount point on n. Catches the "intended drive not mounted"
+// case where mkdir -p would otherwise create the data dir in the
+// rootfs and buckit would silently write data to the system disk
+// until it fills the root partition.
 //
-// The check is "parent is a mount point" rather than "the closest
-// mount ancestor is not /". That phrasing matters for single-drive
-// nodes that intentionally run on the root filesystem
-// (e.g. MINIO_VOLUMES="/buckit"): the parent is "/", which IS a mount
-// point, so the check passes. Multi-drive setups
-// (MINIO_VOLUMES="/mnt/data{1...4}/buckit") still get the strict
-// check because each `/mnt/dataN` must be mounted separately.
+// "Lands on a real mount point" means EITHER the data path itself is
+// a mount point (MINIO_VOLUMES="/mnt/data/drive0" with the drive
+// mounted directly at /mnt/data/drive0) OR its parent is a mount
+// point (MINIO_VOLUMES="/mnt/data1/buckit" with the drive mounted at
+// /mnt/data1, and buckit lives in a subdir). Both layouts are common.
+//
+// Single-drive nodes that intentionally run on the root filesystem
+// (e.g. MINIO_VOLUMES="/buckit") still pass because the parent is "/",
+// which IS a mount point.
 //
 // One ssh round-trip per target, batched across all paths.
 func preflightDataMountsAttached(ctx context.Context, deps Deps, rc *runCtx, target domain.Node, paths []string) error {
@@ -103,8 +105,8 @@ func preflightDataMountsAttached(ctx context.Context, deps Deps, rc *runCtx, tar
 	for _, p := range paths {
 		parent := pathDir(p)
 		fmt.Fprintf(&script,
-			`printf '%%s\t' %s; if mountpoint -q %s 2>/dev/null; then printf 'mounted\n'; else printf 'not-mounted:%%s\n' %s; fi`+"\n",
-			shellQuote(p), shellQuote(parent), shellQuote(parent),
+			`printf '%%s\t' %s; if mountpoint -q %s 2>/dev/null || mountpoint -q %s 2>/dev/null; then printf 'mounted\n'; else printf 'not-mounted:%%s\n' %s; fi`+"\n",
+			shellQuote(p), shellQuote(p), shellQuote(parent), shellQuote(parent),
 		)
 	}
 	out, err := runHostStep(ctx, deps, rc, target, sudoBash(rc.sshCreds.User, script.String()))

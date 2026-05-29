@@ -14,10 +14,10 @@ func validParams() DeployParams {
 			RootUser:     "admin",
 			RootPassword: "supersecret",
 		},
-		Hosts:    []domain.HostRow{{ID: "h1", Hostname: "node1"}},
-		Topology: domain.Topology{SelectedMounts: []string{"/data/disk1"}},
-		SSH:      domain.SshCreds{User: "ops"},
-		Version:  "custom",
+		Hosts:     []domain.HostRow{{ID: "h1", Hostname: "node1"}},
+		Topology:  domain.Topology{SelectedMounts: []string{"/data/disk1"}},
+		SSH:       domain.SshCreds{User: "ops"},
+		Version:   "custom",
 		CustomURL: "https://example.com/buckit.rpm",
 	}
 }

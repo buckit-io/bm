@@ -1,5 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { DiscoveredDrive, NewClusterDraft, Topology as TopologyShape } from "../state";
+import { parseCustomDataVolumes } from "./customDataVolumes";
+import { deriveDeploymentMode } from "./deploymentMode";
 import { intersectMounts } from "./driveIntersection";
 import { topologyErrors } from "./topologyValidation";
 
@@ -78,6 +80,8 @@ function defaultParityBlocks(setDriveCount: number): number {
 export function Topology({ draft, update }: Props) {
   const validHosts = draft.hosts.filter((h) => h.hostname.trim());
   const t = draft.topology;
+  const dataVolumeMode = t.dataVolumeMode ?? "auto";
+  const customVolumeInput = t.customDataVolumePaths ?? "";
 
   // Per-host drive lists from discovery.
   const perHost: Record<string, DiscoveredDrive[]> = useMemo(() => {
@@ -93,6 +97,10 @@ export function Topology({ draft, update }: Props) {
   const { common, extrasByHost, eligibleByHost } = intersection;
   const commonKey = common.join("|");
   const preferredMounts = useMemo(() => selectByPattern(common), [commonKey]);
+  const customVolumes = useMemo(
+    () => parseCustomDataVolumes(customVolumeInput),
+    [customVolumeInput],
+  );
 
   // Case detection.
   const someoneHasNoEligible = validHosts.some(
@@ -110,6 +118,7 @@ export function Topology({ draft, update }: Props) {
   // and exclude outliers (e.g. /var/lib/buckit-drives). This mirrors what
   // Buckit expects: uniform mount paths across all hosts.
   useEffect(() => {
+    if (dataVolumeMode !== "auto") return;
     const same =
       t.selectedMounts.length === preferredMounts.length &&
       t.selectedMounts.every((m, i) => m === preferredMounts[i]);
@@ -119,13 +128,36 @@ export function Topology({ draft, update }: Props) {
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [commonKey, preferredMounts]);
+  }, [commonKey, preferredMounts, dataVolumeMode]);
+
+  useEffect(() => {
+    if (dataVolumeMode !== "custom") return;
+    const customMounts = customVolumes.error ? [] : customVolumes.paths;
+    const same =
+      t.selectedMounts.length === customMounts.length &&
+      t.selectedMounts.every((m, i) => m === customMounts[i]);
+    if (!same) {
+      update({
+        topology: { ...t, selectedMounts: customMounts },
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dataVolumeMode, customVolumeInput, customVolumes.error, customVolumes.paths.join("|")]);
 
   // Recalculate setSize + parity whenever total drives changes (drive
   // selection toggled, host count changed, etc.). Uses the same defaults
   // Buckit would pick at startup.
   const drivesPerNode = t.selectedMounts.length;
   const totalDrives = validHosts.length * drivesPerNode;
+  const deploymentMode = deriveDeploymentMode(totalDrives);
+  const isStandalone = deploymentMode === "standalone";
+  const isErasure = deploymentMode === "erasure";
+  const modeLabel =
+    deploymentMode === "standalone"
+      ? "Standalone"
+      : deploymentMode === "erasure"
+        ? "Erasure coded"
+        : "Not configured";
   useEffect(() => {
     if (totalDrives <= 0) return;
     const setSize = computeSetSize(totalDrives);
@@ -138,9 +170,10 @@ export function Topology({ draft, update }: Props) {
 
   // Derived counts. Use a sample drive size from the first eligible
   // entry — real backend will validate uniformity in preflight.
-  const sampleSize = sampleDriveSize(perHost);
+  const sampleSize = sampleDriveSize(perHost, t.selectedMounts);
   const rawBytes = totalDrives * sampleSize;
-  const usableBytes = rawBytes - rawBytes * (t.parity / Math.max(t.setSize, 1));
+  const usableBytes =
+    isErasure ? rawBytes - rawBytes * (t.parity / Math.max(t.setSize, 1)) : rawBytes;
   const errors = topologyErrors(draft);
   const hasUnselectedPreferredMount = preferredMounts.some(
     (mount) => !t.selectedMounts.includes(mount),
@@ -151,13 +184,14 @@ export function Topology({ draft, update }: Props) {
       <header>
         <h2 style={{ fontSize: "var(--fs-xl)", fontWeight: 600 }}>Topology</h2>
         <p className="muted" style={{ fontSize: "var(--fs-sm)", marginTop: 4 }}>
-          Select drives on each node to use as storage drives. Adjust set size
-          and parity if needed.
+          Select data volume paths on each node. Deploy creates and uses a
+          managed <span className="mono">buckit/</span> directory inside each
+          selected path.
         </p>
       </header>
 
       {/* ── case banner ───────────────────────────────────────────── */}
-      {caseKind === "A" && errors.length === 0 && (
+      {dataVolumeMode === "auto" && caseKind === "A" && errors.length === 0 && (
         <div className="banner banner--info">
           <span>✓</span>
           <span>
@@ -167,7 +201,7 @@ export function Topology({ draft, update }: Props) {
           </span>
         </div>
       )}
-      {caseKind === "A" && errors.length > 0 && (
+      {dataVolumeMode === "auto" && caseKind === "A" && errors.length > 0 && (
         <div className="banner banner--warning">
           <span>⚠</span>
           <span>
@@ -177,7 +211,7 @@ export function Topology({ draft, update }: Props) {
           </span>
         </div>
       )}
-      {caseKind === "B" && (
+      {dataVolumeMode === "auto" && caseKind === "B" && (
         <div className="banner banner--warning">
           <span>⚠</span>
           <span>
@@ -188,14 +222,16 @@ export function Topology({ draft, update }: Props) {
           </span>
         </div>
       )}
-      {caseKind === "C" && (
+      {dataVolumeMode === "auto" && caseKind === "C" && (
         <div className="banner banner--danger">
           <span>✗</span>
           <span>
             No common drive mountpoints found across all hosts. Mount
             drives at a consistent path (typically{" "}
             <span className="mono">/data/disk{"{1...N}"}</span>) on every
-            host and re-run discovery to continue.
+            host and re-run discovery to continue. Or select{" "}
+            <span className="mono">USE CUSTOM PATH</span> to enter the
+            data volume paths manually.
           </span>
         </div>
       )}
@@ -203,6 +239,9 @@ export function Topology({ draft, update }: Props) {
       {/* ── pool / parity controls ────────────────────────────────── */}
       <div className="card vstack" style={{ gap: "var(--s-3)" }}>
         <h3 className="card-stat__title">Pool 1</h3>
+        <p className="subtle" style={{ fontSize: "var(--fs-sm)" }}>
+          Mode: {modeLabel}
+        </p>
         <div className="topology__grid">
           <div>
             <div className="field-label">Nodes</div>
@@ -222,63 +261,107 @@ export function Topology({ draft, update }: Props) {
               {drivesPerNode || "—"}
             </div>
           </div>
-          <div>
-            <div className="field-label">Set size</div>
-            <select
-              className="select"
-              value={t.setSize}
-              onChange={(e) => {
-                const newSetSize = parseInt(e.target.value, 10);
-                update({
-                  topology: {
-                    ...t,
-                    setSize: newSetSize,
-                    parity: defaultParityBlocks(newSetSize) as typeof t.parity,
-                  },
-                });
-              }}
-            >
-              {VALID_SET_SIZES.filter((s) => totalDrives > 0 && totalDrives % s === 0).map((n) => {
-                const rec = computeSetSize(totalDrives);
-                return <option key={n} value={n}>{n}{n === rec ? " (recommended)" : ""}</option>;
-              })}
-            </select>
-            <p className="subtle" style={{ fontSize: "var(--fs-xs)", marginTop: 4 }}>
-              Drives grouped into one erasure unit. Must evenly divide total drives.
-            </p>
-          </div>
-          <div>
-            <div className="field-label">Parity</div>
-            <select
-              className="select"
-              value={t.parity}
-              onChange={(e) =>
-                update({
-                  topology: {
-                    ...t,
-                    parity: parseInt(e.target.value, 10) as TopologyShape["parity"],
-                  },
-                })
-              }
-            >
-              {Array.from({ length: Math.floor(t.setSize / 2) }, (_, i) => i + 1).map((n) => {
-                const rec = defaultParityBlocks(t.setSize);
-                return <option key={n} value={n}>{n}{n === rec ? " (recommended)" : ""}</option>;
-              })}
-            </select>
-            <p className="subtle" style={{ fontSize: "var(--fs-xs)", marginTop: 4 }}>
-              Drives reserved for redundancy per set. Higher = more fault tolerance, less usable space. Max: {Math.floor(t.setSize / 2)}.
-            </p>
-          </div>
+          {isErasure ? (
+            <>
+              <div>
+                <div className="field-label">Set size</div>
+                <select
+                  className="select"
+                  value={t.setSize}
+                  onChange={(e) => {
+                    const newSetSize = parseInt(e.target.value, 10);
+                    update({
+                      topology: {
+                        ...t,
+                        setSize: newSetSize,
+                        parity: defaultParityBlocks(newSetSize) as TopologyShape["parity"],
+                      },
+                    });
+                  }}
+                >
+                  {VALID_SET_SIZES.filter((s) => totalDrives > 0 && totalDrives % s === 0).map((n) => {
+                    const rec = computeSetSize(totalDrives);
+                    return <option key={n} value={n}>{n}{n === rec ? " (recommended)" : ""}</option>;
+                  })}
+                </select>
+                <p className="subtle" style={{ fontSize: "var(--fs-xs)", marginTop: 4 }}>
+                  Drives grouped into one erasure unit. Must evenly divide total drives.
+                </p>
+              </div>
+              <div>
+                <div className="field-label">Parity</div>
+                <select
+                  className="select"
+                  value={t.parity}
+                  onChange={(e) =>
+                    update({
+                      topology: {
+                        ...t,
+                        parity: parseInt(e.target.value, 10) as TopologyShape["parity"],
+                      },
+                    })
+                  }
+                >
+                  {Array.from({ length: Math.floor(t.setSize / 2) }, (_, i) => i + 1).map((n) => {
+                    const rec = defaultParityBlocks(t.setSize);
+                    return <option key={n} value={n}>{n}{n === rec ? " (recommended)" : ""}</option>;
+                  })}
+                </select>
+                <p className="subtle" style={{ fontSize: "var(--fs-xs)", marginTop: 4 }}>
+                  Drives reserved for redundancy per set. Higher = more fault tolerance, less usable space. Max: {Math.floor(t.setSize / 2)}.
+                </p>
+              </div>
+            </>
+          ) : (
+            <>
+              <div>
+                <div className="field-label">Data paths</div>
+                <div
+                  className="card-stat__value"
+                  style={{ fontSize: "var(--fs-lg)" }}
+                >
+                  {totalDrives || "—"}
+                </div>
+                <p className="subtle" style={{ fontSize: "var(--fs-xs)", marginTop: 4 }}>
+                  {deploymentMode === "empty"
+                    ? "Select at least one drive path to continue."
+                    : "One storage path with no erasure set layout."}
+                </p>
+              </div>
+              <div>
+                <div className="field-label">Redundancy</div>
+                <div
+                  className="card-stat__value"
+                  style={{ fontSize: "var(--fs-lg)" }}
+                >
+                  {deploymentMode === "empty" ? "—" : "None"}
+                </div>
+                <p className="subtle" style={{ fontSize: "var(--fs-xs)", marginTop: 4 }}>
+                  {deploymentMode === "empty"
+                    ? "No deployment mode selected yet."
+                    : "Buckit will start in standalone single-drive mode."}
+                </p>
+              </div>
+            </>
+          )}
         </div>
 
         {drivesPerNode > 0 && (
           <div className="subtle" style={{ fontSize: "var(--fs-sm)" }}>
-            Total drives: <b>{totalDrives}</b> ·{" "}
-            <b>{totalDrives / t.setSize || 0}</b> erasure set
-            {totalDrives / t.setSize === 1 ? "" : "s"} · Usable capacity:{" "}
-            <b>~{humanSize(usableBytes)}</b> of{" "}
-            {humanSize(rawBytes)} raw
+            {isErasure ? (
+              <>
+                Total drives: <b>{totalDrives}</b> ·{" "}
+                <b>{totalDrives / t.setSize || 0}</b> erasure set
+                {totalDrives / t.setSize === 1 ? "" : "s"} · Usable capacity:{" "}
+                <b>~{humanSize(usableBytes)}</b> of{" "}
+                {humanSize(rawBytes)} raw
+              </>
+            ) : (
+              <>
+                Total drives: <b>{totalDrives}</b> · Standalone deployment · Usable capacity:{" "}
+                <b>~{humanSize(usableBytes)}</b> of {humanSize(rawBytes)} raw
+              </>
+            )}
           </div>
         )}
 
@@ -289,6 +372,15 @@ export function Topology({ draft, update }: Props) {
               {errors.map((e, i) => (
                 <div key={i}>{e}</div>
               ))}
+            </span>
+          </div>
+        ) : isStandalone ? (
+          <div className="banner banner--info">
+            <span>ℹ</span>
+            <span>
+              This deployment uses a single data path and does not provide
+              erasure-coded redundancy. Usable capacity is the full raw
+              capacity of that path.
             </span>
           </div>
         ) : (
@@ -305,47 +397,76 @@ export function Topology({ draft, update }: Props) {
         )}
 
         <details className="subtle" style={{ fontSize: "var(--fs-xs)", marginTop: "var(--s-2)" }}>
-          <summary style={{ cursor: "pointer" }}>How are set size and parity calculated?</summary>
-          <div className="vstack" style={{ gap: "var(--s-2)", marginTop: "var(--s-2)", paddingLeft: "var(--s-3)" }}>
-            <p>
-              <b>Set size</b> is the number of drives in one erasure unit. Buckit
-              supports set sizes from 2 to 16. The default is the largest value
-              that evenly divides your total drive count, resulting in the fewest
-              erasure sets.
-            </p>
-            <p>
-              <b>Parity</b> is how many drives per set are reserved for redundancy.
-              The default depends on set size:
-            </p>
-            <ul style={{ paddingLeft: "1.2em", margin: 0 }}>
-              <li>Set size 2–3 → parity 1</li>
-              <li>Set size 4–5 → parity 2</li>
-              <li>Set size 6–7 → parity 3</li>
-              <li>Set size 8–16 → parity 4</li>
-            </ul>
-            <p>
-              Maximum allowed parity is half the set size (e.g. set size 16 → max
-              parity 8). Higher parity means more fault tolerance but less usable
-              capacity.
-            </p>
-            <p>
-              <b>Your configuration:</b> {totalDrives} total drives ÷ set size{" "}
-              {t.setSize} = {Math.floor(totalDrives / t.setSize)} erasure set
-              {Math.floor(totalDrives / t.setSize) === 1 ? "" : "s"}. Each set
-              stores {t.setSize - t.parity} data shards + {t.parity} parity
-              shards per object.
-            </p>
-          </div>
+          <summary style={{ cursor: "pointer" }}>
+            {isErasure ? "How are set size and parity calculated?" : "How does standalone mode work?"}
+          </summary>
+          {!isErasure ? (
+            <div className="vstack" style={{ gap: "var(--s-2)", marginTop: "var(--s-2)", paddingLeft: "var(--s-3)" }}>
+              <p>
+                A single total drive starts Buckit in standalone mode. Data is
+                written to one managed <span className="mono">buckit/</span>
+                directory and there is no erasure-coded redundancy.
+              </p>
+              <p>
+                If you want redundancy and fault tolerance, select at least two
+                total drives so bm can plan an erasure-coded layout.
+              </p>
+            </div>
+          ) : (
+            <div className="vstack" style={{ gap: "var(--s-2)", marginTop: "var(--s-2)", paddingLeft: "var(--s-3)" }}>
+              <p>
+                <b>Set size</b> is the number of drives in one erasure unit. Buckit
+                supports set sizes from 2 to 16. The default is the largest value
+                that evenly divides your total drive count, resulting in the fewest
+                erasure sets.
+              </p>
+              <p>
+                <b>Parity</b> is how many drives per set are reserved for redundancy.
+                The default depends on set size:
+              </p>
+              <ul style={{ paddingLeft: "1.2em", margin: 0 }}>
+                <li>Set size 2–3 → parity 1</li>
+                <li>Set size 4–5 → parity 2</li>
+                <li>Set size 6–7 → parity 3</li>
+                <li>Set size 8–16 → parity 4</li>
+              </ul>
+              <p>
+                Maximum allowed parity is half the set size (e.g. set size 16 → max
+                parity 8). Higher parity means more fault tolerance but less usable
+                capacity.
+              </p>
+              <p>
+                <b>Your configuration:</b> {totalDrives} total drives ÷ set size{" "}
+                {t.setSize} = {Math.floor(totalDrives / t.setSize)} erasure set
+                {Math.floor(totalDrives / t.setSize) === 1 ? "" : "s"}. Each set
+                stores {t.setSize - t.parity} data shards + {t.parity} parity
+                shards per object.
+              </p>
+            </div>
+          )}
         </details>
       </div>
       <div className="card vstack" style={{ gap: "var(--s-3)" }}>
-        <h3 className="card-stat__title">Selected drives</h3>
-        {caseKind === "C" ? (
+        <label className="hstack" style={{ gap: "var(--s-2)", alignItems: "center" }}>
+          <input
+            type="radio"
+            name="data-volume-mode"
+            checked={dataVolumeMode === "auto"}
+            onChange={() =>
+              update({ topology: { ...t, dataVolumeMode: "auto" } })
+            }
+          />
+          <h3 className="card-stat__title" style={{ margin: 0 }}>
+            Discovered drives
+          </h3>
+        </label>
+        {dataVolumeMode !== "auto" ? (
           <p className="subtle" style={{ fontSize: "var(--fs-sm)" }}>
-            No mountpoints to select yet. Once drives are mounted
-            consistently on every host (for example via{" "}
-            <span className="mono">/etc/fstab</span>), return to the
-            Discovery step and re-run to refresh.
+            Use the discovered common mountpoints from each host.
+          </p>
+        ) : caseKind === "C" ? (
+          <p className="subtle" style={{ fontSize: "var(--fs-sm)" }}>
+            No common mountpoints found.
           </p>
         ) : (
           <>
@@ -418,7 +539,7 @@ export function Topology({ draft, update }: Props) {
           </>
         )}
 
-        {caseKind === "B" && (
+        {dataVolumeMode === "auto" && caseKind === "B" && (
           <div
             className="vstack"
             style={{
@@ -451,6 +572,87 @@ export function Topology({ draft, update }: Props) {
           </div>
         )}
       </div>
+
+      <div className="card vstack" style={{ gap: "var(--s-3)" }}>
+        <label className="hstack" style={{ gap: "var(--s-2)", alignItems: "center" }}>
+          <input
+            type="radio"
+            name="data-volume-mode"
+            checked={dataVolumeMode === "custom"}
+            onChange={() =>
+              update({ topology: { ...t, dataVolumeMode: "custom" } })
+            }
+          />
+          <h3 className="card-stat__title" style={{ margin: 0 }}>
+            Use custom paths
+          </h3>
+        </label>
+
+        {dataVolumeMode === "custom" ? (
+          <>
+            <div>
+              <div className="field-label">Data volume paths</div>
+              <input
+                className="input"
+                value={customVolumeInput}
+                onChange={(e) =>
+                  update({
+                    topology: {
+                      ...t,
+                      customDataVolumePaths: e.target.value,
+                    },
+                  })
+                }
+                placeholder="/var/lib/storage or /mnt/data{1...16}"
+              />
+              <p className="subtle" style={{ fontSize: "var(--fs-xs)", marginTop: 4 }}>
+                Use one path or a numeric range like{" "}
+                <span className="mono">/mnt/data{"{1...16}"}</span>. Deploy
+                writes to <span className="mono">buckit/</span> under each path.
+              </p>
+            </div>
+
+            {customVolumes.error ? (
+              <div className="banner banner--danger">
+                <span>✗</span>
+                <span>{customVolumes.error}</span>
+              </div>
+            ) : customVolumes.paths.length > 0 ? (
+              <>
+                <div className="banner banner--info">
+                  <span>ℹ</span>
+                  <span>
+                    Final storage path:{" "}
+                    <span className="mono">
+                      {storagePathPreview(customVolumeInput.trim())}
+                    </span>
+                  </span>
+                </div>
+                <div
+                  className="hstack"
+                  style={{ flexWrap: "wrap", gap: "var(--s-3) var(--s-3)" }}
+                >
+                  {t.selectedMounts.map((m) => (
+                    <span key={m} className="chip-mount is-on">
+                      <span className="mono">{m}</span>
+                    </span>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="subtle" style={{ fontSize: "var(--fs-sm)" }}>
+                Enter a valid custom data volume path to continue.
+              </p>
+            )}
+          </>
+        ) : (
+          <p className="subtle" style={{ fontSize: "var(--fs-sm)" }}>
+            Override discovery with explicit paths such as{" "}
+            <span className="mono">/mnt/data{"{1...16}"}</span> or{" "}
+            <span className="mono">/var/lib/storage</span>.
+          </p>
+        )}
+      </div>
     </div>
   );
 }
@@ -476,12 +678,21 @@ function mountPatternLabel(mounts: string[]): string {
   return base === mounts[0] ? mounts[0] : base;
 }
 
+function storagePathPreview(path: string): string {
+  const trimmed = path.replace(/\/+$/, "");
+  return `${trimmed}/buckit`;
+}
+
 function sampleDriveSize(
   perHost: Record<string, DiscoveredDrive[]>,
+  selectedMounts: string[],
 ): number {
+  const wanted = new Set(selectedMounts);
+  if (wanted.size === 0) return 0;
   for (const drives of Object.values(perHost)) {
     for (const d of drives) {
-      if (!d.isBoot && d.sizeBytes > 0) return d.sizeBytes;
+      if (!wanted.has(d.mount)) continue;
+      if (d.sizeBytes > 0) return d.sizeBytes;
     }
   }
   return 0;

@@ -329,8 +329,11 @@ func runFakeCommand(cmd string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stdout, `PRETTY_NAME="bm-test 1.0"`)
 		fmt.Fprintln(stdout, `ID=bmtest`)
 		return 0
-	case strings.HasPrefix(cmd, "lsblk"):
-		fmt.Fprintln(stdout, fakeLsblkJSON)
+	case cmd == "df -B1 --output=target,size":
+		fmt.Fprint(stdout, fakeDFOutput)
+		return 0
+	case cmd == "cat /proc/self/mountinfo":
+		fmt.Fprint(stdout, fakeMountInfo)
 		return 0
 	case cmd == "ip -j link":
 		fmt.Fprintln(stdout, fakeIPLinkJSON)
@@ -375,17 +378,18 @@ func runFakeCommand(cmd string, stdout io.Writer, stderr io.Writer) int {
 	}
 }
 
-const fakeLsblkJSON = `{
-  "blockdevices": [
-    {"name":"sda","path":"/dev/sda","size":274877906944,"type":"disk",
-     "children":[
-        {"name":"sda1","mountpoint":"/boot","fstype":"xfs","type":"part"},
-        {"name":"sda2","mountpoint":"/","fstype":"xfs","type":"part"}
-     ]},
-    {"name":"sdb","path":"/dev/sdb","size":17592186044416,"mountpoint":"/data/disk1","fstype":"xfs","type":"disk"},
-    {"name":"sdc","path":"/dev/sdc","size":17592186044416,"mountpoint":"/data/disk2","fstype":"xfs","type":"disk"}
-  ]
-}`
+const fakeDFOutput = `Mounted on 1B-blocks
+/ 107374182400
+/boot 2147483648
+/data/disk1 17592186044416
+/data/disk2 17592186044416
+`
+
+const fakeMountInfo = `36 35 8:1 / / rw,relatime - xfs /dev/sda2 rw,attr2,inode64
+37 36 8:2 /boot /boot rw,relatime - xfs /dev/sda1 rw,attr2,inode64
+38 36 7:0 / /data/disk1 rw,relatime - xfs /dev/loop0 rw,attr2,inode64
+39 36 7:1 / /data/disk2 rw,relatime - xfs /dev/loop1 rw,attr2,inode64
+`
 
 const fakeIPLinkJSON = `[
   {"ifname":"lo","link_type":"loopback","operstate":"UNKNOWN","address":"00:00:00:00:00:00"},

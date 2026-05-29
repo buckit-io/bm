@@ -605,6 +605,15 @@ func (e *clusterUpgradeBySystemctlExecutor) Execute(ctx context.Context, run *ta
 type redeployExecutor struct{ deps Deps }
 
 func (e *redeployExecutor) Validate(req tasks.DispatchRequest) error {
+	// Provision is single-host only. Operators can select hosts from
+	// different pools in a bulk-selection UI, but each host needs its
+	// own same-pool peer for the config + data-layout derivation —
+	// mixing pools in one run risks pulling the wrong layout. Reject
+	// at dispatch so the UI catches the mistake immediately rather
+	// than failing mid-run on the second host.
+	if len(req.TargetHostIDs) != 1 {
+		return fmt.Errorf("redeploy_software: exactly one target host required (got %d)", len(req.TargetHostIDs))
+	}
 	if len(req.Params) > 0 {
 		var p rollingUpgradeParams
 		if err := json.Unmarshal(req.Params, &p); err != nil {
@@ -630,24 +639,39 @@ func (e *redeployExecutor) Execute(ctx context.Context, run *tasks.Run) error {
 	if err != nil {
 		return fmt.Errorf("redeploy_software: %w", err)
 	}
+	// Redeploy is host-scoped — the per-node and bulk catalogs both
+	// pass run.Targets. Filter rc.nodes to just those targets so the
+	// host-statuses panel doesn't show unselected peers as "Pending".
+	hosts, err := targetHosts(tasks.DispatchRequest{TargetHostIDs: run.Targets}, rc.nodes)
+	if err != nil {
+		return err
+	}
+	if len(hosts) == 0 {
+		return errors.New("redeploy_software: no target hosts")
+	}
 	start := time.Now()
-	seedHostStatuses(run, rc.nodes)
+	seedHostStatuses(run, hosts)
+	run.LogInfo("provisioning %d host(s) at %s", len(hosts), version)
 
-	for i, n := range rc.nodes {
+	for i, n := range hosts {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		run.LogInfo("%s: starting provisioning", n.Hostname)
 		pkgMgr, err := pkgManagerForHost(ctx, e.deps, rc, n)
 		if err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			run.LogError("%s: detect package manager: %v", n.Hostname, err)
 			return fmt.Errorf("%s detect package manager: %w", n.Hostname, err)
 		}
 		// Reject hosts that already carry config / data the redeploy
 		// would clobber. Runs before bootstrap so a dirty host fails
 		// without any state change on the target.
 		setHostState(run, i, n, tasks.HostRunning, "preflight: clean host")
+		run.LogInfo("%s: preflight clean-host check", n.Hostname)
 		if err := preflightHostIsClean(ctx, e.deps, rc, n); err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			run.LogError("%s: preflight: %v", n.Hostname, err)
 			return fmt.Errorf("%s preflight: %w", n.Hostname, err)
 		}
 		// Bootstrap missing /etc/default/minio + /etc/minio/config.env
@@ -656,8 +680,11 @@ func (e *redeployExecutor) Execute(ctx context.Context, run *tasks.Run) error {
 		// no download, no half-installed rpm, no stranded
 		// /tmp/buckit.rpm — so the operator can fix the situation
 		// and retry cleanly.
-		if err := bootstrapBuckitConfigFromPeer(ctx, e.deps, rc, n); err != nil {
+		run.LogInfo("%s: bootstrapping config from peer", n.Hostname)
+		bsPaths, err := bootstrapBuckitConfigFromPeer(ctx, e.deps, rc, n)
+		if err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			run.LogError("%s: config bootstrap: %v", n.Hostname, err)
 			return fmt.Errorf("%s config bootstrap: %w", n.Hostname, err)
 		}
 		// Ensure the service user/group exist on the target BEFORE
@@ -670,9 +697,23 @@ func (e *redeployExecutor) Execute(ctx context.Context, run *tasks.Run) error {
 		// no-op.
 		setHostState(run, i, n, tasks.HostRunning, "ensuring service user/group")
 		user, group := resolveServiceIdentity(ctx, e.deps, rc, n)
+		run.LogInfo("%s: ensuring service identity %s:%s", n.Hostname, user, group)
 		if err := ensureBuckitUserAndGroup(ctx, e.deps, rc, n, user, group); err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			run.LogError("%s: ensure user/group: %v", n.Hostname, err)
 			return fmt.Errorf("%s ensure user/group: %w", n.Hostname, err)
+		}
+		// Hand the secondary env file and certs dir over to the
+		// service user/group now that the account exists. Without
+		// this, buckit.service starts but the binary (running as
+		// `buckit`) can't read /etc/minio/config.env — it's still
+		// owned by root:root mode 600 from the bootstrap copy and
+		// fails with "Unable to read the config environment file:
+		// permission denied".
+		if err := chownBootstrappedConfig(ctx, e.deps, rc, n, bsPaths, user, group); err != nil {
+			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			run.LogError("%s: chown config: %v", n.Hostname, err)
+			return fmt.Errorf("%s chown config: %w", n.Hostname, err)
 		}
 		// Create the MINIO_VOLUMES local paths (the per-drive
 		// /buckit subdirs) under the service user/group. Preflight
@@ -682,6 +723,7 @@ func (e *redeployExecutor) Execute(ctx context.Context, run *tasks.Run) error {
 		dataPaths, err := dataPathsFromPeer(ctx, e.deps, rc, n)
 		if err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			run.LogError("%s: data dirs discovery: %v", n.Hostname, err)
 			return fmt.Errorf("%s data dirs discovery: %w", n.Hostname, err)
 		}
 		// Verify each data path's parent is a real mount point before
@@ -690,20 +732,25 @@ func (e *redeployExecutor) Execute(ctx context.Context, run *tasks.Run) error {
 		// and buckit would happily write data to the system disk.
 		if err := preflightDataMountsAttached(ctx, e.deps, rc, n, dataPaths); err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			run.LogError("%s: mount check: %v", n.Hostname, err)
 			return fmt.Errorf("%s: %w", n.Hostname, err)
 		}
+		run.LogInfo("%s: preparing %d data dir(s)", n.Hostname, len(dataPaths))
 		if err := prepareBuckitDataDirs(ctx, e.deps, rc, n, dataPaths, user, group); err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			run.LogError("%s: prepare data dirs: %v", n.Hostname, err)
 			return fmt.Errorf("%s prepare data dirs: %w", n.Hostname, err)
 		}
 		artifact, err := resolveArtifactForNode(ctx, e.deps, rc, n, version, "", pkgMgr.Kind())
 		if err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			run.LogError("%s: version resolve: %v", n.Hostname, err)
 			return fmt.Errorf("%s version resolve: %w", n.Hostname, err)
 		}
 		expectedSHA256, err := deploy.FetchChecksum(ctx, artifact)
 		if err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			run.LogError("%s: checksum resolve: %v", n.Hostname, err)
 			return fmt.Errorf("%s checksum resolve: %w", n.Hostname, err)
 		}
 		// Download + verify + inspect the candidate package *before*
@@ -712,23 +759,28 @@ func (e *redeployExecutor) Execute(ctx context.Context, run *tasks.Run) error {
 		// stop → install → start only runs once we know the candidate
 		// is acceptable.
 		setHostState(run, i, n, tasks.HostRunning, "downloading")
+		run.LogInfo("%s: downloading %s", n.Hostname, artifact.URL)
 		if _, err := runHostStep(ctx, e.deps, rc, n, pkgMgr.DownloadCommand(artifact.URL)); err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			run.LogError("%s: download: %v", n.Hostname, err)
 			return fmt.Errorf("%s download: %w", n.Hostname, err)
 		}
 		setHostState(run, i, n, tasks.HostRunning, "verifying checksum")
 		if _, err := runHostStep(ctx, e.deps, rc, n, pkgMgr.VerifyChecksumCommand(expectedSHA256)); err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			run.LogError("%s: checksum: %v", n.Hostname, err)
 			return fmt.Errorf("%s checksum: %w", n.Hostname, err)
 		}
 		packageAction, err := inspectInstallAction(ctx, e.deps, rc, n, pkgMgr)
 		if err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			run.LogError("%s: package inspect: %v", n.Hostname, err)
 			return fmt.Errorf("%s package inspect: %w", n.Hostname, err)
 		}
 		if packageAction == deploy.InstallActionDowngrade {
 			const msg = "redeploy_software: selected version is older than the version currently installed; downgrade is not supported"
 			setHostState(run, i, n, tasks.HostFailed, msg)
+			run.LogError("%s: %s", n.Hostname, msg)
 			return fmt.Errorf("%s: %s", n.Hostname, msg)
 		}
 		actionLabel := pkgMgr.Kind() + " " + string(packageAction)
@@ -741,29 +793,37 @@ func (e *redeployExecutor) Execute(ctx context.Context, run *tasks.Run) error {
 		// migration cutover uses for `systemctl stop minio.service`.
 		if _, err := runHostStep(ctx, e.deps, rc, n, sudoSystemctl(rc.sshCreds.User, "stop buckit.service || true")); err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			run.LogError("%s: stop: %v", n.Hostname, err)
 			return fmt.Errorf("%s stop: %w", n.Hostname, err)
 		}
 		setHostState(run, i, n, tasks.HostRunning, actionLabel)
+		run.LogInfo("%s: %s", n.Hostname, actionLabel)
 		if _, err := runHostStep(ctx, e.deps, rc, n, sudoBash(rc.sshCreds.User, actionCommand)); err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			run.LogError("%s: %s: %v", n.Hostname, packageAction, err)
 			return fmt.Errorf("%s %s: %w", n.Hostname, packageAction, err)
 		}
 		setHostState(run, i, n, tasks.HostRunning, "start")
+		run.LogInfo("%s: starting buckit.service", n.Hostname)
 		if _, err := runHostStep(ctx, e.deps, rc, n, sudoSystemctl(rc.sshCreds.User, "start buckit.service")); err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			run.LogError("%s: start: %v", n.Hostname, err)
 			return fmt.Errorf("%s start: %w", n.Hostname, err)
 		}
 		if err := waitHostHealthy(ctx, e.deps, rc, n, WaitOptions{Timeout: 60 * time.Second}); err != nil {
 			setHostState(run, i, n, tasks.HostFailed, err.Error())
+			run.LogError("%s: health: %v", n.Hostname, err)
 			return fmt.Errorf("%s health: %w", n.Hostname, err)
 		}
-		setHostState(run, i, n, tasks.HostSucceeded, "redeployed")
+		setHostState(run, i, n, tasks.HostSucceeded, "provisioned")
+		run.LogOK("%s: provisioned", n.Hostname)
 	}
 	duration := time.Since(start)
+	run.LogOK("provisioning complete in %s", formatDuration(duration))
 	run.MutateState(func(s *tasks.OperationProgress) {
-		s.Detail = "Redeploy complete"
+		s.Detail = "Provisioning complete"
 		s.Summary = []tasks.SummaryItem{
-			{Label: "Hosts", Value: fmt.Sprintf("%d", len(rc.nodes))},
+			{Label: "Hosts", Value: fmt.Sprintf("%d", len(hosts))},
 			{Label: "Duration", Value: formatDuration(duration)},
 		}
 	})
@@ -784,7 +844,21 @@ func (e *redeployExecutor) Execute(ctx context.Context, run *tasks.Run) error {
 // clusters with no peer to copy from are surfaced as a clear error so
 // the operator knows to use the new-cluster wizard for cold
 // bootstraps.
-func bootstrapBuckitConfigFromPeer(ctx context.Context, deps Deps, rc *runCtx, target domain.Node) error {
+// bootstrappedPaths records the files the bootstrap copied that need
+// service-user ownership before buckit.service starts. Empty fields
+// mean "peer didn't have one" — caller should treat as a no-op.
+//
+// Why only these two: systemd loads the primary env file and parses
+// drop-ins as root, so those stay root-owned. The buckit binary
+// itself (running as the service user) loads the secondary env file
+// (MINIO_CONFIG_ENV_FILE) and reads from the certs dir — those need
+// to be readable by the service user.
+type bootstrappedPaths struct {
+	Secondary string
+	CertsDir  string
+}
+
+func bootstrapBuckitConfigFromPeer(ctx context.Context, deps Deps, rc *runCtx, target domain.Node) (bootstrappedPaths, error) {
 	// Derive env-file paths from systemd. Try target first (cheapest,
 	// no extra ssh hop) and fall back to peers when target has no
 	// buckit.service loaded yet — e.g. on a fresh node being added.
@@ -793,7 +867,7 @@ func bootstrapBuckitConfigFromPeer(ctx context.Context, deps Deps, rc *runCtx, t
 		envFiles = probeEnvironmentFilesFromAnyPeer(ctx, deps, rc, target)
 	}
 	if len(envFiles) == 0 {
-		return fmt.Errorf(
+		return bootstrappedPaths{}, fmt.Errorf(
 			"%s and its peers have no buckit.service unit loaded — for a fresh single-node cluster use the new-cluster wizard, not redeploy",
 			target.Hostname,
 		)
@@ -802,14 +876,14 @@ func bootstrapBuckitConfigFromPeer(ctx context.Context, deps Deps, rc *runCtx, t
 
 	have, err := remoteFileExists(ctx, deps, rc, target, primary)
 	if err != nil {
-		return fmt.Errorf("probe %s on %s: %w", primary, target.Hostname, err)
+		return bootstrappedPaths{}, fmt.Errorf("probe %s on %s: %w", primary, target.Hostname, err)
 	}
 	if have {
-		return nil
+		return bootstrappedPaths{}, nil
 	}
 	peer, ok := pickConfigSourcePeer(ctx, deps, rc, target, primary)
 	if !ok {
-		return fmt.Errorf(
+		return bootstrappedPaths{}, fmt.Errorf(
 			"%s is missing %s and no other node in this cluster has it — for a fresh single-node cluster use the new-cluster wizard, not redeploy",
 			target.Hostname, primary,
 		)
@@ -818,16 +892,18 @@ func bootstrapBuckitConfigFromPeer(ctx context.Context, deps Deps, rc *runCtx, t
 	// secondary + certs-dir from its content rather than hardcoding.
 	body, err := readRemoteFileText(ctx, deps, rc, peer, primary)
 	if err != nil {
-		return fmt.Errorf("read %s from %s: %w", primary, peer.Hostname, err)
+		return bootstrappedPaths{}, fmt.Errorf("read %s from %s: %w", primary, peer.Hostname, err)
 	}
 	if err := copyRemoteFile(ctx, deps, rc, peer, target, primary, "600"); err != nil {
-		return fmt.Errorf("copy %s from %s: %w", primary, peer.Hostname, err)
+		return bootstrappedPaths{}, fmt.Errorf("copy %s from %s: %w", primary, peer.Hostname, err)
 	}
+	var copied bootstrappedPaths
 	if secondary := extractEnvVar(body, "MINIO_CONFIG_ENV_FILE"); secondary != "" {
 		if onPeer, _ := remoteFileExists(ctx, deps, rc, peer, secondary); onPeer {
 			if err := copyRemoteFile(ctx, deps, rc, peer, target, secondary, "600"); err != nil {
-				return fmt.Errorf("copy %s from %s: %w", secondary, peer.Hostname, err)
+				return bootstrappedPaths{}, fmt.Errorf("copy %s from %s: %w", secondary, peer.Hostname, err)
 			}
+			copied.Secondary = secondary
 		}
 	}
 	if certsDir := extractCertsDirFromOpts(body); certsDir != "" {
@@ -835,8 +911,9 @@ func bootstrapBuckitConfigFromPeer(ctx context.Context, deps Deps, rc *runCtx, t
 			parent := pathDir(certsDir)
 			entry := pathBase(certsDir)
 			if err := copyRemoteTarball(ctx, deps, rc, peer, target, parent, entry); err != nil {
-				return fmt.Errorf("copy %s from %s: %w", certsDir, peer.Hostname, err)
+				return bootstrappedPaths{}, fmt.Errorf("copy %s from %s: %w", certsDir, peer.Hostname, err)
 			}
+			copied.CertsDir = certsDir
 		}
 	}
 	// Persistent systemd drop-ins (e.g. /etc/systemd/system/buckit.service.d/*.conf)
@@ -846,12 +923,37 @@ func bootstrapBuckitConfigFromPeer(ctx context.Context, deps Deps, rc *runCtx, t
 	// limits, etc.) as the peer.
 	dropIns, err := probeBuckitDropInPaths(ctx, deps, rc, peer)
 	if err != nil {
-		return fmt.Errorf("probe drop-ins on %s: %w", peer.Hostname, err)
+		return bootstrappedPaths{}, fmt.Errorf("probe drop-ins on %s: %w", peer.Hostname, err)
 	}
 	for _, p := range dropIns {
 		if err := copyRemoteFile(ctx, deps, rc, peer, target, p, "644"); err != nil {
-			return fmt.Errorf("copy %s from %s: %w", p, peer.Hostname, err)
+			return bootstrappedPaths{}, fmt.Errorf("copy %s from %s: %w", p, peer.Hostname, err)
 		}
+	}
+	return copied, nil
+}
+
+// chownBootstrappedConfig hands the secondary env file and certs dir
+// over to the service user/group on the target. Mirrors deploy's
+// `install -o user -g group -m 600` for the secondary and the
+// recursive chown deploy does on /etc/minio/certs. Files that systemd
+// itself reads (primary env file, drop-ins) intentionally stay
+// root-owned. No-op when both paths are empty.
+func chownBootstrappedConfig(ctx context.Context, deps Deps, rc *runCtx, target domain.Node, paths bootstrappedPaths, user, group string) error {
+	if paths.Secondary == "" && paths.CertsDir == "" {
+		return nil
+	}
+	owner := shellQuote(user) + ":" + shellQuote(group)
+	var script strings.Builder
+	script.WriteString("set -e\n")
+	if paths.Secondary != "" {
+		fmt.Fprintf(&script, "chown %s %s\n", owner, shellQuote(paths.Secondary))
+	}
+	if paths.CertsDir != "" {
+		fmt.Fprintf(&script, "chown -R %s %s\n", owner, shellQuote(paths.CertsDir))
+	}
+	if _, err := runHostStep(ctx, deps, rc, target, sudoBash(rc.sshCreds.User, script.String())); err != nil {
+		return fmt.Errorf("%s chown config: %w", target.Hostname, err)
 	}
 	return nil
 }

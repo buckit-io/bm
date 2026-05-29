@@ -28,6 +28,7 @@ func newClusterDeploy(opts Options) http.HandlerFunc {
 		}
 		params := deploy.FromDraft(draft)
 		if err := params.Validate(); err != nil {
+			logAction(r, "new_cluster.deploy", "result", "validation_failed", "cluster", draft.Name, "reason", err.Error())
 			writeError(w, http.StatusBadRequest, "validation_failed", err.Error())
 			return
 		}
@@ -35,6 +36,7 @@ func newClusterDeploy(opts Options) http.HandlerFunc {
 		// collisions internally, but rejecting at dispatch is a nicer UX.
 		slug := deploy.SlugifyName(params.Name)
 		if exists, err := opts.Clusters.Exists(r.Context(), slug); err == nil && exists {
+			logAction(r, "new_cluster.deploy", "result", "slug_taken", "cluster", draft.Name, "slug", slug)
 			writeError(w, http.StatusConflict, "slug_taken", fmt.Sprintf("cluster id %q already exists", slug))
 			return
 		}
@@ -54,12 +56,16 @@ func newClusterDeploy(opts Options) http.HandlerFunc {
 		taskID, err := opts.Tasks.Dispatch(r.Context(), req)
 		switch {
 		case err == nil:
+			logAction(r, "new_cluster.deploy", "result", "queued", "cluster", params.Name, "slug", slug, "hosts", len(params.Hosts), "mounts", len(params.Topology.SelectedMounts), "task_id", taskID)
 			writeJSON(w, http.StatusAccepted, tasks.DispatchResponse{TaskID: taskID})
 		case errors.Is(err, tasks.ErrClusterBusy):
+			logAction(r, "new_cluster.deploy", "result", "cluster_busy", "cluster", params.Name, "slug", slug, "reason", err.Error())
 			writeError(w, http.StatusConflict, "cluster_busy", err.Error())
 		case errors.Is(err, tasks.ErrUnknownKind):
+			logAction(r, "new_cluster.deploy", "result", "unknown_kind", "cluster", params.Name, "slug", slug, "reason", err.Error())
 			writeError(w, http.StatusBadRequest, "unknown_kind", err.Error())
 		default:
+			logAction(r, "new_cluster.deploy", "result", "dispatch_failed", "cluster", params.Name, "slug", slug, "reason", err.Error())
 			writeError(w, http.StatusBadRequest, "dispatch_failed", err.Error())
 		}
 	}

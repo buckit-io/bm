@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -100,6 +101,7 @@ func (m *Manager) Dispatch(ctx context.Context, req DispatchRequest) (string, er
 	m.putRun(taskID, rs)
 
 	go m.executeRun(runCtx, exec, req, taskID, rs)
+	fmt.Fprintf(os.Stderr, "task.dispatch task_id=%q cluster_id=%q kind=%q label=%q\n", taskID, req.ClusterID, req.Kind, req.OpLabel)
 
 	return taskID, nil
 }
@@ -107,6 +109,7 @@ func (m *Manager) Dispatch(ctx context.Context, req DispatchRequest) (string, er
 func (m *Manager) executeRun(ctx context.Context, exec Executor, req DispatchRequest, taskID string, rs *runState) {
 	defer m.clusterLock(rs.clusterID).Unlock()
 	defer rs.cancel() // satisfy lostcancel — graceful path completes before this fires
+	fmt.Fprintf(os.Stderr, "task.start task_id=%q cluster_id=%q kind=%q\n", taskID, req.ClusterID, req.Kind)
 
 	run := &Run{
 		TaskID:    taskID,
@@ -150,6 +153,7 @@ func (m *Manager) executeRun(ctx context.Context, exec Executor, req DispatchReq
 	if updateErr != nil {
 		fmt.Printf("tasks: history update for %s failed: %v\n", taskID, updateErr)
 	}
+	fmt.Fprintf(os.Stderr, "task.finish task_id=%q cluster_id=%q kind=%q state=%q failure=%q duration_sec=%.3f\n", taskID, req.ClusterID, req.Kind, finalState.State, finalState.FailureNote, duration)
 
 	rs.hub.CloseAfterTerminal(finalState)
 

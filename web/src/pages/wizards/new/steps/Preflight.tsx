@@ -23,6 +23,16 @@ function uniqueMessage(
   return [...messages][0];
 }
 
+// severityLabel returns the effective severity for the row. A check's
+// declared severity only matters when it hard-fails — a `warn` result
+// never blocks deploy (the gate counts blocking *fails* only), so a
+// warning on a blocking check is surfaced as "Advisory" to avoid the
+// contradictory "Blocking" badge next to a Warning pill.
+function severityLabel(p: PreflightResult): string {
+  if (p.result === "warn") return "Advisory";
+  return p.severity === "blocking" ? "Blocking" : "Advisory";
+}
+
 function resultPill(r: PreflightResult["result"]) {
   switch (r) {
     case "pass":
@@ -80,6 +90,9 @@ export function Preflight({ draft, update }: Props) {
       <header className="hstack" style={{ justifyContent: "space-between" }}>
         <div>
           <h2 style={{ fontSize: "var(--fs-xl)", fontWeight: 600 }}>Preflight</h2>
+          <span data-testid="new-cluster-preflight-title" style={{ display: "none" }}>
+            Preflight
+          </span>
           <p className="muted" style={{ fontSize: "var(--fs-sm)", marginTop: 4 }}>
             Verifying every host is ready to receive Buckit. Blocking
             failures must be resolved before deploy.
@@ -112,6 +125,7 @@ export function Preflight({ draft, update }: Props) {
       </header>
 
       <div className="card card--table">
+        <div data-testid="new-cluster-preflight-table">
         <table className="table table--center">
           <thead>
             <tr>
@@ -142,7 +156,7 @@ export function Preflight({ draft, update }: Props) {
                       className="subtle"
                       style={{ fontSize: "var(--fs-xs)" }}
                     >
-                      {p.severity === "blocking" ? "Blocking" : "Advisory"}
+                      {severityLabel(p)}
                     </span>
                   </td>
                   <td className="subtle">
@@ -177,6 +191,7 @@ export function Preflight({ draft, update }: Props) {
             })}
           </tbody>
         </table>
+        </div>
       </div>
 
       {blockingFails > 0 && (

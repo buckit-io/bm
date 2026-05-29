@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { WizardShell } from "../../../layouts/WizardShell";
 import { useCluster, useNodes } from "../../../api/hooks";
-import { emptyMigration, HostRow, MigrationDraft, STEPS } from "./state";
+import { saveClusterSshConfig } from "../../../api/client";
+import { emptyMigration, HostRow, MigrationDraft, SshOverrides, STEPS } from "./state";
 import { Overview } from "./steps/Overview";
 import { SshCredentials } from "./steps/SshCredentials";
 import { Review } from "./steps/Review";
@@ -31,6 +32,11 @@ function MigrationWizardInner({ sourceId, navigate }: InnerProps) {
 
   const [draft, setDraft] = useState<MigrationDraft | null>(null);
   const [index, setIndex] = useState(0);
+  // Set while persisting SSH creds on advance from the SshCredentials
+  // step (index 1). Blocks the Next button during the round-trip so
+  // the operator can't double-click and double-dispatch.
+  const [savingSsh, setSavingSsh] = useState(false);
+  const [sshSaveError, setSshSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     if (draft) return;
@@ -54,7 +60,37 @@ function MigrationWizardInner({ sourceId, navigate }: InnerProps) {
   const update = (patch: Partial<MigrationDraft>) =>
     setDraft((d) => (d ? { ...d, ...patch } : d));
 
-  const next = () => setIndex((i) => Math.min(STEPS.length - 1, i + 1));
+  const next = async () => {
+    // Persist SSH creds + per-host ports when leaving the SSH step.
+    // Without this, the per-host port the operator entered (used by
+    // the cutover dispatch) never lands on the cluster's Node records
+    // — post-migration ops (provisioning, restart, etc.) would fall
+    // back to Node.SSHPort = 22 from import discovery.
+    if (index === 1 && draft) {
+      setSavingSsh(true);
+      setSshSaveError(null);
+      try {
+        const overrides: Record<string, SshOverrides> = {};
+        for (const h of draft.hosts) {
+          if (h.sshOverride) overrides[h.id] = h.sshOverride;
+        }
+        const hostPorts = draft.hosts
+          .filter((h) => h.id && h.hostname.trim() && (h.port ?? 0) > 0)
+          .map((h) => ({ id: h.id, port: h.port }));
+        await saveClusterSshConfig(
+          draft.sourceClusterId,
+          { ssh: draft.ssh, overrides },
+          { persist: draft.persistSsh, hosts: hostPorts },
+        );
+      } catch (e) {
+        setSshSaveError(e instanceof Error ? e.message : String(e));
+        setSavingSsh(false);
+        return;
+      }
+      setSavingSsh(false);
+    }
+    setIndex((i) => Math.min(STEPS.length - 1, i + 1));
+  };
   const back = () => setIndex((i) => Math.max(0, i - 1));
 
   const nextDisabled = useMemo(() => {
@@ -75,6 +111,12 @@ function MigrationWizardInner({ sourceId, navigate }: InnerProps) {
         (p) => p.severity === "blocking" && p.result === "fail",
       );
     }
+    // SSH step (index 1): block while the SSH save round-trip is in
+    // flight so a fast double-click can't dispatch the next step
+    // before persistence completes.
+    if (index === 1 && savingSsh) {
+      return true;
+    }
     // Migrate step (index 3): block Next while cutover is still running.
     // (It's the last step anyway, so onNext is undefined — included for
     // safety in case routing changes later.)
@@ -83,7 +125,7 @@ function MigrationWizardInner({ sourceId, navigate }: InnerProps) {
       return draft.cutover.overallNodesDone < totalHosts;
     }
     return false;
-  }, [index, draft]);
+  }, [index, draft, savingSsh]);
 
   if (clusterLoading || nodesLoading || !draft) {
     return (
@@ -132,7 +174,20 @@ function MigrationWizardInner({ sourceId, navigate }: InnerProps) {
         index === 2 ? "Start migration" : "Next →"
       }
     >
-      <div className="wizard__inner">{body}</div>
+      <div className="wizard__inner">
+        {sshSaveError && index === 1 && (
+          <div
+            className="banner banner--error"
+            style={{ marginBottom: "var(--s-3)" }}
+          >
+            <span>⚠</span>
+            <span>
+              <b>Failed to save SSH configuration:</b> {sshSaveError}
+            </span>
+          </div>
+        )}
+        {body}
+      </div>
     </WizardShell>
   );
 }

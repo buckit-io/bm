@@ -10,7 +10,7 @@ interface Props {
 
 function disksSummary(r: DiscoveryResult): string {
   if (!r.drives) return "—";
-  const data = r.drives.filter((d) => !d.isBoot);
+  const data = r.drives.filter((d) => !d.isBoot && !d.isSystem);
   if (data.length === 0) return "no data drives";
   const mounted = data.filter((d) => d.mount).length;
   const unformatted = data.filter((d) => !d.fsType).length;
@@ -97,6 +97,9 @@ export function Discover({ draft, update }: Props) {
     <div className="vstack" style={{ gap: "var(--s-4)" }}>
       <header>
         <h2 style={{ fontSize: "var(--fs-xl)", fontWeight: 600 }}>Discovery</h2>
+        <span data-testid="new-cluster-discovery-title" style={{ display: "none" }}>
+          Discovery
+        </span>
         <p className="muted" style={{ fontSize: "var(--fs-sm)", marginTop: 4 }}>
           Probing each host over SSH for OS, kernel, architecture, CPU, RAM,
           and disks.
@@ -117,7 +120,9 @@ export function Discover({ draft, update }: Props) {
           />
         </div>
         <span className="subtle">
+          <span data-testid="new-cluster-discovery-progress">
           {done} / {validHosts.length} complete
+          </span>
         </span>
       </div>
 

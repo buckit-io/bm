@@ -34,6 +34,14 @@ func TestParseMountCheckOutput(t *testing.T) {
 			want: nil,
 		},
 		{
+			name: "data path itself is the mount (no subdir layout) passes",
+			in: "/mnt/data/drive0\tmounted\n" +
+				"/mnt/data/drive1\tmounted\n" +
+				"/mnt/data/drive2\tmounted\n" +
+				"/mnt/data/drive3\tmounted\n",
+			want: nil,
+		},
+		{
 			name: "multiple not mounted",
 			in: "/mnt/data1/buckit\tnot-mounted:/mnt/data1\n" +
 				"/mnt/data2/buckit\tnot-mounted:/mnt/data2\n" +

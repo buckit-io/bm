@@ -37,8 +37,8 @@ func TestRenderConfigEnvSwitchesToHttpsWhenTLSEnabled(t *testing.T) {
 	if !strings.Contains(got, "--certs-dir "+CertsDir) {
 		t.Fatalf("expected --certs-dir flag in MINIO_OPTS:\n%s", got)
 	}
-	if !strings.Contains(got, `MINIO_SERVER_URL="https://node1.example.com:9000"`) {
-		t.Fatalf("expected https server URL:\n%s", got)
+	if strings.Contains(got, "MINIO_SERVER_URL=") {
+		t.Fatalf("did not expect synthesized MINIO_SERVER_URL when serverUrl is unset:\n%s", got)
 	}
 }
 

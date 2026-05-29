@@ -42,6 +42,9 @@ type StepEvent struct {
 // SSH pool so multiple sequential hosts amortize handshake cost.
 type Installer struct {
 	Pool *bmssh.Pool
+	// StartTimeout caps how long we wait for systemctl enable --now to return.
+	// Default 120s.
+	StartTimeout time.Duration
 	// HealthyTimeout caps how long we wait for the local /minio/health/live
 	// probe after starting the service. Default 60s.
 	HealthyTimeout time.Duration
@@ -50,7 +53,11 @@ type Installer struct {
 // NewInstaller returns an Installer using pool. nil-safe (returns nil-friendly
 // Installer that fails the first dial with a clear error).
 func NewInstaller(pool *bmssh.Pool) *Installer {
-	return &Installer{Pool: pool, HealthyTimeout: 60 * time.Second}
+	return &Installer{
+		Pool:           pool,
+		StartTimeout:   120 * time.Second,
+		HealthyTimeout: 60 * time.Second,
+	}
 }
 
 // Install walks one host through the full deploy pipeline. emit is called on
@@ -171,7 +178,7 @@ func (in *Installer) Install(ctx context.Context, host domain.HostRow, params De
 	}
 
 	report(StageStarting, "systemctl enable --now buckit.service")
-	if err := runStep(ctx, client, sudoWrap(creds, "systemctl daemon-reload && systemctl enable --now buckit.service")); err != nil {
+	if err := in.runStartStep(ctx, client, host, params, creds, report); err != nil {
 		reportErr(StageFailed, fmt.Errorf("systemctl: %w", err))
 		return err
 	}
@@ -207,6 +214,86 @@ func RunStep(ctx context.Context, client *ssh.Client, cmd string) error {
 		return fmt.Errorf("%s", stderr)
 	}
 	return nil
+}
+
+func (in *Installer) runStartStep(ctx context.Context, client *ssh.Client, host domain.HostRow, params DeployParams, creds bmssh.Resolved, report func(Stage, string)) error {
+	timeout := in.StartTimeout
+	if timeout <= 0 {
+		timeout = 120 * time.Second
+	}
+	startCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := sudoWrap(creds, "systemctl daemon-reload && systemctl enable --now buckit.service")
+	err := runStep(startCtx, client, cmd)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+
+	report(StageStarting, fmt.Sprintf("Timed out after %s; dropping SSH client and reconnecting for diagnostics", timeout))
+	diagClient := client
+	if fresh, reacquireErr := in.reconnectHost(ctx, host, params, creds); reacquireErr == nil && fresh != nil {
+		report(StageStarting, "Reconnected SSH client for timeout diagnostics")
+		diagClient = fresh
+	} else if reacquireErr != nil {
+		report(StageStarting, "Reconnect for timeout diagnostics failed: "+reacquireErr.Error())
+	}
+
+	report(StageStarting, "Collecting systemd status and journal after start timeout")
+	diag := in.collectStartDiagnostics(ctx, diagClient, creds)
+	report(StageStarting, "Stopping buckit.service after timeout")
+	_ = stopServiceBestEffort(ctx, diagClient, creds)
+	if diag != "" {
+		return fmt.Errorf("timed out after %s waiting for buckit.service to start\n%s", timeout, diag)
+	}
+	return fmt.Errorf("timed out after %s waiting for buckit.service to start", timeout)
+}
+
+func (in *Installer) reconnectHost(ctx context.Context, host domain.HostRow, params DeployParams, creds bmssh.Resolved) (*ssh.Client, error) {
+	if in == nil || in.Pool == nil {
+		return nil, errors.New("deploy: nil installer / pool")
+	}
+	clusterID := deployClusterIDPlaceholder(params.Name)
+	in.Pool.Drop(clusterID, host.ID)
+	reconnectCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	ref := domain.HostRef{ID: host.ID, Hostname: host.Hostname, Port: host.Port}
+	return in.Pool.Get(reconnectCtx, clusterID, ref, creds)
+}
+
+func (in *Installer) collectStartDiagnostics(ctx context.Context, client *ssh.Client, creds bmssh.Resolved) string {
+	diagCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	parts := make([]string, 0, 2)
+	if status, err := captureCommand(diagCtx, client, sudoWrap(creds, "systemctl status buckit.service --no-pager -l || true")); err == nil && status != "" {
+		parts = append(parts, "systemctl status buckit.service:\n"+status)
+	}
+	if journal, err := captureCommand(diagCtx, client, sudoWrap(creds, "journalctl -u buckit.service -n 100 --no-pager || true")); err == nil && journal != "" {
+		parts = append(parts, "journalctl -u buckit.service -n 100:\n"+journal)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func stopServiceBestEffort(ctx context.Context, client *ssh.Client, creds bmssh.Resolved) error {
+	stopCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	return runStep(stopCtx, client, sudoWrap(creds, "systemctl stop buckit.service || true"))
+}
+
+func captureCommand(ctx context.Context, client *ssh.Client, cmd string) (string, error) {
+	r, err := bmssh.Run(ctx, client, cmd)
+	if err != nil {
+		return "", err
+	}
+	out := strings.TrimSpace(r.Stdout)
+	if out == "" {
+		out = strings.TrimSpace(r.Stderr)
+	}
+	return out, nil
 }
 
 func (in *Installer) waitHealthy(ctx context.Context, client *ssh.Client, port int, tls bool) error {
@@ -301,25 +388,25 @@ const secondaryEnvFile = "/etc/minio/config.env"
 // renderConfigEnv writes the /etc/default/minio body with the path to the
 // secondary env file (which carries the root credentials), region, listen
 // ports, and the selected MINIO_VOLUMES. When TLS is enabled the rendered
-// scheme flips to https and MINIO_OPTS gains --certs-dir.
-func renderConfigEnv(p DeployParams, host domain.HostRow) string {
-	scheme := "http"
+// scheme flips to https and MINIO_OPTS gains --certs-dir. MINIO_SERVER_URL is
+// only written when the operator explicitly sets a cluster-wide server URL;
+// deriving a per-host default makes distributed nodes reject each other due to
+// mismatched MINIO_* environment values.
+func renderConfigEnv(p DeployParams, _ domain.HostRow) string {
 	opts := fmt.Sprintf("--address :%d --console-address :%d", p.API.Port, p.API.ConsolePort)
 	if p.TLS.Enabled() {
-		scheme = "https"
 		opts = fmt.Sprintf("%s --certs-dir %s", opts, CertsDir)
 	}
 	volumes := renderVolumes(p)
 	serverURL := strings.TrimSpace(p.ServerURL)
-	if serverURL == "" {
-		serverURL = fmt.Sprintf("%s://%s:%d", scheme, host.Hostname, p.API.Port)
-	}
 	var b strings.Builder
 	b.WriteString(formatEnv("MINIO_CONFIG_ENV_FILE", secondaryEnvFile))
 	b.WriteString(formatEnv("MINIO_VOLUMES", volumes))
 	b.WriteString(formatEnv("MINIO_REGION", p.Region))
 	b.WriteString(formatEnv("MINIO_OPTS", opts))
-	b.WriteString(formatEnv("MINIO_SERVER_URL", serverURL))
+	if serverURL != "" {
+		b.WriteString(formatEnv("MINIO_SERVER_URL", serverURL))
+	}
 	return b.String()
 }
 

@@ -42,9 +42,11 @@ func migrateSnapshot(opts Options) http.HandlerFunc {
 		dir := snapshotsDir(opts)
 		snap, path, err := migration.Snapshot(ctx, dir, clusterID, creds)
 		if err != nil {
+			logAction(r, "migrate.snapshot", "result", "failed", "cluster_id", clusterID, "reason", err.Error())
 			writeError(w, http.StatusInternalServerError, "snapshot_failed", err.Error())
 			return
 		}
+		logAction(r, "migrate.snapshot", "result", "ok", "cluster_id", clusterID, "path", path, "buckets", len(snap.Buckets))
 		writeJSON(w, http.StatusOK, map[string]any{
 			"snapshot": snap,
 			"summary":  migration.Summarize(snap),
@@ -108,6 +110,8 @@ func migratePreflight(opts Options) http.HandlerFunc {
 
 		conn := &poolHostConn{pool: opts.SSHPool, ssh: draft.SSH, httpClient: &http.Client{Timeout: 10 * time.Second}}
 		results := preflight.RunCatalog(ctx, conn, draft, migration.Catalog(creds))
+		logAction(r, "migrate.preflight", "cluster_id", clusterID, "hosts", len(draft.Hosts))
+		logPreflightResults(r, "migrate.preflight", results)
 
 		// Write a history row so the migration audit shows when preflight last ran.
 		if opts.Tasks != nil {

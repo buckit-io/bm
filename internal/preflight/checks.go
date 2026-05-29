@@ -29,9 +29,10 @@ func NewClusterCatalog() []Check {
 		{ID: "rpm", Label: "Package URL reachable from this host", Severity: domain.PreflightBlocking, Eval: checkArtifactBM},
 		{ID: "artifact_reachable", Label: "Package URL reachable from each host", Severity: domain.PreflightBlocking, Eval: checkArtifactPerHost},
 		{ID: "free", Label: "Free space on selected drives", Severity: domain.PreflightBlocking, Eval: checkFreeSpace},
+		{ID: "root_disk", Label: "Selected paths not on root filesystem", Severity: domain.PreflightBlocking, Eval: checkRootDisk},
 		{ID: "stale_format", Label: "No existing .minio.sys/format.json file on data drive", Severity: domain.PreflightBlocking, Eval: checkStaleFormat},
 		{ID: "dns", Label: "DNS / hostname resolution", Severity: domain.PreflightBlocking, Eval: checkDNS},
-		{ID: "ports", Label: "Inter-node port reachability (9000, 9001)", Severity: domain.PreflightBlocking, Eval: checkPortsReachable},
+		{ID: "ports", Label: "Inter-node ICMP reachability", Severity: domain.PreflightBlocking, Eval: checkPeerPingReachable},
 		{ID: "ports_conflict", Label: "Conflicting listeners on 9000/9001", Severity: domain.PreflightBlocking, Eval: checkPortsConflict},
 		{ID: "arch_uniform", Label: "Architecture uniformity (amd64 / arm64)", Severity: domain.PreflightBlocking, Eval: checkArchUniform},
 		{ID: "os_uniform", Label: "OS uniformity (same distro family)", Severity: domain.PreflightAdvisory, Eval: checkOSUniform},
@@ -135,7 +136,7 @@ func checkFreeSpace(ctx context.Context, conn HostConn, draft domain.NewClusterD
 	}
 	return Outcome{HostStatuses: perHost(ctx, draft, func(ctx context.Context, h domain.HostRow) domain.PreflightHostStatus {
 		for _, m := range mounts {
-			cmd := fmt.Sprintf("df -B1 --output=avail %q", m)
+			cmd := freeSpaceProbeCmd(m)
 			stdout, _, exit, err := runHostCommand(ctx, conn, h, cmd)
 			if err != nil || exit != 0 {
 				return failStatus(h, fmt.Sprintf("%s: %s", m, errSummary(err)))
@@ -177,6 +178,47 @@ func checkStaleFormat(ctx context.Context, conn HostConn, draft domain.NewCluste
 		}
 		if len(stale) > 0 {
 			return failStatus(h, "existing .minio.sys/format.json found on "+formatList(stale)+" — drive belongs to another cluster; erase or pick a different mount")
+		}
+		return passStatus(h, "")
+	})}
+}
+
+func checkRootDisk(ctx context.Context, conn HostConn, draft domain.NewClusterDraft) Outcome {
+	mounts := draft.Topology.SelectedMounts
+	if len(mounts) == 0 {
+		return overall(domain.PreflightSkipped, "")
+	}
+	if len(applicableHosts(draft))*len(mounts) == 1 {
+		return overall(domain.PreflightSkipped, "Single-drive standalone mode may use a root-backed path.")
+	}
+	return Outcome{HostStatuses: perHost(ctx, draft, func(ctx context.Context, h domain.HostRow) domain.PreflightHostStatus {
+		for _, m := range mounts {
+			stdout, _, exit, err := runHostCommand(ctx, conn, h, rootDiskProbeCmd(m))
+			if err != nil {
+				return failStatus(h, fmt.Sprintf("%s: %s", m, errSummary(err)))
+			}
+			switch exit {
+			case 0:
+				continue
+			case 3:
+				msg := strings.TrimSpace(stdout)
+				if msg == "" {
+					msg = "path resolves to the root filesystem"
+				}
+				return failStatus(h, fmt.Sprintf("%s: %s", m, msg))
+			case 4:
+				msg := strings.TrimSpace(stdout)
+				if msg == "" {
+					msg = "path exists but is not a directory"
+				}
+				return failStatus(h, fmt.Sprintf("%s: %s", m, msg))
+			default:
+				msg := strings.TrimSpace(stdout)
+				if msg == "" {
+					msg = fmt.Sprintf("probe failed (exit %d)", exit)
+				}
+				return failStatus(h, fmt.Sprintf("%s: %s", m, msg))
+			}
 		}
 		return passStatus(h, "")
 	})}
@@ -232,18 +274,14 @@ func checkDNS(ctx context.Context, conn HostConn, draft domain.NewClusterDraft) 
 	})}
 }
 
-func checkPortsReachable(ctx context.Context, conn HostConn, draft domain.NewClusterDraft) Outcome {
+// checkPeerPingReachable verifies basic host-to-host network reachability
+// without assuming peer SSH access or Buckit service ports. The deploy flow
+// already checks manager->host SSH reachability; this lighter check is only to
+// catch obvious peer-network isolation before install.
+func checkPeerPingReachable(ctx context.Context, conn HostConn, draft domain.NewClusterDraft) Outcome {
 	hosts := applicableHosts(draft)
 	if len(hosts) < 2 {
 		return overall(domain.PreflightSkipped, "Single-host deployment.")
-	}
-	apiPort := draft.API.Port
-	consolePort := draft.API.ConsolePort
-	if apiPort == 0 {
-		apiPort = 9000
-	}
-	if consolePort == 0 {
-		consolePort = 9001
 	}
 	return Outcome{HostStatuses: perHost(ctx, draft, func(ctx context.Context, h domain.HostRow) domain.PreflightHostStatus {
 		var blocked []string
@@ -251,12 +289,10 @@ func checkPortsReachable(ctx context.Context, conn HostConn, draft domain.NewClu
 			if peer.Hostname == h.Hostname {
 				continue
 			}
-			for _, port := range []int{apiPort, consolePort} {
-				cmd := fmt.Sprintf("timeout 2 bash -c '</dev/tcp/%s/%d'", peer.Hostname, port)
-				_, _, exit, err := runHostCommand(ctx, conn, h, cmd)
-				if err != nil || exit != 0 {
-					blocked = append(blocked, fmt.Sprintf("%s:%d", peer.Hostname, port))
-				}
+			cmd := fmt.Sprintf("ping -c 1 -W 1 %s", shellEscape(peer.Hostname))
+			_, _, exit, err := runHostCommand(ctx, conn, h, cmd)
+			if err != nil || exit != 0 {
+				blocked = append(blocked, peer.Hostname)
 			}
 		}
 		if len(blocked) > 0 {
@@ -450,6 +486,9 @@ func checkXFS(ctx context.Context, conn HostConn, draft domain.NewClusterDraft) 
 	if len(mounts) == 0 {
 		return overall(domain.PreflightSkipped, "")
 	}
+	if draft.Topology.DataVolumeMode == "custom" {
+		return overall(domain.PreflightSkipped, "Custom paths may not exist yet; filesystem type will be validated when the target directories are created.")
+	}
 	mountSet := map[string]bool{}
 	for _, m := range mounts {
 		mountSet[m] = true
@@ -547,6 +586,9 @@ func checkDriveUniformity(_ context.Context, _ HostConn, draft domain.NewCluster
 	mounts := draft.Topology.SelectedMounts
 	if len(mounts) == 0 {
 		return overall(domain.PreflightFail, "No drives selected on the Topology step.")
+	}
+	if draft.Topology.DataVolumeMode == "custom" {
+		return overall(domain.PreflightPass, fmt.Sprintf("Using %d operator-specified custom path(s) on every host.", len(mounts)))
 	}
 	mountSet := map[string]bool{}
 	for _, m := range mounts {
@@ -661,6 +703,16 @@ func shellEscape(s string) string {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+func freeSpaceProbeCmd(target string) string {
+	quoted := shellEscape(strings.TrimSpace(target))
+	return fmt.Sprintf("p=%s; while [ ! -e \"$p\" ] && [ \"$p\" != / ]; do p=$(dirname \"$p\"); done; df -B1 --output=avail \"$p\"", quoted)
+}
+
+func rootDiskProbeCmd(target string) string {
+	quoted := shellEscape(strings.TrimSpace(target))
+	return fmt.Sprintf("target=%s; if [ -e \"$target\" ] && [ ! -d \"$target\" ]; then echo 'path exists but is not a directory'; exit 4; fi; p=\"$target\"; while [ ! -e \"$p\" ] && [ \"$p\" != / ]; do p=$(dirname \"$p\"); done; dev=$(stat -c %%d \"$p\") || exit $?; root=$(stat -c %%d /) || exit $?; if [ \"$dev\" = \"$root\" ]; then echo \"path resolves to the root filesystem via $p\"; exit 3; fi", quoted)
 }
 
 // detectBraceExpansion is a tiny check for whether hostnames fit one

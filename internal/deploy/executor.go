@@ -78,7 +78,7 @@ func (e *Executor) Execute(ctx context.Context, run *tasks.Run) error {
 		s.Current = &zero
 	})
 
-	concurrency := deployConcurrency()
+	concurrency := deployConcurrency(len(params.Hosts))
 	if concurrency < 1 {
 		concurrency = 1
 	}
@@ -129,8 +129,9 @@ func (e *Executor) Execute(ctx context.Context, run *tasks.Run) error {
 	}
 
 	if concurrency == 1 {
-		// Sequential — default. Halts on first failure so the operator can
-		// inspect the partial state without further hosts getting touched.
+		// Sequential mode is still available as an explicit override, but the
+		// default deploy path fans out across hosts so distributed services can
+		// actually reach quorum during their initial startup.
 		for _, h := range params.Hosts {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -141,7 +142,7 @@ func (e *Executor) Execute(ctx context.Context, run *tasks.Run) error {
 			}
 		}
 	} else {
-		// Parallel — operator opt-in via BM_DEPLOY_CONCURRENCY.
+		// Parallel by default, overrideable via BM_DEPLOY_CONCURRENCY.
 		sem := make(chan struct{}, concurrency)
 		var wg sync.WaitGroup
 		for _, h := range params.Hosts {
@@ -312,14 +313,14 @@ func stageToHostState(s Stage) tasks.HostOpState {
 	}
 }
 
-func deployConcurrency() int {
+func deployConcurrency(defaultValue int) int {
 	v := os.Getenv("BM_DEPLOY_CONCURRENCY")
 	if v == "" {
-		return 1
+		return defaultValue
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil || n < 1 {
-		return 1
+		return defaultValue
 	}
 	return n
 }

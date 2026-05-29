@@ -163,12 +163,37 @@ func postOperation(mgr *tasks.Manager) http.HandlerFunc {
 		taskID, err := mgr.Dispatch(r.Context(), req)
 		switch {
 		case err == nil:
+			logAction(r, "ops.dispatch",
+				"result", "queued",
+				"op_kind", string(req.Kind),
+				"cluster_id", req.ClusterID,
+				"task_id", taskID,
+				"hosts", len(req.TargetHostIDs),
+			)
 			writeJSON(w, http.StatusAccepted, tasks.DispatchResponse{TaskID: taskID})
 		case errors.Is(err, tasks.ErrUnknownKind):
+			logAction(r, "ops.dispatch",
+				"result", "unknown_kind",
+				"op_kind", string(req.Kind),
+				"cluster_id", req.ClusterID,
+				"reason", err.Error(),
+			)
 			writeError(w, http.StatusBadRequest, "unknown_kind", err.Error())
 		case errors.Is(err, tasks.ErrClusterBusy):
+			logAction(r, "ops.dispatch",
+				"result", "cluster_busy",
+				"op_kind", string(req.Kind),
+				"cluster_id", req.ClusterID,
+				"reason", err.Error(),
+			)
 			writeError(w, http.StatusConflict, "cluster_busy", err.Error())
 		default:
+			logAction(r, "ops.dispatch",
+				"result", "dispatch_failed",
+				"op_kind", string(req.Kind),
+				"cluster_id", req.ClusterID,
+				"reason", err.Error(),
+			)
 			writeError(w, http.StatusBadRequest, "dispatch_failed", err.Error())
 		}
 	}

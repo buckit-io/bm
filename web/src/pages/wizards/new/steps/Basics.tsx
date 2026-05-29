@@ -109,6 +109,7 @@ export function Basics({ draft, update }: Props) {
         <input
           id="name"
           className="input"
+          data-testid="new-cluster-name"
           value={draft.name}
           onChange={(e) => update({ name: e.target.value })}
           placeholder="prod-east"
@@ -134,6 +135,7 @@ export function Basics({ draft, update }: Props) {
         <select
           id="ver"
           className="select"
+          data-testid="new-cluster-version"
           value={draft.version}
           onChange={(e) => update({ version: e.target.value })}
         >
@@ -154,6 +156,7 @@ export function Basics({ draft, update }: Props) {
           <input
             id="custom-url"
             className="input"
+            data-testid="new-cluster-custom-url"
             value={draft.customUrl}
             onChange={(e) => update({ customUrl: e.target.value })}
             placeholder="https://example.com/buckit-v1.0.1-rc1.rpm"
@@ -173,6 +176,7 @@ export function Basics({ draft, update }: Props) {
           <input
             id="root-user"
             className="input"
+            data-testid="new-cluster-root-user"
             value={draft.credentials.rootUser}
             onChange={(e) =>
               update({
@@ -200,6 +204,7 @@ export function Basics({ draft, update }: Props) {
               id="root-pass"
               type={showPass ? "text" : "password"}
               className="input"
+              data-testid="new-cluster-root-password"
               value={draft.credentials.rootPassword}
               onChange={(e) =>
                 update({
@@ -496,7 +501,7 @@ function TlsSection({ tls, onChange }: TlsSectionProps) {
 function CheckStatus({ check }: { check: CustomUrlCheck }) {
   if (check.state === "idle") {
     return (
-      <span className="field-hint">
+      <span className="field-hint" data-testid="new-cluster-custom-url-status">
         Paste a direct URL to a <span className="mono">.rpm</span>,{" "}
         <span className="mono">.deb</span>, or raw binary. We'll verify it's
         reachable.
@@ -504,11 +509,15 @@ function CheckStatus({ check }: { check: CustomUrlCheck }) {
     );
   }
   if (check.state === "checking") {
-    return <span className="field-hint">Checking URL…</span>;
+    return <span className="field-hint" data-testid="new-cluster-custom-url-status">Checking URL…</span>;
   }
   if (check.state === "valid") {
     return (
-      <span className="field-hint" style={{ color: "var(--c-success)" }}>
+      <span
+        className="field-hint"
+        data-testid="new-cluster-custom-url-status"
+        style={{ color: "var(--c-success)" }}
+      >
         ✓ {check.message}
         {check.sizeBytes && ` · ${Math.round(check.sizeBytes / 1024 / 1024)} MB`}
       </span>
@@ -516,13 +525,21 @@ function CheckStatus({ check }: { check: CustomUrlCheck }) {
   }
   if (check.state === "warn") {
     return (
-      <span className="field-hint" style={{ color: "var(--c-warning)" }}>
+      <span
+        className="field-hint"
+        data-testid="new-cluster-custom-url-status"
+        style={{ color: "var(--c-warning)" }}
+      >
         ⚠ {check.message} You can proceed at your own risk.
       </span>
     );
   }
   return (
-    <span className="field-hint" style={{ color: "var(--c-danger)" }}>
+    <span
+      className="field-hint"
+      data-testid="new-cluster-custom-url-status"
+      style={{ color: "var(--c-danger)" }}
+    >
       ✗ {check.message}
     </span>
   );

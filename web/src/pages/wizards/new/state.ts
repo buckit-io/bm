@@ -181,15 +181,20 @@ export interface DiscoveredDrive {
   sizeBytes: number;
   fsType?: string;       // "xfs" | "ext4" | undefined (unformatted)
   isBoot?: boolean;      // host's root/boot disk; never eligible
+  isSystem?: boolean;    // system mount (/, /var, /usr, etc.); hidden by default
 }
 
 export interface Topology {
   setSize: number;
-  parity: 2 | 3 | 4 | 6 | 8;
+  parity: number;
+  dataVolumeMode: "auto" | "custom";
   // The mountpoints selected on the Topology step. Deploy uses a
   // managed `buckit/` subdirectory under each selected mount rather
   // than writing directly at the mount root.
   selectedMounts: string[];
+  // Operator-entered path list or brace pattern used when dataVolumeMode
+  // is custom. Expanded into selectedMounts before deploy.
+  customDataVolumePaths: string;
 }
 
 export interface PreflightResult {
@@ -268,7 +273,9 @@ export function emptyDraft(): NewClusterDraft {
     topology: {
       setSize: 16,
       parity: 4,
+      dataVolumeMode: "auto",
       selectedMounts: [],
+      customDataVolumePaths: "",
     },
     preflight: [],
     deploy: { perNode: {}, overallPct: 0, canceled: false },

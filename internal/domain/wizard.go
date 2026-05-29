@@ -70,9 +70,11 @@ type HostRow struct {
 
 // Topology matches state.ts:Topology.
 type Topology struct {
-	SetSize        int      `json:"setSize"`
-	Parity         int      `json:"parity"`
-	SelectedMounts []string `json:"selectedMounts"`
+	SetSize               int      `json:"setSize"`
+	Parity                int      `json:"parity"`
+	DataVolumeMode        string   `json:"dataVolumeMode,omitempty"`
+	SelectedMounts        []string `json:"selectedMounts"`
+	CustomDataVolumePaths string   `json:"customDataVolumePaths,omitempty"`
 }
 
 // DiscoveredDrive matches state.ts:DiscoveredDrive.
@@ -82,6 +84,7 @@ type DiscoveredDrive struct {
 	SizeBytes int64  `json:"sizeBytes"`
 	FsType    string `json:"fsType,omitempty"`
 	IsBoot    bool   `json:"isBoot,omitempty"`
+	IsSystem  bool   `json:"isSystem,omitempty"`
 }
 
 // WizardDiscoveryState matches state.ts:DiscoveryResult.state.

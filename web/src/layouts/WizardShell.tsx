@@ -28,12 +28,13 @@ export function WizardShell({
 }: WizardShellProps) {
   const navigate = useNavigate();
   return (
-    <div className="wizard">
+    <div className="wizard" data-testid="wizard-shell">
       <header className="wizard__topbar">
-        <h1 className="wizard__title">{title}</h1>
+        <h1 className="wizard__title" data-testid="wizard-title">{title}</h1>
         <button
           className="btn btn--ghost btn--sm"
           onClick={() => navigate("/clusters")}
+          data-testid="wizard-exit"
         >
           ✕ Exit
         </button>
@@ -51,6 +52,7 @@ export function WizardShell({
             className="btn"
             onClick={onBack}
             disabled={currentIndex === 0}
+            data-testid="wizard-back"
           >
             ← Back
           </button>
@@ -61,6 +63,7 @@ export function WizardShell({
             className="btn btn--primary"
             onClick={onNext}
             disabled={nextDisabled}
+            data-testid="wizard-next"
           >
             {nextLabel}
           </button>

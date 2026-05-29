@@ -7,9 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
+
+const sessionCancelGrace = 2 * time.Second
 
 // Line is one stdout or stderr line emitted by RunStream.
 type Line struct {
@@ -49,7 +52,7 @@ func Run(ctx context.Context, client *ssh.Client, cmd string) (Result, error) {
 	case <-ctx.Done():
 		_ = session.Signal(ssh.SIGTERM)
 		_ = session.Close()
-		<-done // wait for session.Run to return so the buffers stop being written
+		waitForRunDone(done)
 		return Result{Stdout: stdout.String(), Stderr: stderr.String()}, ctx.Err()
 	case err := <-done:
 		res := Result{Stdout: stdout.String(), Stderr: stderr.String()}
@@ -104,11 +107,11 @@ func RunStream(ctx context.Context, client *ssh.Client, cmd string, out chan<- L
 		_ = session.Signal(ssh.SIGTERM)
 		_ = session.Close()
 		waitErr = ctx.Err()
-		<-waitDone
+		waitForRunDone(waitDone)
 	case waitErr = <-waitDone:
 	}
-	<-pumpDone
-	<-pumpDone
+	waitForPumpDone(pumpDone)
+	waitForPumpDone(pumpDone)
 
 	if waitErr == nil {
 		return 0, nil
@@ -121,6 +124,20 @@ func RunStream(ctx context.Context, client *ssh.Client, cmd string, out chan<- L
 		return -1, waitErr
 	}
 	return -1, waitErr
+}
+
+func waitForRunDone(done <-chan error) {
+	select {
+	case <-done:
+	case <-time.After(sessionCancelGrace):
+	}
+}
+
+func waitForPumpDone(done <-chan struct{}) {
+	select {
+	case <-done:
+	case <-time.After(sessionCancelGrace):
+	}
 }
 
 func pumpLines(ctx context.Context, r io.Reader, stream string, out chan<- Line, done chan<- struct{}) {

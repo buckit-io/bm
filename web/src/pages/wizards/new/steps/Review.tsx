@@ -1,4 +1,5 @@
 import { NewClusterDraft } from "../state";
+import { deriveDeploymentMode } from "./deploymentMode";
 import { detectHostnamePattern } from "./hostnamePattern";
 
 interface Props { draft: NewClusterDraft; }
@@ -17,6 +18,21 @@ function humanSize(bytes: number): string {
 function storagePathForMount(mount: string): string {
   const trimmed = mount.replace(/\/+$/, "");
   return `${trimmed || "/"}${trimmed === "/" ? "" : "/"}${STORAGE_SUBDIR}`;
+}
+
+function sampleDriveSize(
+  discovery: Record<string, { drives?: { mount: string; sizeBytes: number; isBoot?: boolean; isSystem?: boolean }[] }>,
+  selectedMounts: string[],
+): number {
+  const wanted = new Set(selectedMounts);
+  if (wanted.size === 0) return 0;
+  for (const r of Object.values(discovery)) {
+    for (const d of r.drives ?? []) {
+      if (!wanted.has(d.mount)) continue;
+      if (d.sizeBytes > 0) return d.sizeBytes;
+    }
+  }
+  return 0;
 }
 
 function detectNumericPattern(values: string[]): string | null {
@@ -96,14 +112,20 @@ export function Review({ draft }: Props) {
   const t = draft.topology;
   const drivesPerNode = t.selectedMounts.length;
   const totalDrives = nodes.length * drivesPerNode;
+  const deploymentMode = deriveDeploymentMode(totalDrives);
+  const isStandalone = deploymentMode === "standalone";
+  const modeLabel =
+    deploymentMode === "standalone"
+      ? "Standalone"
+      : deploymentMode === "erasure"
+        ? "Erasure coded"
+        : "Not configured";
   // Estimate drive size from the first discovered eligible drive (real
   // backend uses preflight-validated uniformity).
-  const sampleSize =
-    Object.values(draft.discovery)
-      .flatMap((r) => r.drives ?? [])
-      .find((d) => !d.isBoot && d.sizeBytes > 0)?.sizeBytes ?? 0;
+  const sampleSize = sampleDriveSize(draft.discovery, t.selectedMounts);
   const rawBytes = totalDrives * sampleSize;
-  const usableBytes = rawBytes - rawBytes * (t.parity / Math.max(t.setSize, 1));
+  const usableBytes =
+    isStandalone ? rawBytes : rawBytes - rawBytes * (t.parity / Math.max(t.setSize, 1));
   const tlsOn = draft.tls.mode === "byo";
   const scheme: "http" | "https" = tlsOn ? "https" : "http";
   const hostname = nodes[0]?.hostname || "node1";
@@ -137,8 +159,20 @@ MINIO_ROOT_PASSWORD=********    # the password you set in Basics`;
           <div><div className="field-label">Cluster</div><div>{draft.name} ({draft.version})</div></div>
           <div><div className="field-label">Nodes</div><div>{nodes.length}</div></div>
           <div><div className="field-label">Pools</div><div>1</div></div>
+          <div><div className="field-label">Deployment mode</div><div>{modeLabel}</div></div>
           <div><div className="field-label">Drives</div><div>{totalDrives}</div></div>
-          <div><div className="field-label">Parity</div><div>EC:{t.parity}</div></div>
+          <div>
+            <div className="field-label">Data volumes</div>
+            <div>{t.dataVolumeMode === "custom" ? t.customDataVolumePaths : "auto"}</div>
+          </div>
+          {isStandalone ? (
+            <div><div className="field-label">Redundancy</div><div>None</div></div>
+          ) : (
+            <>
+              <div><div className="field-label">Set size</div><div>{t.setSize}</div></div>
+              <div><div className="field-label">Parity</div><div>EC:{t.parity}</div></div>
+            </>
+          )}
           <div><div className="field-label">Drives / node</div><div>{drivesPerNode || "—"}</div></div>
           <div><div className="field-label">Usable / Raw</div><div>~{humanSize(usableBytes)} / {humanSize(rawBytes)}</div></div>
           <div>

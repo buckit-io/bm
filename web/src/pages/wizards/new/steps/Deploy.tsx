@@ -62,6 +62,7 @@ export function Deploy({ draft, update }: Props) {
   doneRef.current = draft.done;
   const [taskId, setTaskId] = useState<string | null>(null);
   const [dispatchError, setDispatchError] = useState<string | null>(null);
+  const [failureDetail, setFailureDetail] = useState<string | null>(null);
 
   // Dispatch the deploy on first mount. The wizard guarantees this
   // step is only entered once per draft.
@@ -82,6 +83,7 @@ export function Deploy({ draft, update }: Props) {
       .catch((err) => {
         const message = err instanceof Error ? err.message : "Deploy dispatch failed.";
         setDispatchError(message);
+        setFailureDetail(message);
         update({
           deploy: {
             startedAt,
@@ -119,6 +121,9 @@ export function Deploy({ draft, update }: Props) {
         Math.round((Date.now() - new Date(startedAt).getTime()) / 1000),
       );
       const failureDetail = p.failureNote || p.detail || "Deploy failed.";
+      if (p.state === "failed") {
+        setFailureDetail(failureDetail);
+      }
       for (const h of hosts) {
         const hs = p.hostStatuses?.find((x) => x.hostId === h.id);
         if (!hs) {
@@ -136,14 +141,16 @@ export function Deploy({ draft, update }: Props) {
           elapsedSec: hs.durationSec ?? elapsedSec,
           lastEvent:
             failedHostState === "failed"
-              ? failureDetail
+              ? summarizeFailureDetail(failureDetail)
               : hs.detail ?? STATE_LABELS[hs.state],
         };
       }
       const total = p.total ?? hosts.length;
       const current = p.current ?? 0;
+      const anyHostRunning = p.hostStatuses?.some((x) => x.state === "running") ?? false;
       const pct =
-        p.state === "succeeded"
+        p.state === "succeeded" ||
+        (p.state !== "failed" && p.state !== "canceled" && current >= total && !anyHostRunning)
           ? 100
           : total > 0
             ? Math.min(99, Math.round((current / total) * 100))
@@ -186,7 +193,9 @@ export function Deploy({ draft, update }: Props) {
     <div className="vstack" style={{ gap: "var(--s-4)" }}>
       <header>
         <h2 style={{ fontSize: "var(--fs-xl)", fontWeight: 600 }}>
-          Deploying {draft.name || "cluster"}
+          <span data-testid="new-cluster-deploy-title">
+            Deploying {draft.name || "cluster"}
+          </span>
         </h2>
         <p className="muted" style={{ fontSize: "var(--fs-sm)", marginTop: 4 }}>
           {dispatchError
@@ -205,6 +214,9 @@ export function Deploy({ draft, update }: Props) {
           <div className="progress__bar" style={{ width: `${draft.deploy.overallPct}%` }} />
         </div>
         <span className="subtle">{draft.deploy.overallPct}%</span>
+        <span data-testid="new-cluster-deploy-progress" style={{ display: "none" }}>
+          {draft.deploy.overallPct}%
+        </span>
       </div>
 
       <div className="card" style={{ padding: 0 }}>
@@ -232,9 +244,32 @@ export function Deploy({ draft, update }: Props) {
         })}
       </div>
 
+      {failureDetail && (
+        <details className="card vstack" style={{ gap: "var(--s-2)" }} open>
+          <summary style={{ cursor: "pointer" }}>Failure details</summary>
+          <pre
+            className="codeblock"
+            style={{
+              margin: 0,
+              whiteSpace: "pre-wrap",
+              overflowWrap: "anywhere",
+              maxHeight: 320,
+              overflow: "auto",
+            }}
+          >
+            {failureDetail}
+          </pre>
+        </details>
+      )}
+
       {taskId && <TaskLogStream taskId={taskId} showPause={false} />}
     </div>
   );
+}
+
+function summarizeFailureDetail(detail: string): string {
+  const firstLine = detail.split(/\r?\n/, 1)[0]?.trim() || "Deploy failed.";
+  return firstLine.length > 160 ? `${firstLine.slice(0, 157)}...` : firstLine;
 }
 
 function applyVerifySummary(

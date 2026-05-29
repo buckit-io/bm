@@ -256,6 +256,7 @@ export function AddNodes({ draft, update }: Props) {
                 <td>
                   <input
                     className="input"
+                    data-testid={`new-cluster-hostname-${i}`}
                     value={h.hostname}
                     onChange={(e) => setHost(i, { hostname: e.target.value, probe: "idle" })}
                     onBlur={() => expandRow(i)}
@@ -266,6 +267,7 @@ export function AddNodes({ draft, update }: Props) {
                   <input
                     className="input"
                     type="number"
+                    data-testid={`new-cluster-port-${i}`}
                     value={h.port}
                     onChange={(e) => setHost(i, { port: parseInt(e.target.value, 10) || 22 })}
                   />
@@ -311,7 +313,11 @@ export function AddNodes({ draft, update }: Props) {
             ])}
             <tr>
               <td colSpan={5}>
-                <button className="btn btn--ghost btn--sm" onClick={addHost}>
+                <button
+                  className="btn btn--ghost btn--sm"
+                  onClick={addHost}
+                  data-testid="new-cluster-add-row"
+                >
                   + Add row
                 </button>
               </td>
@@ -327,6 +333,7 @@ export function AddNodes({ draft, update }: Props) {
             <label
               key={opt.value}
               className="hstack"
+              data-testid={`new-cluster-auth-${opt.value}`}
               style={{ gap: "var(--s-2)", alignItems: "flex-start" }}
             >
               <input
@@ -396,6 +403,7 @@ export function AddNodes({ draft, update }: Props) {
             <input
               id="user"
               className="input"
+              data-testid="new-cluster-ssh-user"
               value={draft.ssh.user}
               onChange={(e) => update({ ssh: { ...draft.ssh, user: e.target.value } })}
               placeholder="buckit"
@@ -439,6 +447,7 @@ export function AddNodes({ draft, update }: Props) {
               id="ssh-pw"
               type="password"
               className="input"
+              data-testid="new-cluster-ssh-password"
               value={draft.ssh.password ?? ""}
               onChange={(e) =>
                 update({ ssh: { ...draft.ssh, password: e.target.value } })
@@ -468,7 +477,7 @@ export function AddNodes({ draft, update }: Props) {
       </div>
 
       <div>
-        <button className="btn" onClick={probeAll}>
+        <button className="btn" onClick={probeAll} data-testid="new-cluster-probe-all">
           Test SSH connection
         </button>
       </div>

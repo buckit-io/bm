@@ -89,13 +89,15 @@ func happyFallback() func(cmd string) cannedResp {
 				return cannedResp{stdout: "/usr/bin/dnf\n", exit: 0}
 			}
 			return cannedResp{exit: 1}
-		case strings.HasPrefix(cmd, "df -B1 --output=avail"):
+		case strings.Contains(cmd, "df -B1 --output=avail \"$p\""):
 			return cannedResp{stdout: "Avail\n5000000000\n", exit: 0}
+		case strings.Contains(cmd, "dev=$(stat -c %d \"$p\")") && strings.Contains(cmd, "root=$(stat -c %d /)"):
+			return cannedResp{exit: 0}
 		case strings.HasPrefix(cmd, "test -f"):
 			return cannedResp{exit: 1} // no stale format
 		case strings.HasPrefix(cmd, "getent hosts"):
 			return cannedResp{exit: 0}
-		case strings.HasPrefix(cmd, "timeout 2 bash -c '</dev/tcp/"):
+		case strings.HasPrefix(cmd, "ping -c 1 -W 1 "):
 			return cannedResp{exit: 0}
 		case strings.HasPrefix(cmd, "ss -ltn"):
 			return cannedResp{stdout: "State   Recv-Q Send-Q   Local Address:Port\n"}
@@ -167,7 +169,7 @@ func TestFreeSpaceWarnBelowOneGiB(t *testing.T) {
 	defer SetVersionResolver(nil)
 	conn := newFakeConn()
 	conn.fallback = func(cmd string) cannedResp {
-		if strings.HasPrefix(cmd, "df -B1 --output=avail") {
+		if strings.Contains(cmd, "df -B1 --output=avail \"$p\"") {
 			return cannedResp{stdout: "Avail\n50000000\n", exit: 0}
 		}
 		return happyFallback()(cmd)
@@ -187,7 +189,7 @@ func TestFreeSpaceFailAtOrBelowTwentyFiveMiB(t *testing.T) {
 	defer SetVersionResolver(nil)
 	conn := newFakeConn()
 	conn.fallback = func(cmd string) cannedResp {
-		if strings.HasPrefix(cmd, "df -B1 --output=avail") {
+		if strings.Contains(cmd, "df -B1 --output=avail \"$p\"") {
 			return cannedResp{stdout: "Avail\n20000000\n", exit: 0}
 		}
 		return happyFallback()(cmd)
@@ -199,6 +201,111 @@ func TestFreeSpaceFailAtOrBelowTwentyFiveMiB(t *testing.T) {
 	}
 	if len(got.HostStatuses) == 0 || got.HostStatuses[0].Status != domain.PreflightFail {
 		t.Fatalf("want host failure, got %+v", got.HostStatuses)
+	}
+}
+
+func TestCustomPathsFreeSpaceUsesNearestExistingAncestor(t *testing.T) {
+	SetVersionResolver(func(_ string) string { return "https://example.com/buckit.rpm" })
+	defer SetVersionResolver(nil)
+	conn := newFakeConn()
+	conn.fallback = func(cmd string) cannedResp {
+		if strings.Contains(cmd, "df -B1 --output=avail \"$p\"") {
+			return cannedResp{stdout: "Avail\n5000000000\n", exit: 0}
+		}
+		return happyFallback()(cmd)
+	}
+
+	d := basicDraft()
+	d.Topology.DataVolumeMode = "custom"
+	d.Topology.SelectedMounts = []string{"/tmp/test1", "/tmp/test2"}
+
+	got := findResult(RunAll(context.Background(), conn, d), "free")
+	if got.Result != domain.PreflightPass {
+		t.Fatalf("want free pass, got %s (%s)", got.Result, got.Detail)
+	}
+}
+
+func TestCustomPathsSkipXFSAndPassUniformity(t *testing.T) {
+	SetVersionResolver(func(_ string) string { return "https://example.com/buckit.rpm" })
+	defer SetVersionResolver(nil)
+	conn := newFakeConn()
+	conn.fallback = happyFallback()
+
+	d := basicDraft()
+	d.Topology.DataVolumeMode = "custom"
+	d.Topology.SelectedMounts = []string{"/tmp/test1", "/tmp/test2"}
+
+	xfs := findResult(RunAll(context.Background(), conn, d), "xfs_fs")
+	if xfs.Result != domain.PreflightSkipped {
+		t.Fatalf("want xfs skipped, got %s (%s)", xfs.Result, xfs.Detail)
+	}
+
+	uniform := findResult(RunAll(context.Background(), conn, d), "drive_uniformity")
+	if uniform.Result != domain.PreflightPass {
+		t.Fatalf("want drive_uniformity pass, got %s (%s)", uniform.Result, uniform.Detail)
+	}
+}
+
+func TestRootDiskFailsForMultiPathDeployments(t *testing.T) {
+	SetVersionResolver(func(_ string) string { return "https://example.com/buckit.rpm" })
+	defer SetVersionResolver(nil)
+	conn := newFakeConn()
+	conn.fallback = func(cmd string) cannedResp {
+		if strings.Contains(cmd, "dev=$(stat -c %d \"$p\")") && strings.Contains(cmd, "root=$(stat -c %d /)") {
+			return cannedResp{stdout: "path resolves to the root filesystem via /tmp\n", exit: 3}
+		}
+		return happyFallback()(cmd)
+	}
+
+	d := basicDraft()
+	d.Topology.DataVolumeMode = "custom"
+	d.Topology.SelectedMounts = []string{"/tmp/test1", "/tmp/test2"}
+
+	got := findResult(RunAll(context.Background(), conn, d), "root_disk")
+	if got.Result != domain.PreflightFail {
+		t.Fatalf("want root_disk fail, got %s (%s)", got.Result, got.Detail)
+	}
+	if len(got.HostStatuses) == 0 || !strings.Contains(got.HostStatuses[0].Message, "root filesystem") {
+		t.Fatalf("want root filesystem detail, got %+v", got.HostStatuses)
+	}
+}
+
+func TestRootDiskSkippedForStandalone(t *testing.T) {
+	SetVersionResolver(func(_ string) string { return "https://example.com/buckit.rpm" })
+	defer SetVersionResolver(nil)
+	conn := newFakeConn()
+	conn.fallback = happyFallback()
+
+	d := basicDraft()
+	d.Hosts = d.Hosts[:1]
+	d.Topology.SelectedMounts = []string{"/tmp/test1"}
+
+	got := findResult(RunAll(context.Background(), conn, d), "root_disk")
+	if got.Result != domain.PreflightSkipped {
+		t.Fatalf("want root_disk skipped, got %s (%s)", got.Result, got.Detail)
+	}
+}
+
+func TestRootDiskRejectsExistingNonDirectoryPath(t *testing.T) {
+	SetVersionResolver(func(_ string) string { return "https://example.com/buckit.rpm" })
+	defer SetVersionResolver(nil)
+	conn := newFakeConn()
+	conn.fallback = func(cmd string) cannedResp {
+		if strings.Contains(cmd, "if [ -e \"$target\" ] && [ ! -d \"$target\" ]; then") {
+			return cannedResp{stdout: "path exists but is not a directory\n", exit: 4}
+		}
+		return happyFallback()(cmd)
+	}
+
+	d := basicDraft()
+	d.Topology.SelectedMounts = []string{"/data/file1", "/data/file2"}
+
+	got := findResult(RunAll(context.Background(), conn, d), "root_disk")
+	if got.Result != domain.PreflightFail {
+		t.Fatalf("want root_disk fail, got %s (%s)", got.Result, got.Detail)
+	}
+	if len(got.HostStatuses) == 0 || !strings.Contains(got.HostStatuses[0].Message, "not a directory") {
+		t.Fatalf("want not-a-directory detail, got %+v", got.HostStatuses)
 	}
 }
 
@@ -287,6 +394,37 @@ func TestPortsConflictRetriesTransientSessionFailure(t *testing.T) {
 	got := findResult(RunAll(context.Background(), conn, basicDraft()), "ports_conflict")
 	if got.Result != domain.PreflightPass {
 		t.Fatalf("want ports_conflict pass after retry, got %s (%s)", got.Result, got.Detail)
+	}
+}
+
+func TestPeerPingReachableFailsSpecificPeer(t *testing.T) {
+	SetVersionResolver(func(_ string) string { return "https://example.com/buckit.rpm" })
+	defer SetVersionResolver(nil)
+
+	conn := newFakeConn()
+	conn.fallback = func(cmd string) cannedResp {
+		if cmd == "ping -c 1 -W 1 node2" {
+			return cannedResp{exit: 1}
+		}
+		return happyFallback()(cmd)
+	}
+
+	got := findResult(RunAll(context.Background(), conn, basicDraft()), "ports")
+	if got.Result != domain.PreflightFail {
+		t.Fatalf("want ports fail, got %s (%s)", got.Result, got.Detail)
+	}
+	if len(got.HostStatuses) == 0 {
+		t.Fatalf("want host statuses, got none")
+	}
+	found := false
+	for _, hs := range got.HostStatuses {
+		if strings.Contains(hs.Message, "node2") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("want failure mentioning node2, got %+v", got.HostStatuses)
 	}
 }
 

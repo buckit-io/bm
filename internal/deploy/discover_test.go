@@ -50,13 +50,13 @@ func TestRichProbeAgainstFakeServer(t *testing.T) {
 	if got.SudoOk == nil || !*got.SudoOk {
 		t.Fatalf("sudoOk: want true, got %v", got.SudoOk)
 	}
-	// 3 disks in fixture: sda (boot), sdb, sdc.
-	if len(got.Drives) != 3 {
-		t.Fatalf("drives: want 3, got %d (%+v)", len(got.Drives), got.Drives)
+	// 4 mounts in fixture: /, /boot, /data/disk1, /data/disk2.
+	if len(got.Drives) != 4 {
+		t.Fatalf("drives: want 4, got %d (%+v)", len(got.Drives), got.Drives)
 	}
 	var dataMounts []string
 	for _, d := range got.Drives {
-		if d.IsBoot {
+		if d.IsBoot || d.IsSystem {
 			continue
 		}
 		dataMounts = append(dataMounts, d.Mount)
@@ -94,5 +94,46 @@ func TestParseMemTotalGiB(t *testing.T) {
 		if got := parseMemTotalGiB(tc.in); got != tc.want {
 			t.Errorf("parseMemTotalGiB(%q) = %d, want %d", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestParseMountInfoDrives(t *testing.T) {
+	mountInfo := `36 35 8:1 / / rw,relatime - xfs /dev/sda2 rw,attr2,inode64
+37 36 8:2 /boot /boot rw,relatime - xfs /dev/sda1 rw,attr2,inode64
+38 36 7:0 / /data/my\040drive rw,relatime - xfs /dev/loop0 rw,attr2,inode64
+39 36 0:44 / /var/lib/buckit rw,relatime - xfs /dev/loop1 rw,attr2,inode64
+`
+	sizes := map[string]int64{
+		"/":               107374182400,
+		"/boot":           2147483648,
+		"/data/my drive":  1099511627776,
+		"/var/lib/buckit": 1099511627776,
+	}
+	got := parseMountInfoDrives(mountInfo, sizes)
+	if len(got) != 4 {
+		t.Fatalf("want 4 drives, got %d", len(got))
+	}
+	if got[2].Mount != "/data/my drive" {
+		t.Fatalf("unescape mountpoint: got %q", got[2].Mount)
+	}
+	if got[2].SizeBytes != 1099511627776 {
+		t.Fatalf("size for spaced mount: got %d", got[2].SizeBytes)
+	}
+	if !got[3].IsSystem {
+		t.Fatalf("system mount should be flagged")
+	}
+}
+
+func TestParseMountSizesHandlesSpacedMountpoints(t *testing.T) {
+	got := parseMountSizes(`Mounted on 1B-blocks
+/ 107374182400
+/data/my drive 1099511627776
+/mnt/fast pool/drive1 2147483648
+`)
+	if got["/data/my drive"] != 1099511627776 {
+		t.Fatalf("size for /data/my drive: got %d", got["/data/my drive"])
+	}
+	if got["/mnt/fast pool/drive1"] != 2147483648 {
+		t.Fatalf("size for /mnt/fast pool/drive1: got %d", got["/mnt/fast pool/drive1"])
 	}
 }

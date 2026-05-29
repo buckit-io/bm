@@ -112,12 +112,16 @@ func migrateCutover(opts Options) http.HandlerFunc {
 		taskID, err := opts.Tasks.Dispatch(r.Context(), req)
 		switch {
 		case err == nil:
+			logAction(r, "migrate.cutover", "result", "queued", "cluster_id", clusterID, "hosts", len(params.Hosts), "task_id", taskID)
 			writeJSON(w, http.StatusAccepted, tasks.DispatchResponse{TaskID: taskID})
 		case errors.Is(err, tasks.ErrClusterBusy):
+			logAction(r, "migrate.cutover", "result", "cluster_busy", "cluster_id", clusterID, "reason", err.Error())
 			writeError(w, http.StatusConflict, "cluster_busy", err.Error())
 		case errors.Is(err, tasks.ErrUnknownKind):
+			logAction(r, "migrate.cutover", "result", "unknown_kind", "cluster_id", clusterID, "reason", err.Error())
 			writeError(w, http.StatusBadRequest, "unknown_kind", err.Error())
 		default:
+			logAction(r, "migrate.cutover", "result", "dispatch_failed", "cluster_id", clusterID, "reason", err.Error())
 			writeError(w, http.StatusBadRequest, "dispatch_failed", err.Error())
 		}
 	}
@@ -180,12 +184,16 @@ func migrateRollback(opts Options) http.HandlerFunc {
 		taskID, err := opts.Tasks.Dispatch(r.Context(), req)
 		switch {
 		case err == nil:
+			logAction(r, "migrate.rollback", "result", "queued", "cluster_id", clusterID, "hosts", len(params.Hosts), "task_id", taskID)
 			writeJSON(w, http.StatusAccepted, tasks.DispatchResponse{TaskID: taskID})
 		case errors.Is(err, tasks.ErrClusterBusy):
+			logAction(r, "migrate.rollback", "result", "cluster_busy", "cluster_id", clusterID, "reason", err.Error())
 			writeError(w, http.StatusConflict, "cluster_busy", err.Error())
 		case errors.Is(err, tasks.ErrUnknownKind):
+			logAction(r, "migrate.rollback", "result", "unknown_kind", "cluster_id", clusterID, "reason", err.Error())
 			writeError(w, http.StatusBadRequest, "unknown_kind", err.Error())
 		default:
+			logAction(r, "migrate.rollback", "result", "dispatch_failed", "cluster_id", clusterID, "reason", err.Error())
 			writeError(w, http.StatusBadRequest, "dispatch_failed", err.Error())
 		}
 	}
