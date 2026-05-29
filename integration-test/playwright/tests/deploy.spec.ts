@@ -60,21 +60,29 @@ test("deploys a new Buckit cluster", async ({ page }) => {
   await next(page);
 
   await expect(page.getByTestId("new-cluster-discovery-progress")).toHaveText(
-    "4 / 4 complete",
+    `${hosts.length} / ${hosts.length} complete`,
     { timeout: 120_000 },
   );
   await next(page);
 
-  await expect(page.getByText("Ready to deploy.")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("Mode: Erasure coded")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("Discovered drives")).toBeVisible();
+  await expect(page.getByText(/Ready to deploy\./)).toBeVisible();
   await next(page);
 
+  await expect(page.getByTestId("new-cluster-preflight-title")).toHaveText("Preflight");
   await expect(page.getByTestId("new-cluster-preflight-table")).toContainText(
     "Package manager available",
     { timeout: 120_000 },
   );
+  await expect(page.getByTestId("new-cluster-preflight-table")).toContainText(
+    "Selected paths not on root filesystem",
+  );
   await next(page);
 
   await expect(page.getByText("Verify the plan before deploy.")).toBeVisible();
+  await expect(page.getByText("Deployment mode")).toBeVisible();
+  await expect(page.getByText("Erasure coded")).toBeVisible();
   await next(page);
 
   await expect(page.getByTestId("new-cluster-deploy-progress")).toHaveText(
@@ -93,6 +101,6 @@ test("deploys a new Buckit cluster", async ({ page }) => {
   await page.getByRole("button", { name: "Go to cluster overview" }).click();
   await expect(page).toHaveURL(/\/clusters\/[^/]+$/);
   await expect(page.getByTestId("cluster-title")).toContainText(clusterName);
-  await expect(page.getByText("deploy-node1")).toBeVisible();
-  await expect(page.getByText("deploy-node4")).toBeVisible();
+  await expect(page.getByText(hosts[0] ?? "deploy-node1")).toBeVisible();
+  await expect(page.getByText(hosts[hosts.length - 1] ?? "deploy-node4")).toBeVisible();
 });
