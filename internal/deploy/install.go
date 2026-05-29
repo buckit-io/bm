@@ -43,7 +43,7 @@ type StepEvent struct {
 type Installer struct {
 	Pool *bmssh.Pool
 	// StartTimeout caps how long we wait for systemctl enable --now to return.
-	// Default 120s.
+	// Default 180s.
 	StartTimeout time.Duration
 	// HealthyTimeout caps how long we wait for the local /minio/health/live
 	// probe after starting the service. Default 60s.
@@ -55,7 +55,7 @@ type Installer struct {
 func NewInstaller(pool *bmssh.Pool) *Installer {
 	return &Installer{
 		Pool:           pool,
-		StartTimeout:   120 * time.Second,
+		StartTimeout:   180 * time.Second,
 		HealthyTimeout: 60 * time.Second,
 	}
 }
@@ -219,7 +219,7 @@ func RunStep(ctx context.Context, client *ssh.Client, cmd string) error {
 func (in *Installer) runStartStep(ctx context.Context, client *ssh.Client, host domain.HostRow, params DeployParams, creds bmssh.Resolved, report func(Stage, string)) error {
 	timeout := in.StartTimeout
 	if timeout <= 0 {
-		timeout = 120 * time.Second
+		timeout = 180 * time.Second
 	}
 	startCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

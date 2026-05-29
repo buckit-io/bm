@@ -14,7 +14,7 @@ GO           ?= go
 GOOS         ?= $(shell $(GO) env GOOS)
 GOARCH       ?= $(shell $(GO) env GOARCH)
 
-.PHONY: all build web build-all test lint tidy clean run help e2e-import e2e-deploy e2e-up e2e-up-deploy e2e-down
+.PHONY: all build web build-all test lint tidy clean run help e2e-import e2e-deploy e2e-migrate e2e-up e2e-up-deploy e2e-up-migrate e2e-down
 
 all: build
 
@@ -61,6 +61,10 @@ e2e-import:
 e2e-deploy:
 	bash ./integration-test/scripts/run-deploy.sh
 
+## e2e-migrate: run the MinIO -> Buckit migration end-to-end test
+e2e-migrate:
+	bash ./integration-test/scripts/run-migrate.sh
+
 ## e2e-up: build and start the e2e lab without running browser tests
 e2e-up: web
 	bash ./integration-test/scripts/up-import.sh
@@ -68,6 +72,10 @@ e2e-up: web
 ## e2e-up-deploy: build and start the deploy e2e lab without running browser tests
 e2e-up-deploy: web
 	bash ./integration-test/scripts/up-deploy.sh
+
+## e2e-up-migrate: build and start the migration e2e lab without running browser tests
+e2e-up-migrate: web
+	bash ./integration-test/scripts/up-migrate.sh
 
 ## e2e-down: tear down the e2e lab
 e2e-down:

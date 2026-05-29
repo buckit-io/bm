@@ -571,6 +571,7 @@ export function ClusterDetailLayout() {
           {cluster.engine === "minio" && (
             <button
               className="btn btn--primary"
+              data-testid="cluster-migrate-link"
               onClick={() => navigate(`/clusters/migrate?from=${cluster.id}`)}
             >
               Migrate to Buckit

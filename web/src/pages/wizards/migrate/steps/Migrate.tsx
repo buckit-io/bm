@@ -373,6 +373,7 @@ export function Migrate({ draft, update, onFinish }: Props) {
           <p
             className="muted"
             style={{ fontSize: "var(--fs-sm)", marginTop: 4 }}
+            data-testid="migrate-status"
           >
             {dispatchError
               ? `✗ ${dispatchError}`
@@ -412,7 +413,7 @@ export function Migrate({ draft, update, onFinish }: Props) {
         <div className="progress" style={{ flex: 1, maxWidth: 320 }}>
           <div className="progress__bar" style={{ width: `${pct}%` }} />
         </div>
-        <span className="subtle">
+        <span className="subtle" data-testid="migrate-progress">
           {done} / {attemptedCount}
         </span>
       </div>
@@ -479,7 +480,7 @@ export function Migrate({ draft, update, onFinish }: Props) {
             <p className="muted">Running post-migration verification…</p>
           ) : (
             <>
-              <div className="card card--table">
+              <div className="card card--table" data-testid="migrate-verify-table">
                 <table className="table">
                   <thead>
                     <tr>
@@ -534,7 +535,7 @@ export function Migrate({ draft, update, onFinish }: Props) {
               </div>
 
               <div className="hstack" style={{ justifyContent: "flex-end" }}>
-                <button className="btn btn--primary" onClick={onFinish}>
+                <button className="btn btn--primary" data-testid="migrate-finish" onClick={onFinish}>
                   Go to cluster
                 </button>
               </div>

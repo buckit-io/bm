@@ -155,6 +155,7 @@ export function SshCredentials({ draft, update }: Props) {
             >
               <input
                 type="radio"
+                data-testid={`migrate-auth-${opt.value}`}
                 checked={draft.ssh.authMethod === opt.value}
                 onChange={() =>
                   update({ ssh: { ...draft.ssh, authMethod: opt.value } })
@@ -219,6 +220,7 @@ export function SshCredentials({ draft, update }: Props) {
             <input
               id="migrate-ssh-user"
               className="input"
+              data-testid="migrate-ssh-user"
               value={draft.ssh.user}
               onChange={(e) =>
                 update({ ssh: { ...draft.ssh, user: e.target.value } })
@@ -263,6 +265,7 @@ export function SshCredentials({ draft, update }: Props) {
             <input
               type="password"
               className="input"
+              data-testid="migrate-ssh-password"
               value={draft.ssh.password ?? ""}
               onChange={(e) =>
                 update({ ssh: { ...draft.ssh, password: e.target.value } })
@@ -305,6 +308,7 @@ export function SshCredentials({ draft, update }: Props) {
             className="btn btn--sm"
             onClick={probeAll}
             disabled={probing}
+            data-testid="migrate-probe-all"
           >
             {probing ? "Testing…" : "Test SSH connection"}
           </button>

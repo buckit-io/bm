@@ -192,7 +192,7 @@ export function Review({ draft, update }: Props) {
       {/* ── Phase 1: Capturing pre-migration snapshot ─────────────── */}
       <PhaseRowView row={snapshotPhase} />
       {snapshotPhase.state === "done" && s && (
-        <div className="card card-stat">
+        <div className="card card-stat" data-testid="migrate-snapshot-card">
           <div className="card-stat__title">Snapshot</div>
           <div className="card-stat__sub">
             <b>Buckets</b> {s.buckets}
@@ -291,7 +291,7 @@ export function Review({ draft, update }: Props) {
             </div>
           )}
 
-          <div className="card card--table">
+          <div className="card card--table" data-testid="migrate-preflight-table">
             <div
               className="hstack"
               style={{

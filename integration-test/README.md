@@ -7,6 +7,7 @@ Current scope:
 
 - Phase 1: `bm web` non-loopback lab support plus basic Docker scaffold
 - Phase 2: Buckit import end-to-end
+- Phase 5: MinIO migration end-to-end
 
 The first end-to-end slice uses:
 
@@ -33,9 +34,13 @@ release RPM by default. You can override this with:
 
 ```sh
 make e2e-import
+make e2e-migrate
 make e2e-up
 make e2e-down
 ```
 
 `make e2e-import` builds `web/dist`, builds the fixture image, starts the
 lab, runs the Playwright import spec, and tears the lab down.
+`make e2e-migrate` builds a systemd-backed MinIO fixture from the MinIO
+RPM, imports it through the real UI, runs the migrate wizard, then
+verifies the seeded object still exists after Buckit takes over.

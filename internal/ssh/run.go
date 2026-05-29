@@ -14,6 +14,10 @@ import (
 
 const sessionCancelGrace = 2 * time.Second
 
+var defaultCommandTimeout = 90 * time.Second
+
+type defaultTimeoutDisabledKey struct{}
+
 // Line is one stdout or stderr line emitted by RunStream.
 type Line struct {
 	Stream string // "stdout" | "stderr"
@@ -27,14 +31,25 @@ type Result struct {
 	ExitCode int
 }
 
+// WithoutDefaultTimeout opts out of the SSH package's fallback per-command
+// timeout. Callers should prefer passing their own bounded context; this is
+// only for flows that intentionally manage timing outside Run/RunStream.
+func WithoutDefaultTimeout(ctx context.Context) context.Context {
+	return context.WithValue(ctx, defaultTimeoutDisabledKey{}, true)
+}
+
 // Run executes cmd on client and returns the captured stdout, stderr, and
-// exit code. Honors ctx by closing the session on cancellation. Returns the
-// Result even on non-zero exit; err is non-nil only for transport / setup
-// failures or ctx cancellation.
+// exit code. If ctx has no deadline, Run applies a fallback command timeout.
+// Honors ctx by closing the session on cancellation. Returns the Result even
+// on non-zero exit; err is non-nil only for transport / setup failures or
+// ctx cancellation.
 func Run(ctx context.Context, client *ssh.Client, cmd string) (Result, error) {
 	if client == nil {
 		return Result{}, errors.New("ssh: nil client")
 	}
+	ctx, cancel := withDefaultCommandTimeout(ctx)
+	defer cancel()
+
 	session, err := client.NewSession()
 	if err != nil {
 		return Result{}, fmt.Errorf("new session: %w", err)
@@ -68,14 +83,18 @@ func Run(ctx context.Context, client *ssh.Client, cmd string) (Result, error) {
 	}
 }
 
-// RunStream executes cmd and streams stdout+stderr lines to out. The channel
-// is closed when the command exits or ctx is canceled. Returns the exit code
+// RunStream executes cmd and streams stdout+stderr lines to out. If ctx has
+// no deadline, RunStream applies the fallback command timeout. The channel is
+// closed when the command exits or ctx is canceled. Returns the exit code
 // (or -1 on transport error) and the first non-nil error encountered.
 func RunStream(ctx context.Context, client *ssh.Client, cmd string, out chan<- Line) (int, error) {
 	defer close(out)
 	if client == nil {
 		return -1, errors.New("ssh: nil client")
 	}
+	ctx, cancel := withDefaultCommandTimeout(ctx)
+	defer cancel()
+
 	session, err := client.NewSession()
 	if err != nil {
 		return -1, fmt.Errorf("new session: %w", err)
@@ -131,6 +150,19 @@ func waitForRunDone(done <-chan error) {
 	case <-done:
 	case <-time.After(sessionCancelGrace):
 	}
+}
+
+func withDefaultCommandTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	if disabled, ok := ctx.Value(defaultTimeoutDisabledKey{}).(bool); ok && disabled {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, defaultCommandTimeout)
 }
 
 func waitForPumpDone(done <-chan struct{}) {

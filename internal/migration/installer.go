@@ -45,6 +45,10 @@ const (
 type Installer struct {
 	Pool *bmssh.Pool
 
+	// StartTimeout caps how long we wait for systemctl enable --now to return.
+	// Default 180s.
+	StartTimeout time.Duration
+
 	// HealthyTimeout caps the wait for /minio/health/live after the new
 	// service starts. Default 90s.
 	HealthyTimeout time.Duration
@@ -53,7 +57,11 @@ type Installer struct {
 // NewInstaller returns an Installer using pool. nil-safe (returns an Installer
 // that fails the first dial with a clear error).
 func NewInstaller(pool *bmssh.Pool) *Installer {
-	return &Installer{Pool: pool, HealthyTimeout: 90 * time.Second}
+	return &Installer{
+		Pool:           pool,
+		StartTimeout:   180 * time.Second,
+		HealthyTimeout: 90 * time.Second,
+	}
 }
 
 // PreStage performs every per-host step that does NOT require minio.service
@@ -209,7 +217,7 @@ func (in *Installer) Switch(ctx context.Context, host domain.HostRow, params Cut
 		"systemctl disable minio.service || true",
 		"systemctl enable --now buckit.service",
 	}, " && ")
-	if err := deploy.RunStep(ctx, client, deploy.SudoWrap(creds, swap)); err != nil {
+	if err := in.runTimedServiceStart(ctx, client, host, params, creds, report, "buckit.service", swap, "systemctl stop buckit.service || true"); err != nil {
 		reportErr(StageFailed, fmt.Errorf("swap unit: %w", err))
 		return err
 	}
@@ -315,6 +323,97 @@ func stringSliceEqual(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func (in *Installer) runTimedServiceStart(
+	ctx context.Context,
+	client *ssh.Client,
+	host domain.HostRow,
+	params CutoverParams,
+	creds bmssh.Resolved,
+	report func(Stage, string),
+	service string,
+	command string,
+	stopCommand string,
+) error {
+	timeout := in.StartTimeout
+	if timeout <= 0 {
+		timeout = 180 * time.Second
+	}
+	startCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	err := deploy.RunStep(startCtx, client, deploy.SudoWrap(creds, command))
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+
+	report(StageSwitchingUnit, fmt.Sprintf("Timed out after %s; dropping SSH client and reconnecting for diagnostics", timeout))
+	diagClient := client
+	if fresh, reacquireErr := in.reconnectHost(ctx, host, params, creds); reacquireErr == nil && fresh != nil {
+		report(StageSwitchingUnit, "Reconnected SSH client for timeout diagnostics")
+		diagClient = fresh
+	} else if reacquireErr != nil {
+		report(StageSwitchingUnit, "Reconnect for timeout diagnostics failed: "+reacquireErr.Error())
+	}
+
+	report(StageSwitchingUnit, "Collecting systemd status and journal after start timeout")
+	diag := in.collectStartDiagnostics(ctx, diagClient, creds, service)
+	report(StageSwitchingUnit, "Stopping "+service+" after timeout")
+	_ = stopServiceBestEffort(ctx, diagClient, creds, stopCommand)
+	if diag != "" {
+		return fmt.Errorf("timed out after %s waiting for %s to start\n%s", timeout, service, diag)
+	}
+	return fmt.Errorf("timed out after %s waiting for %s to start", timeout, service)
+}
+
+func (in *Installer) reconnectHost(ctx context.Context, host domain.HostRow, params CutoverParams, creds bmssh.Resolved) (*ssh.Client, error) {
+	if in == nil || in.Pool == nil {
+		return nil, errors.New("migration: nil installer / pool")
+	}
+	clusterID := "migrate-" + params.SourceClusterID
+	in.Pool.Drop(clusterID, host.ID)
+	reconnectCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	ref := domain.HostRef{ID: host.ID, Hostname: host.Hostname, Port: host.Port}
+	return in.Pool.Get(reconnectCtx, clusterID, ref, creds)
+}
+
+func (in *Installer) collectStartDiagnostics(ctx context.Context, client *ssh.Client, creds bmssh.Resolved, service string) string {
+	diagCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	parts := make([]string, 0, 2)
+	statusCmd := fmt.Sprintf("systemctl status %s --no-pager -l || true", service)
+	if status, err := captureCommand(diagCtx, client, deploy.SudoWrap(creds, statusCmd)); err == nil && status != "" {
+		parts = append(parts, fmt.Sprintf("systemctl status %s:\n%s", service, status))
+	}
+	journalCmd := fmt.Sprintf("journalctl -u %s -n 100 --no-pager || true", service)
+	if journal, err := captureCommand(diagCtx, client, deploy.SudoWrap(creds, journalCmd)); err == nil && journal != "" {
+		parts = append(parts, fmt.Sprintf("journalctl -u %s -n 100:\n%s", service, journal))
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func stopServiceBestEffort(ctx context.Context, client *ssh.Client, creds bmssh.Resolved, stopCommand string) error {
+	stopCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	return deploy.RunStep(stopCtx, client, deploy.SudoWrap(creds, stopCommand))
+}
+
+func captureCommand(ctx context.Context, client *ssh.Client, cmd string) (string, error) {
+	r, err := bmssh.Run(ctx, client, cmd)
+	if err != nil {
+		return "", err
+	}
+	out := strings.TrimSpace(r.Stdout)
+	if out == "" {
+		out = strings.TrimSpace(r.Stderr)
+	}
+	return out, nil
 }
 
 // waitHealthy polls /minio/health/live until 200 or the deadline passes.
@@ -437,7 +536,7 @@ func (in *Installer) StartMinio(ctx context.Context, host domain.HostRow, params
 		"systemctl daemon-reload",
 		"systemctl enable --now minio.service",
 	}, " && ")
-	if err := deploy.RunStep(ctx, client, deploy.SudoWrap(creds, startMinio)); err != nil {
+	if err := in.runTimedServiceStart(ctx, client, host, params, creds, report, "minio.service", startMinio, "systemctl stop minio.service || true"); err != nil {
 		reportErr(StageFailed, fmt.Errorf("start minio: %w", err))
 		return err
 	}

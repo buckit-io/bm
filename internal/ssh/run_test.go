@@ -2,6 +2,7 @@ package ssh
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -97,5 +98,90 @@ func TestRunCancel(t *testing.T) {
 	_, err = Run(ctx, client, "sleep 10")
 	if err == nil {
 		t.Fatal("expected context error")
+	}
+}
+
+func TestRunAppliesDefaultTimeoutWhenContextHasNoDeadline(t *testing.T) {
+	srv := newTestServer(t)
+	host, port := srv.HostPort()
+	client, err := Dial(context.Background(), domain.HostRef{Hostname: host, Port: port}, Resolved{
+		AuthMethod: domain.AuthPassword,
+		User:       srv.user,
+		Password:   srv.password,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	prev := defaultCommandTimeout
+	defaultCommandTimeout = 200 * time.Millisecond
+	defer func() { defaultCommandTimeout = prev }()
+
+	start := time.Now()
+	_, err = Run(context.Background(), client, "sleep 10")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected deadline exceeded, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("default timeout did not fire promptly; elapsed=%s", elapsed)
+	}
+}
+
+func TestRunCallerDeadlineDisablesDefaultTimeout(t *testing.T) {
+	srv := newTestServer(t)
+	host, port := srv.HostPort()
+	client, err := Dial(context.Background(), domain.HostRef{Hostname: host, Port: port}, Resolved{
+		AuthMethod: domain.AuthPassword,
+		User:       srv.user,
+		Password:   srv.password,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	prev := defaultCommandTimeout
+	defaultCommandTimeout = 50 * time.Millisecond
+	defer func() { defaultCommandTimeout = prev }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	res, err := Run(ctx, client, "sleep 0.2")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("want exit 0, got %d", res.ExitCode)
+	}
+}
+
+func TestRunWithoutDefaultTimeout(t *testing.T) {
+	srv := newTestServer(t)
+	host, port := srv.HostPort()
+	client, err := Dial(context.Background(), domain.HostRef{Hostname: host, Port: port}, Resolved{
+		AuthMethod: domain.AuthPassword,
+		User:       srv.user,
+		Password:   srv.password,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	prev := defaultCommandTimeout
+	defaultCommandTimeout = 50 * time.Millisecond
+	defer func() { defaultCommandTimeout = prev }()
+
+	ctx, cancel := context.WithTimeout(WithoutDefaultTimeout(context.Background()), time.Second)
+	defer cancel()
+
+	res, err := Run(ctx, client, "sleep 0.2")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("want exit 0, got %d", res.ExitCode)
 	}
 }

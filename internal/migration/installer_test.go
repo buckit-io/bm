@@ -3,9 +3,25 @@ package migration
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/buckit-io/bm/internal/deploy"
+	"github.com/buckit-io/bm/internal/domain"
+	bmssh "github.com/buckit-io/bm/internal/ssh"
 )
+
+func TestNewInstallerDefaults(t *testing.T) {
+	got := NewInstaller(nil)
+	if got == nil {
+		t.Fatal("NewInstaller returned nil")
+	}
+	if got.StartTimeout != 180*time.Second {
+		t.Fatalf("StartTimeout = %s, want 180s", got.StartTimeout)
+	}
+	if got.HealthyTimeout != 90*time.Second {
+		t.Fatalf("HealthyTimeout = %s, want 90s", got.HealthyTimeout)
+	}
+}
 
 func TestRenderDropIn(t *testing.T) {
 	cases := []struct {
@@ -150,4 +166,20 @@ func TestWriteAndRemoveDropInCmds(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestReconnectHostNilPool(t *testing.T) {
+	in := &Installer{}
+	_, err := in.reconnectHost(
+		t.Context(),
+		domain.HostRow{ID: "h1", Hostname: "node1"},
+		CutoverParams{SourceClusterID: "src1"},
+		bmssh.Resolved{},
+	)
+	if err == nil {
+		t.Fatal("expected reconnect error")
+	}
+	if !strings.Contains(err.Error(), "migration: nil installer / pool") {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }

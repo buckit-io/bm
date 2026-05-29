@@ -121,6 +121,7 @@ export function Overview({ draft, update }: Props) {
           <select
             id="migrate-version"
             className="select"
+            data-testid="migrate-version"
             value={draft.version}
             onChange={(e) => update({ version: e.target.value })}
             disabled={versions.length === 0}
