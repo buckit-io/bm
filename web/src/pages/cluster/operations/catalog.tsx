@@ -326,6 +326,7 @@ const ROTATE_ROOT_CREDS: OperationDef<{
             <label className="field-label">New root password</label>
             <div className="hstack" style={{ gap: "var(--s-2)" }}>
               <input
+                data-testid="rotate-root-password-input"
                 type={params.showPass ? "text" : "password"}
                 className="input"
                 value={params.newPassword}
@@ -359,6 +360,7 @@ const ROTATE_ROOT_CREDS: OperationDef<{
               Type the cluster name to confirm
             </label>
             <input
+              data-testid="rotate-root-password-confirm-name"
               className="input"
               value={params.typedName}
               onChange={(e) =>

@@ -6,18 +6,20 @@ LOG_DIR="$ROOT_DIR/integration-test/.generated"
 
 cleanup() {
   mkdir -p "$LOG_DIR"
-  BM_E2E_SCENARIO=migrate \
-    bash "$ROOT_DIR/integration-test/scripts/compose.sh" logs --no-color >"$LOG_DIR/compose.migrate.log" 2>&1 || true
-  BM_E2E_SCENARIO=migrate bash "$ROOT_DIR/integration-test/scripts/down.sh"
+  BM_E2E_SCENARIO=replacement \
+    bash "$ROOT_DIR/integration-test/scripts/compose.sh" logs --no-color >"$LOG_DIR/compose.replacement.log" 2>&1 || true
+  BM_E2E_SCENARIO=replacement bash "$ROOT_DIR/integration-test/scripts/down.sh"
 }
 
 if [[ "${BM_E2E_KEEP_CONTAINERS:-0}" != "1" ]]; then
   trap cleanup EXIT
 fi
 
+rm -f "$ROOT_DIR/integration-test/.generated/replacement-target-host"
+
 resolve_bm_base_url() {
   local mapping host_port
-  mapping="$(BM_E2E_SCENARIO=migrate bash "$ROOT_DIR/integration-test/scripts/compose.sh" port bm 9443 | tail -n1)"
+  mapping="$(BM_E2E_SCENARIO=replacement bash "$ROOT_DIR/integration-test/scripts/compose.sh" port bm 9443 | tail -n1)"
   if [[ -z "$mapping" ]]; then
     echo "Could not resolve published bm port" >&2
     return 1
@@ -45,7 +47,7 @@ wait_for_container_health() {
   local container_id health
   for _ in $(seq 1 "$attempts"); do
     if [[ -z "${container_id:-}" ]]; then
-      container_id="$(BM_E2E_SCENARIO=migrate bash "$ROOT_DIR/integration-test/scripts/compose.sh" ps -q "$service" | tail -n1)"
+      container_id="$(BM_E2E_SCENARIO=replacement bash "$ROOT_DIR/integration-test/scripts/compose.sh" ps -q "$service" | tail -n1)"
       if [[ -z "$container_id" ]]; then
         sleep 2
         continue
@@ -64,11 +66,13 @@ wait_for_container_health() {
 if [[ "${SKIP_WEB_BUILD:-0}" != "1" ]]; then
   make web
 fi
-bash "$ROOT_DIR/integration-test/scripts/up-migrate.sh"
+bash "$ROOT_DIR/integration-test/scripts/up-replacement.sh"
 
 bm_base_url="$(resolve_bm_base_url)"
 wait_for_url "$bm_base_url/api/v1/healthz"
-wait_for_container_health "minio-node1"
+for node in $(seq 1 "${BM_E2E_REPLACEMENT_NODES:-4}"); do
+  wait_for_container_health "replacement-node${node}"
+done
 
 cd "$ROOT_DIR/integration-test/playwright"
 npm install
@@ -78,16 +82,10 @@ else
   npx playwright install chromium
 fi
 PLAYWRIGHT_BASE_URL="${PLAYWRIGHT_BASE_URL:-$bm_base_url}" \
-BM_E2E_IMPORT_URL="${BM_E2E_IMPORT_URL:-http://minio-node1:9000}" \
-BM_E2E_IMPORT_USERNAME="${BM_E2E_IMPORT_USERNAME:-${BM_E2E_MINIO_ROOT_USER:-minioadmin}}" \
-BM_E2E_IMPORT_PASSWORD="${BM_E2E_IMPORT_PASSWORD:-${BM_E2E_MINIO_ROOT_PASSWORD:-minioadmin}}" \
-BM_E2E_MIGRATE_CLUSTER_NAME="${BM_E2E_MIGRATE_CLUSTER_NAME:-fixture-migrate}" \
-BM_E2E_MIGRATE_SSH_USER="${BM_E2E_MIGRATE_SSH_USER:-root}" \
-BM_E2E_MIGRATE_SSH_PASSWORD="${BM_E2E_MIGRATE_SSH_PASSWORD:-${BM_E2E_MINIO_SSH_PASSWORD:-${BM_E2E_MINIO_ROOT_PASSWORD:-minioadmin}}}" \
-BM_E2E_MIGRATE_ROTATED_ROOT_PASSWORD="${BM_E2E_MIGRATE_ROTATED_ROOT_PASSWORD:-newpassword123}" \
-BM_E2E_MIGRATE_BUCKET="${BM_E2E_MIGRATE_BUCKET:-seed-bucket}" \
-BM_E2E_MIGRATE_OBJECT="${BM_E2E_MIGRATE_OBJECT:-seed.txt}" \
-  npx playwright test tests/migrate.spec.ts
+BM_E2E_REPLACEMENT_IMPORT_URL="${BM_E2E_REPLACEMENT_IMPORT_URL:-http://replacement-node1:9000}" \
+BM_E2E_REPLACEMENT_CLUSTER_NAME="${BM_E2E_REPLACEMENT_CLUSTER_NAME:-fixture-replacement}" \
+BM_E2E_REPLACEMENT_SSH_USER="${BM_E2E_REPLACEMENT_SSH_USER:-root}" \
+BM_E2E_REPLACEMENT_SSH_PASSWORD="${BM_E2E_REPLACEMENT_SSH_PASSWORD:-${BM_E2E_REPLACEMENT_ROOT_PASSWORD:-buckitadmin}}" \
+  npx playwright test tests/replacement.spec.ts
 
-export BM_E2E_MIGRATE_VERIFY_ROOT_PASSWORD="${BM_E2E_MIGRATE_VERIFY_ROOT_PASSWORD:-${BM_E2E_MIGRATE_ROTATED_ROOT_PASSWORD:-newpassword123}}"
-bash "$ROOT_DIR/integration-test/scripts/verify-migrate-data.sh"
+bash "$ROOT_DIR/integration-test/scripts/verify-replacement-node.sh"

@@ -281,6 +281,7 @@ export function NodeDetail() {
         <div className="cdetail__menu-wrap" ref={menuRef}>
           <button
             className="btn btn--primary"
+            data-testid="node-actions-toggle"
             onClick={() => setActionsOpen((v) => !v)}
             aria-haspopup="menu"
             aria-expanded={actionsOpen}
@@ -303,6 +304,7 @@ export function NodeDetail() {
                           "cdetail__menu-item cdetail__menu-item--stacked" +
                           (op.danger ? " is-danger" : "")
                         }
+                        data-testid={`node-action-${op.id}`}
                         onClick={() => onPick(op)}
                         disabled={disabled}
                         title={disabled ? disabledHint(op) : undefined}

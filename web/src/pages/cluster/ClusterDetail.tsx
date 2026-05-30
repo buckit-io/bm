@@ -527,6 +527,7 @@ export function ClusterDetailLayout() {
                 <button
                   type="button"
                   className="cdetail__gear-btn"
+                  data-testid="cluster-settings-toggle"
                   onClick={() => setSettingsOpen((v) => !v)}
                   aria-haspopup="menu"
                   aria-expanded={settingsOpen}
@@ -1076,6 +1077,7 @@ function renderSettingsMenu(
         "cdetail__menu-item cdetail__menu-item--stacked" +
         (op.danger ? " is-danger" : "")
       }
+      data-testid={`cluster-setting-${op.id}`}
       onClick={() => onPick(op)}
       role="menuitem"
     >

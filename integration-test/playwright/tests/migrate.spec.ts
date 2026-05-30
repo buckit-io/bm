@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 const importURL = process.env.BM_E2E_IMPORT_URL ?? "http://minio-node1:9000";
 const importUsername = process.env.BM_E2E_IMPORT_USERNAME ?? "minioadmin";
@@ -6,7 +6,40 @@ const importPassword = process.env.BM_E2E_IMPORT_PASSWORD ?? "minioadmin";
 const clusterName = process.env.BM_E2E_MIGRATE_CLUSTER_NAME ?? "fixture-migrate";
 const sshUser = process.env.BM_E2E_MIGRATE_SSH_USER ?? "root";
 const sshPassword = process.env.BM_E2E_MIGRATE_SSH_PASSWORD ?? "minioadmin";
+const rotatedRootPassword =
+  process.env.BM_E2E_MIGRATE_ROTATED_ROOT_PASSWORD ?? "newpassword123";
 test.setTimeout(10 * 60 * 1000);
+
+async function saveClusterSshConfig(page: Page, clusterId: string) {
+  const resp = await page.request.put(`/api/v1/clusters/${encodeURIComponent(clusterId)}/ssh`, {
+    data: {
+      ssh: {
+        authMethod: "password",
+        user: sshUser,
+        port: 22,
+        password: sshPassword,
+        sudo: false,
+      },
+      overrides: {},
+    },
+  });
+  expect(resp.status()).toBe(204);
+}
+
+async function expectClusterRefreshHealthy(page: Page, clusterId: string) {
+  await expect
+    .poll(
+      async () => {
+        const refresh = await page.request.post(
+          `/api/v1/clusters/${encodeURIComponent(clusterId)}/refresh`,
+        );
+        expect(refresh.status()).toBe(200);
+        return (await refresh.json()) as { engine?: string; health?: string };
+      },
+      { timeout: 120_000 },
+    )
+    .toMatchObject({ engine: "buckit", health: "healthy" });
+}
 
 test("migrates a MinIO cluster to Buckit", async ({ page }) => {
   await page.goto("/clusters/import");
@@ -68,7 +101,27 @@ test("migrates a MinIO cluster to Buckit", async ({ page }) => {
   await page.getByTestId("migrate-finish").click();
 
   await expect(page).toHaveURL(/\/clusters\/[^/]+$/);
+  const clusterId = new URL(page.url()).pathname.split("/").pop() ?? clusterName;
   await expect(page.getByTestId("cluster-title")).toContainText(clusterName);
   await expect(page.getByTestId("cluster-migrate-link")).toHaveCount(0);
   await expect(page.getByRole("link", { name: /Open Buckit console/ })).toBeVisible();
+
+  await saveClusterSshConfig(page, clusterId);
+  await page.reload();
+  await expect(page).toHaveURL(new RegExp(`/clusters/${clusterId}$`));
+  await page.getByTestId("cluster-actions-toggle").click();
+  await page.getByTestId("cluster-action-rotate_root_creds").click();
+  await expect(page.getByTestId("cluster-operation-modal")).toBeVisible();
+  await page.getByTestId("rotate-root-password-input").fill(rotatedRootPassword);
+  await page.getByTestId("rotate-root-password-confirm-name").fill(clusterName);
+  await page.getByTestId("cluster-operation-primary").click();
+  await expect(page.getByText("RESULT")).toBeVisible({
+    timeout: 300_000,
+  });
+  await expect(page.getByTestId("cluster-operation-modal")).toContainText("Succeeded");
+  await expect(page.getByTestId("cluster-operation-modal")).toContainText("Root user");
+  await expect(page.getByTestId("cluster-operation-modal")).toContainText(
+    "cluster healthy with rotated credentials",
+  );
+  await expectClusterRefreshHealthy(page, clusterId);
 });

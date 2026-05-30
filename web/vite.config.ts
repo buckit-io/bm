@@ -22,13 +22,28 @@ export default defineConfig({
   },
   build: {
     outDir: "dist",
+    cssMinify: "esbuild",
     sourcemap: false,
     target: "es2022",
     rollupOptions: {
       output: {
-        manualChunks: {
-          react: ["react", "react-dom", "react-router-dom"],
-          query: ["@tanstack/react-query", "@tanstack/react-table"],
+        manualChunks(id) {
+          if (!id.includes("node_modules")) {
+            return;
+          }
+          if (
+            id.includes("/react/") ||
+            id.includes("/react-dom/") ||
+            id.includes("/react-router-dom/")
+          ) {
+            return "react";
+          }
+          if (
+            id.includes("/@tanstack/react-query/") ||
+            id.includes("/@tanstack/react-table/")
+          ) {
+            return "query";
+          }
         },
       },
     },

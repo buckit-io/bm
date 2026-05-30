@@ -6,7 +6,7 @@ SERVICE="${BM_E2E_MIGRATE_VERIFY_SERVICE:-minio-node1}"
 BUCKET="${BM_E2E_MIGRATE_BUCKET:-seed-bucket}"
 OBJECT="${BM_E2E_MIGRATE_OBJECT:-seed.txt}"
 ROOT_USER="${BM_E2E_MINIO_ROOT_USER:-minioadmin}"
-ROOT_PASSWORD="${BM_E2E_MINIO_ROOT_PASSWORD:-minioadmin}"
+ROOT_PASSWORD="${BM_E2E_MIGRATE_VERIFY_ROOT_PASSWORD:-${BM_E2E_MINIO_ROOT_PASSWORD:-minioadmin}}"
 
 container_id="$(BM_E2E_SCENARIO=migrate bash "$ROOT_DIR/integration-test/scripts/compose.sh" ps -q "$SERVICE" | tail -n1)"
 if [[ -z "$container_id" ]]; then

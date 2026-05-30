@@ -35,6 +35,7 @@ release RPM by default. You can override this with:
 ```sh
 make e2e-import
 make e2e-migrate
+make e2e-replacement
 make e2e-up
 make e2e-down
 ```
@@ -44,3 +45,7 @@ lab, runs the Playwright import spec, and tears the lab down.
 `make e2e-migrate` builds a systemd-backed MinIO fixture from the MinIO
 RPM, imports it through the real UI, runs the migrate wizard, then
 verifies the seeded object still exists after Buckit takes over.
+`make e2e-replacement` builds a systemd-backed Buckit fixture from the
+Buckit RPM, scrubs one node into a clean replacement-host state, imports
+the degraded cluster, then provisions that node back into service through
+the real UI.
