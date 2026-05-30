@@ -73,11 +73,6 @@ bash "$ROOT_DIR/integration-test/scripts/up-deploy.sh"
 bm_base_url="$(resolve_bm_base_url)"
 wait_for_url "$bm_base_url/api/v1/healthz"
 
-deploy_artifact_url="${BM_E2E_DEPLOY_ARTIFACT_URL:-}"
-if [[ -z "$deploy_artifact_url" ]]; then
-  deploy_artifact_url="$(bash "$ROOT_DIR/integration-test/scripts/resolve-buckit-rpm-url.sh")"
-fi
-
 for node in $(seq 1 "${BM_E2E_TARGET_NODES:-4}"); do
   wait_for_container_health "deploy-node${node}"
 done
@@ -90,7 +85,6 @@ else
   npx playwright install chromium
 fi
 PLAYWRIGHT_BASE_URL="${PLAYWRIGHT_BASE_URL:-$bm_base_url}" \
-BM_E2E_DEPLOY_ARTIFACT_URL="$deploy_artifact_url" \
 BM_E2E_DEPLOY_CLUSTER_NAME="${BM_E2E_DEPLOY_CLUSTER_NAME:-fixture-deploy}" \
 BM_E2E_DEPLOY_HOSTS="${BM_E2E_DEPLOY_HOSTS:-deploy-node1,deploy-node2,deploy-node3,deploy-node4}" \
 BM_E2E_DEPLOY_SSH_USER="${BM_E2E_DEPLOY_SSH_USER:-root}" \

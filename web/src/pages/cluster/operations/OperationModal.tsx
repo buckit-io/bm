@@ -212,6 +212,7 @@ export function OperationModal({
     <div className="modal-backdrop" onClick={(e) => e.stopPropagation()}>
       <div
         className="card modal modal--lg"
+        data-testid="cluster-operation-modal"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -275,6 +276,7 @@ export function OperationModal({
                   "btn btn--primary" +
                   (currentStep?.danger ? " btn--danger" : "")
                 }
+                data-testid="cluster-operation-primary"
                 onClick={onPrimary}
                 disabled={!canAdvance}
               >
@@ -303,6 +305,7 @@ export function OperationModal({
           {phase === "terminal" && (
             <button
               className="btn btn--primary"
+              data-testid="cluster-operation-close"
               onClick={() => onClose(result)}
             >
               Close

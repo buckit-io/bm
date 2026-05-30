@@ -50,6 +50,7 @@ export function VersionSelectStep({
         <label className="field-label">Target version</label>
         <select
           className="select"
+          data-testid="cluster-operation-version"
           value={params.version}
           onChange={(e) => setParams({ version: e.target.value })}
         >

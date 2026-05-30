@@ -582,6 +582,7 @@ export function ClusterDetailLayout() {
               className={
                 cluster.engine === "minio" ? "btn" : "btn btn--primary"
               }
+              data-testid="cluster-actions-toggle"
               onClick={() => setActionsOpen((v) => !v)}
               aria-haspopup="menu"
               aria-expanded={actionsOpen}
@@ -1038,6 +1039,7 @@ function renderActionsMenu(
               "cdetail__menu-item cdetail__menu-item--stacked" +
               (op.danger ? " is-danger" : "")
             }
+            data-testid={`cluster-action-${op.id}`}
             onClick={() => onPick(op)}
             disabled={engineDisabled}
             title={engineDisabled ? BUCKIT_ONLY_HINT : undefined}

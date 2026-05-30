@@ -8,6 +8,7 @@
 // operator configures default credentials and may override per host.
 
 import { useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useCluster, useNodes } from "../../api/hooks";
 import { Node } from "../../api/types";
@@ -83,6 +84,7 @@ function normalizeForUser(s: SshCreds): SshCreds {
 export function ClusterSshSettings() {
   const { clusterId = "" } = useParams();
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const { data: cluster, isLoading: loadingCluster } = useCluster(clusterId);
   const { data: nodes, isLoading: loadingNodes } = useNodes(clusterId);
 
@@ -214,11 +216,14 @@ export function ClusterSshSettings() {
       .filter((h) => h.id && (h.port ?? 0) > 0)
       .map((h) => ({ id: h.id, port: h.port }));
     try {
+      const savedConfig = { ssh, overrides };
       await saveClusterSshConfig(
         clusterId,
-        { ssh, overrides },
+        savedConfig,
         { persist: persistSsh, hosts: hostPorts },
       );
+      qc.setQueryData(["cluster-ssh", clusterId], savedConfig);
+      qc.invalidateQueries({ queryKey: ["cluster-ssh", clusterId] });
       navigate(`/clusters/${clusterId}`);
     } finally {
       setSaving(false);
