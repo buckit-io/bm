@@ -75,6 +75,11 @@ type Cluster struct {
 	// ConsoleURL is the Buckit web console deep-link target. Empty when the
 	// server doesn't advertise one — the UI hides the "Open console" button.
 	ConsoleURL string `json:"consoleUrl,omitempty"`
+	// ConsolePort is the console listen port used for per-node reachability
+	// probes. Resolved once at import (see resolveConsolePort) and persisted,
+	// kept separate from ConsoleURL because a load-balanced deep-link may use
+	// an unrelated port. 0 means "unknown" — probes fall back to 9001.
+	ConsolePort int `json:"consolePort,omitempty"`
 }
 
 // AdminCreds is the persisted admin API access pack for one cluster.
@@ -94,7 +99,17 @@ type ServerInfo struct {
 	Version    string             `json:"version"`
 	DeployedAt time.Time          `json:"deployedAt"`
 	ConsoleURL string             `json:"consoleUrl,omitempty"`
-	Servers    []ServerInfoServer `json:"servers"`
+	// ConsoleAddress is the console listen address recovered from the
+	// MINIO_CONSOLE_ADDRESS env var (e.g. ":9001"), when the cluster was
+	// started with it set. Empty when the console was configured via the
+	// --console-address flag or left to bind a random free port.
+	ConsoleAddress string `json:"consoleAddress,omitempty"`
+	// BrowserRedirectURL is the operator-configured console deep-link
+	// (MINIO_BROWSER_REDIRECT_URL), when set. Authoritative for the
+	// "Open console" link, and a signal that the S3 browser-redirect probe
+	// would only echo this value.
+	BrowserRedirectURL string             `json:"browserRedirectUrl,omitempty"`
+	Servers            []ServerInfoServer `json:"servers"`
 	Pools      int                `json:"pools"`
 	Parity     int                `json:"parity"`
 	Raw        int64              `json:"raw"`
@@ -154,6 +169,12 @@ type ImportCandidate struct {
 	UsableBytes   int64         `json:"usableBytes"`
 	Parity        int           `json:"parity"`
 	ConsoleURL    string        `json:"consoleUrl,omitempty"`
+	// ConsoleAddress / BrowserRedirectURL are raw console signals recovered
+	// from the cluster's env vars during discovery (see internal/admin/
+	// mapping.go). They feed console-port/deep-link resolution at commit time;
+	// the UI doesn't render them.
+	ConsoleAddress     string `json:"consoleAddress,omitempty"`
+	BrowserRedirectURL string `json:"browserRedirectUrl,omitempty"`
 }
 
 // DiscoveryProgress matches web/src/mock/api.ts:DiscoveryProgress — one

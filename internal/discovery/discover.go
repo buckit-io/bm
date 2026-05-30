@@ -123,6 +123,11 @@ func Discover(ctx context.Context, req Request, out chan<- domain.DiscoveryProgr
 		UsableBytes:   info.Usable,
 		Parity:        info.Parity,
 		ConsoleURL:    info.ConsoleURL,
+		// Raw console signals — resolved into a console port + deep-link at
+		// commit time (see resolveConsolePort / consoleDeepLink in the api
+		// package), so the network probe runs once per import, not per refresh.
+		ConsoleAddress:     info.ConsoleAddress,
+		BrowserRedirectURL: info.BrowserRedirectURL,
 	}, nil
 }
 

@@ -43,10 +43,16 @@ type tcpProbeFn func(ctx context.Context, address string) bool
 type httpProbeFn func(ctx context.Context, client *http.Client, rawURL string) bool
 type icmpProbeFn func(ctx context.Context, hostname string) bool
 
+// consoleProbeFn discovers a cluster's console listen port by asking its S3
+// endpoint where it redirects browsers. Boxed in an atomic.Pointer so tests
+// can swap in a deterministic implementation without real network I/O.
+type consoleProbeFn func(ctx context.Context, creds domain.AdminCreds) (port int, ok bool)
+
 var (
-	refreshTCPProbe  atomic.Pointer[tcpProbeFn]
-	refreshHTTPProbe atomic.Pointer[httpProbeFn]
-	refreshICMPProbe atomic.Pointer[icmpProbeFn]
+	refreshTCPProbe     atomic.Pointer[tcpProbeFn]
+	refreshHTTPProbe    atomic.Pointer[httpProbeFn]
+	refreshICMPProbe    atomic.Pointer[icmpProbeFn]
+	refreshConsoleProbe atomic.Pointer[consoleProbeFn]
 )
 
 const icmpProbeTimeout = 1 * time.Second
@@ -80,6 +86,9 @@ func init() {
 
 	icmp := icmpProbeFn(shellPing)
 	refreshICMPProbe.Store(&icmp)
+
+	console := consoleProbeFn(probeConsolePortViaRedirect)
+	refreshConsoleProbe.Store(&console)
 }
 
 // shellPing invokes the OS `ping` binary with a single packet and a 1s
@@ -246,6 +255,21 @@ func postCommit(opts Options) http.HandlerFunc {
 		}
 		now := time.Now().UTC()
 
+		creds := domain.AdminCreds{
+			URL:       req.Candidate.URL,
+			AccessKey: req.Candidate.Username,
+			SecretKey: req.Candidate.Password,
+			Insecure:  req.Insecure,
+		}
+		// Resolve the console wiring once, here at import time, and persist it
+		// so later refreshes never re-probe. The probe port (per-node
+		// reachability) and the deep-link URL are deliberately kept separate:
+		// a custom MINIO_BROWSER_REDIRECT_URL may front the console on a
+		// different port (e.g. 443 behind a load balancer), which must not be
+		// used as the node console probe target.
+		consolePort := resolveConsolePort(r.Context(), req.Candidate.ConsoleAddress, creds)
+		consoleURL := consoleDeepLink(req.Candidate.BrowserRedirectURL, creds, consolePort)
+
 		c := domain.Cluster{
 			ID:             clusterID,
 			Name:           chosen,
@@ -265,7 +289,8 @@ func postCommit(opts Options) http.HandlerFunc {
 			SSHConfigured:  false,
 			LastActivityAt: now,
 			CreatedAt:      now,
-			ConsoleURL:     req.Candidate.ConsoleURL,
+			ConsoleURL:     consoleURL,
+			ConsolePort:    consolePort,
 		}
 		if req.Description == "" {
 			c.Description = fmt.Sprintf("Imported from %s", req.Candidate.URL)
@@ -293,12 +318,6 @@ func postCommit(opts Options) http.HandlerFunc {
 				writeError(w, http.StatusInternalServerError, "put_node_failed", err.Error())
 				return
 			}
-		}
-		creds := domain.AdminCreds{
-			URL:       req.Candidate.URL,
-			AccessKey: req.Candidate.Username,
-			SecretKey: req.Candidate.Password,
-			Insecure:  req.Insecure,
 		}
 		if err := opts.ClusterAdmin.Put(r.Context(), clusterID, creds); err != nil {
 			writeError(w, http.StatusInternalServerError, "put_admin_failed", err.Error())
@@ -497,7 +516,7 @@ func refreshOne(ctx context.Context, opts Options, c domain.Cluster, includeProb
 					}
 				}
 				if includeProbes && len(nodeList) > 0 {
-					startAsyncNodeProbeRefresh(opts, c.ID, nodeList, creds, portFromEndpoint(c.ConsoleURL))
+					startAsyncNodeProbeRefresh(opts, c.ID, nodeList, creds, c.ConsolePort)
 				}
 			}
 		}
@@ -524,11 +543,6 @@ func refreshOne(ctx context.Context, opts Options, c domain.Cluster, includeProb
 		// accept bare / RFC3339 timestamps.
 		c.Engine = discovery.ParseEngine(info.Version)
 	}
-	if info.ConsoleURL != "" {
-		c.ConsoleURL = info.ConsoleURL
-	} else if consoleURL := fallbackConsoleURL(creds.URL); consoleURL != "" {
-		c.ConsoleURL = consoleURL
-	}
 	if info.Parity > 0 {
 		c.Parity = info.Parity
 	}
@@ -541,7 +555,7 @@ func refreshOne(ctx context.Context, opts Options, c domain.Cluster, includeProb
 	c.Health = clusters.Rollup(c, summary)
 	_ = opts.Clusters.Put(ctx, c)
 	if includeProbes {
-		startAsyncNodeProbeRefresh(opts, c.ID, nodeList, creds, portFromEndpoint(c.ConsoleURL))
+		startAsyncNodeProbeRefresh(opts, c.ID, nodeList, creds, c.ConsolePort)
 	}
 }
 
@@ -700,23 +714,114 @@ func refreshProbeSecure(raw string) bool {
 	return strings.EqualFold(u.Scheme, "https")
 }
 
-func fallbackConsoleURL(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
+// resolveConsolePort determines the TCP port the web console listens on, for
+// per-node reachability probes. The console listen address is not a
+// first-class field in the admin info API (see internal/admin/mapping.go), so
+// we resolve it through progressively less certain sources:
+//
+//  1. MINIO_CONSOLE_ADDRESS env var — explicit, free (no network).
+//  2. A live S3 browser-redirect probe — the server reports its own console
+//     port, correct even behind a load balancer.
+//  3. Port 9001 — last resort. An unconfigured console binds a *random* port,
+//     so there is no reliable default; 9001 is what real deployments most
+//     often configure (bm's own deploys included).
+//
+// MINIO_BROWSER_REDIRECT_URL is intentionally NOT consulted here: it may front
+// the console on an unrelated port (e.g. 443 via a load balancer), which would
+// be wrong to probe per-node. It only feeds the deep-link in consoleDeepLink.
+//
+// Resolution is run once at import time and the result is persisted, so this
+// never runs on the refresh hot path.
+func resolveConsolePort(ctx context.Context, consoleAddress string, creds domain.AdminCreds) int {
+	if port := portFromEndpoint(consoleAddress); port > 0 {
+		return port
+	}
+	if probe := refreshConsoleProbe.Load(); probe != nil {
+		if port, ok := (*probe)(ctx, creds); ok && port > 0 {
+			return port
+		}
+	}
+	return 9001
+}
+
+// consoleDeepLink builds the "Open console" link. An operator-configured
+// MINIO_BROWSER_REDIRECT_URL wins verbatim (it's the canonical browser-facing
+// URL, load balancer and all); otherwise we point at the admin endpoint's host
+// on the resolved console port.
+func consoleDeepLink(browserRedirectURL string, creds domain.AdminCreds, consolePort int) string {
+	if u := strings.TrimSpace(browserRedirectURL); u != "" {
+		return u
+	}
+	host := hostnameFromEndpoint(creds.URL)
+	if host == "" {
 		return ""
+	}
+	scheme := "http"
+	if refreshProbeSecure(creds.URL) {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s:%d", scheme, host, consolePort)
+}
+
+// probeConsolePortViaRedirect issues an unauthenticated, browser-like GET to
+// the S3 endpoint root. With MINIO_BROWSER enabled and no redirect-URL
+// override set, the server answers 307 with a Location pointing at its own
+// console listener — we extract that port. Returns ok=false when the endpoint
+// doesn't redirect (browser disabled, override set, or not a buckit/minio S3
+// endpoint).
+func probeConsolePortViaRedirect(ctx context.Context, creds domain.AdminCreds) (int, bool) {
+	raw := strings.TrimSpace(creds.URL)
+	if raw == "" {
+		return 0, false
 	}
 	if !strings.Contains(raw, "://") {
 		raw = "https://" + raw
 	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Hostname() == "" {
-		return ""
+	base, err := url.Parse(raw)
+	if err != nil || base.Host == "" {
+		return 0, false
 	}
-	scheme := u.Scheme
-	if scheme == "" {
-		scheme = "https"
+	base.Path = "/"
+	base.RawQuery = ""
+
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if strings.EqualFold(base.Scheme, "https") && creds.Insecure {
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} // operator opt-in
 	}
-	return fmt.Sprintf("%s://%s:9001", scheme, u.Hostname())
+	client := &http.Client{
+		Timeout:   refreshDialTimeout,
+		Transport: transport,
+		// Read the Location ourselves rather than following the redirect.
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	pctx, cancel := context.WithTimeout(ctx, refreshDialTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(pctx, http.MethodGet, base.String(), nil)
+	if err != nil {
+		return 0, false
+	}
+	// guessIsBrowserReq keys off a Mozilla UA plus anonymous auth.
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; bm console probe)")
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, false
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	switch resp.StatusCode {
+	case http.StatusTemporaryRedirect, http.StatusPermanentRedirect,
+		http.StatusFound, http.StatusMovedPermanently, http.StatusSeeOther:
+	default:
+		return 0, false
+	}
+	port := portFromEndpoint(resp.Header.Get("Location"))
+	if port <= 0 {
+		return 0, false
+	}
+	return port, true
 }
 
 func sshPortOrDefault(port int) int {

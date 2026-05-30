@@ -28,6 +28,16 @@ func mapServerInfo(msg *madmin.InfoMessage) *domain.ServerInfo {
 
 	for _, s := range msg.Servers {
 		out.Servers = append(out.Servers, mapServer(s))
+		// The admin info response has no first-class console field. Recover
+		// the console wiring from the per-server env vars when the operator
+		// set them — the first server that carries each one wins (config is
+		// assumed homogeneous across the cluster).
+		if out.ConsoleAddress == "" {
+			out.ConsoleAddress = s.MinioEnvVars["MINIO_CONSOLE_ADDRESS"]
+		}
+		if out.BrowserRedirectURL == "" {
+			out.BrowserRedirectURL = s.MinioEnvVars["MINIO_BROWSER_REDIRECT_URL"]
+		}
 	}
 
 	// Roll up raw / used / usable from the drives if the response doesn't

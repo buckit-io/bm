@@ -45,5 +45,8 @@ func deployedCluster(clusterID string, p DeployParams, verify VerifyResult) doma
 		LastActivityAt: now,
 		CreatedAt:      now,
 		ConsoleURL:     verify.ConsoleURL,
+		// bm chose the console port at deploy time — persist it directly so
+		// node probes don't have to rediscover it.
+		ConsolePort: p.API.ConsolePort,
 	}
 }

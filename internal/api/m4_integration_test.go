@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -354,20 +355,102 @@ func TestRefreshNodeConnectivityUpdatesProbeFlags(t *testing.T) {
 	}
 }
 
-func TestFallbackConsoleURL(t *testing.T) {
-	cases := []struct {
-		in   string
-		want string
-	}{
-		{"http://node1:9000", "http://node1:9001"},
-		{"https://vip.example.com:9443", "https://vip.example.com:9001"},
-		{"node1:9000", "https://node1:9001"},
-		{"", ""},
+func TestResolveConsolePort(t *testing.T) {
+	// Stub the network probe so tiers can be exercised deterministically.
+	prevConsole := refreshConsoleProbe.Load()
+	t.Cleanup(func() { refreshConsoleProbe.Store(prevConsole) })
+	probeReturns := func(port int, ok bool) {
+		p := consoleProbeFn(func(_ context.Context, _ domain.AdminCreds) (int, bool) {
+			return port, ok
+		})
+		refreshConsoleProbe.Store(&p)
 	}
-	for _, tc := range cases {
-		if got := fallbackConsoleURL(tc.in); got != tc.want {
-			t.Fatalf("fallbackConsoleURL(%q) = %q, want %q", tc.in, got, tc.want)
+
+	creds := domain.AdminCreds{URL: "http://node1:9000"}
+
+	t.Run("env console address wins without probing", func(t *testing.T) {
+		probeReturns(12345, true) // would change the answer if reached
+		if got := resolveConsolePort(context.Background(), ":9007", creds); got != 9007 {
+			t.Fatalf("got %d, want 9007", got)
 		}
+	})
+
+	t.Run("env console address with host", func(t *testing.T) {
+		probeReturns(0, false)
+		if got := resolveConsolePort(context.Background(), "0.0.0.0:9007", creds); got != 9007 {
+			t.Fatalf("got %d, want 9007", got)
+		}
+	})
+
+	t.Run("probe port used when no env address", func(t *testing.T) {
+		probeReturns(41827, true)
+		if got := resolveConsolePort(context.Background(), "", creds); got != 41827 {
+			t.Fatalf("got %d, want 41827", got)
+		}
+	})
+
+	t.Run("falls back to 9001 when probe yields nothing", func(t *testing.T) {
+		probeReturns(0, false)
+		if got := resolveConsolePort(context.Background(), "", creds); got != 9001 {
+			t.Fatalf("got %d, want 9001", got)
+		}
+	})
+}
+
+func TestConsoleDeepLink(t *testing.T) {
+	creds := domain.AdminCreds{URL: "http://node1:9000"}
+	httpsCreds := domain.AdminCreds{URL: "https://vip.example.com:9443"}
+
+	t.Run("browser redirect url used verbatim, ignores probe port", func(t *testing.T) {
+		got := consoleDeepLink("https://console.example.com", creds, 9007)
+		if want := "https://console.example.com"; got != want {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("builds from host and resolved port when no redirect url", func(t *testing.T) {
+		got := consoleDeepLink("", creds, 9007)
+		if want := "http://node1:9007"; got != want {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("https scheme preserved from admin endpoint", func(t *testing.T) {
+		got := consoleDeepLink("", httpsCreds, 41827)
+		if want := "https://vip.example.com:41827"; got != want {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+	})
+}
+
+func TestProbeConsolePortViaRedirect(t *testing.T) {
+	// Mimic buckit's browser-redirect: a 307 to host:consolePort for a
+	// browser-like GET of the root, and a 200 for anything else.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" && strings.Contains(r.Header.Get("User-Agent"), "Mozilla") {
+			host, _, _ := net.SplitHostPort(r.Host)
+			http.Redirect(w, r, "http://"+host+":13333/", http.StatusTemporaryRedirect)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	port, ok := probeConsolePortViaRedirect(context.Background(), domain.AdminCreds{URL: srv.URL})
+	if !ok || port != 13333 {
+		t.Fatalf("probe = (%d, %v), want (13333, true)", port, ok)
+	}
+}
+
+func TestProbeConsolePortViaRedirect_NoRedirect(t *testing.T) {
+	// Browser redirect disabled / not a buckit endpoint: always 200, no Location.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	if port, ok := probeConsolePortViaRedirect(context.Background(), domain.AdminCreds{URL: srv.URL}); ok {
+		t.Fatalf("expected no port, got (%d, %v)", port, ok)
 	}
 }
 

@@ -62,6 +62,9 @@ export interface Cluster {
   // Buckit web console deep-link target. Empty when the server doesn't
   // advertise one — the UI hides the "Open console" button.
   consoleUrl?: string;
+  // Console listen port used for per-node reachability probes. Resolved at
+  // import and persisted; kept separate from consoleUrl. Not rendered.
+  consolePort?: number;
 }
 
 export interface NIC {
@@ -261,6 +264,10 @@ export interface ImportCandidate {
   usableBytes: number;
   parity: number;
   consoleUrl?: string;
+  // Raw console signals from discovery; feed console resolution at commit.
+  // Not rendered by the UI.
+  consoleAddress?: string;
+  browserRedirectUrl?: string;
 }
 
 // ---- artifact validation (Basics step custom URL) ----
