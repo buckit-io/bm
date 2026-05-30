@@ -148,8 +148,17 @@ func TestM5NewClusterDiscover(t *testing.T) {
 	if r.State != domain.WizardDiscoveryDone {
 		t.Fatalf("state: want done, got %s (%s)", r.State, r.Error)
 	}
-	if r.Arch != "amd64" || r.Cores == nil || *r.Cores != 8 || len(r.Drives) != 3 {
+	if r.Arch != "amd64" || r.Cores == nil || *r.Cores != 8 || len(r.Drives) != 4 {
 		t.Fatalf("unexpected discovery: %+v", r)
+	}
+	dataDrives := 0
+	for _, d := range r.Drives {
+		if !d.IsBoot && !d.IsSystem {
+			dataDrives++
+		}
+	}
+	if dataDrives != 2 {
+		t.Fatalf("want 2 data drives, got %d: %+v", dataDrives, r.Drives)
 	}
 }
 

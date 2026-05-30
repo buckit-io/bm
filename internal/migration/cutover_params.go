@@ -92,9 +92,14 @@ func (p CutoverParams) Validate() error {
 }
 
 // ArtifactForKind resolves the Buckit Artifact for the host's detected
-// package format. kind is "rpm" or "deb".
-func (p CutoverParams) ArtifactForKind(kind string) (deploy.Artifact, error) {
-	art, err := deploy.ResolveArtifact(p.TargetVersion, kind, "")
+// package format and architecture. kind is "rpm" or "deb"; arch is the
+// host's normalized arch ("amd64"/"arm64"). A release exposes both
+// arches, so an empty arch lets ResolveArtifact pick the first matching
+// asset — which is arbitrary and may not match the host. Callers that
+// know the target arch must pass it so the cutover installs a compatible
+// package.
+func (p CutoverParams) ArtifactForKind(kind, arch string) (deploy.Artifact, error) {
+	art, err := deploy.ResolveArtifact(p.TargetVersion, kind, arch)
 	if err != nil {
 		return deploy.Artifact{}, errors.New("cutover: " + err.Error())
 	}

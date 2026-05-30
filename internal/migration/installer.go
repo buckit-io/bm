@@ -118,7 +118,16 @@ func (in *Installer) PreStage(ctx context.Context, host domain.HostRow, params C
 		reportErr(StageFailed, fmt.Errorf("detect package manager: %w", err))
 		return err
 	}
-	artifact, err := params.ArtifactForKind(mgr.Kind())
+	// A Buckit release ships both amd64 and arm64 packages, so the host's
+	// arch decides which asset is installable. Detect it here rather than
+	// trusting discovery (which a bare cutover may not carry) — installing
+	// the wrong arch trips dnf's "does not have a compatible architecture".
+	arch, err := detectHostArch(ctx, client)
+	if err != nil {
+		reportErr(StageFailed, fmt.Errorf("detect arch: %w", err))
+		return err
+	}
+	artifact, err := params.ArtifactForKind(mgr.Kind(), arch)
 	if err != nil {
 		reportErr(StageFailed, err)
 		return err
@@ -449,6 +458,26 @@ func (in *Installer) waitHealthy(ctx context.Context, client *ssh.Client, params
 		case <-time.After(2 * time.Second):
 		}
 	}
+}
+
+// detectHostArch probes the host's CPU architecture via `uname -m` and
+// maps it to the arch tag Buckit's package catalog uses ("amd64"/"arm64").
+// An unrecognized or empty result is an error: resolving an artifact with
+// an empty arch would let the catalog pick an arbitrary asset, which is
+// exactly the cross-arch install the cutover must avoid.
+func detectHostArch(ctx context.Context, client *ssh.Client) (string, error) {
+	r, err := bmssh.Run(ctx, client, "uname -m")
+	if err != nil {
+		return "", err
+	}
+	if r.ExitCode != 0 {
+		return "", fmt.Errorf("uname -m exited %d: %s", r.ExitCode, strings.TrimSpace(r.Stderr))
+	}
+	arch := normalizeUnameArch(r.Stdout)
+	if arch == "" {
+		return "", fmt.Errorf("unrecognized architecture %q", strings.TrimSpace(r.Stdout))
+	}
+	return arch, nil
 }
 
 // StopBuckit performs the buckit-side teardown on one host: disable buckit,

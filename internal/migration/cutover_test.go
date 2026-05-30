@@ -211,6 +211,42 @@ func (f *cutoverFixture) cleanup() {
 	_ = f.store.Close()
 }
 
+// TestArtifactForKindHonorsArch guards against a cross-arch cutover: a
+// Buckit release exposes both amd64 and arm64 RPMs, so resolving with an
+// empty arch returns the first listed asset regardless of the host. Here
+// the arm64 RPM is listed first, so an arch-blind resolve would hand an
+// x86_64 host an aarch64 package — exactly the "does not have a compatible
+// architecture" failure the installer must avoid.
+func TestArtifactForKindHonorsArch(t *testing.T) {
+	restore := deploy.RestoreVersionsCacheForTest([]domain.BuckitVersion{{
+		Tag:   "v9.9.9",
+		Label: "v9.9.9",
+		Artifacts: []domain.BuckitArtifact{
+			{Kind: "rpm", Arch: "arm64", URL: "https://example.test/buckit.aarch64.rpm"},
+			{Kind: "rpm", Arch: "amd64", URL: "https://example.test/buckit.x86_64.rpm"},
+		},
+	}})
+	t.Cleanup(restore)
+
+	p := CutoverParams{TargetVersion: "v9.9.9"}
+
+	amd, err := p.ArtifactForKind("rpm", "amd64")
+	if err != nil {
+		t.Fatalf("amd64 resolve: %v", err)
+	}
+	if amd.URL != "https://example.test/buckit.x86_64.rpm" {
+		t.Fatalf("amd64 picked wrong asset: %s", amd.URL)
+	}
+
+	arm, err := p.ArtifactForKind("rpm", "arm64")
+	if err != nil {
+		t.Fatalf("arm64 resolve: %v", err)
+	}
+	if arm.URL != "https://example.test/buckit.aarch64.rpm" {
+		t.Fatalf("arm64 picked wrong asset: %s", arm.URL)
+	}
+}
+
 func (f *cutoverFixture) body() MigrationBody {
 	return MigrationBody{
 		SourceClusterID: f.clusterID,
