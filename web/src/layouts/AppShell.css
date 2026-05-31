@@ -129,7 +129,7 @@
 
 .shell__version {
   padding: var(--s-2) var(--s-3);
-  font-size: var(--fs-xs);
+  font-size: 10px;
   color: var(--c-fg-subtle);
 }
 

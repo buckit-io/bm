@@ -1,12 +1,20 @@
 import { Link } from "react-router-dom";
+import { useClusters } from "../api/hooks";
 import "./Welcome.css";
 
 export function Welcome() {
+  const { data: clusters } = useClusters();
+  const hasClusters = (clusters?.length ?? 0) > 0;
+
   return (
     <div className="welcome">
       <header className="welcome__header">
-        <h1>Welcome to Buckit Manager</h1>
-        <p className="muted">Let's get your first cluster running.</p>
+        <h1>{hasClusters ? "Buckit Manager wizards" : "Welcome to Buckit Manager"}</h1>
+        <p className="muted">
+          {hasClusters
+            ? "Let's add another cluster."
+            : "Let's get your first cluster running."}
+        </p>
       </header>
 
       <div className="welcome__choices">

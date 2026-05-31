@@ -34,6 +34,7 @@ export function AppShell() {
       <div className="shell__body">
         <nav className="shell__sidebar">
           <NavLink to="/clusters" className="shell__nav">Clusters</NavLink>
+          <NavLink to="/welcome" className="shell__nav">Wizards</NavLink>
           <NavLink to="/history" className="shell__nav">History</NavLink>
           <NavLink to="/settings" className="shell__nav">Settings</NavLink>
           <div className="grow" />
