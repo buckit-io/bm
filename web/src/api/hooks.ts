@@ -20,6 +20,19 @@ import type {
   SessionMe,
 } from "./types";
 
+// ---- app version ----
+
+export function useAppVersion() {
+  return useQuery<string>({
+    queryKey: ["app-version"],
+    queryFn: async ({ signal }) => {
+      const data = await client.getAppVersion(signal);
+      return data.version;
+    },
+    staleTime: Infinity,
+  });
+}
+
 // ---- session ----
 
 export function useMe() {

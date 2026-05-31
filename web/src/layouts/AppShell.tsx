@@ -1,9 +1,10 @@
 import { NavLink, Outlet, useLocation, useParams } from "react-router-dom";
-import { useClusters } from "../api/hooks";
+import { useAppVersion, useClusters } from "../api/hooks";
 import "./AppShell.css";
 
 export function AppShell() {
   const { data: clusters } = useClusters();
+  const { data: appVersion } = useAppVersion();
   const location = useLocation();
   const params = useParams();
 
@@ -39,7 +40,7 @@ export function AppShell() {
           <a className="shell__nav shell__nav--subtle" href="https://github.com/buckit-io/buckit" target="_blank" rel="noreferrer">
             Docs ↗
           </a>
-          <span className="shell__version">v0.1.0</span>
+          <span className="shell__version">{appVersion ?? "—"}</span>
         </nav>
 
         <main className="shell__main">

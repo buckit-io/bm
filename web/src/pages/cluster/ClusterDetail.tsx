@@ -551,7 +551,7 @@ export function ClusterDetailLayout() {
             </h1>
             <p className="muted cdetail__meta">
               <span data-testid="cluster-meta">
-                {cluster.version} · {cluster.nodeCount} nodes · {cluster.poolCount} pool ·
+                Version: {cluster.version} · {cluster.nodeCount} nodes · {cluster.poolCount} pool ·
               </span>
               EC:{cluster.parity}
               {cluster.migratedFrom &&

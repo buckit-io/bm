@@ -112,6 +112,11 @@ const put = <T>(path: string, body?: unknown, signal?: AbortSignal) =>
 const del = <T>(path: string, signal?: AbortSignal) =>
   request<T>("DELETE", path, { signal });
 
+// ---- app version ----
+
+export const getAppVersion = (signal?: AbortSignal) =>
+  get<{ version: string }>("/healthz", signal);
+
 // ---- session ----
 
 export const me = (signal?: AbortSignal) => get<SessionMe>("/sessions/me", signal);

@@ -5,11 +5,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/buckit-io/bm/internal/admin"
@@ -39,6 +41,8 @@ func runWeb(rawArgs []string) error {
 	allowNonLoopback := fs.Bool("allow-non-loopback", false, "allow non-loopback listen addresses for local test/lab use")
 	noBrowser := fs.Bool("no-browser", false, "do not open the default browser on startup")
 	dataDir := fs.String("data-dir", "", "override config dir (default: ~/.config/bm)")
+	logFile := fs.String("log-file", "", "write a copy of stdout/stderr to this file (default: <data-dir>/bm.log)")
+	noLogFile := fs.Bool("no-log-file", false, "do not write a log file (stdout/stderr stay on the terminal only)")
 	webDist := fs.String("web-dist", defaultWebDist(), "override embedded UI assets with a built web/dist directory")
 	if err := fs.Parse(rawArgs); err != nil {
 		return err
@@ -57,6 +61,22 @@ func runWeb(rawArgs []string) error {
 	if err != nil {
 		return err
 	}
+
+	if !*noLogFile {
+		logPath := *logFile
+		if logPath == "" {
+			logPath = filepath.Join(paths.Dir, "bm.log")
+		}
+		// Print the banner to the real terminal before swapping the streams,
+		// so it's the one line the operator sees; everything else goes to file.
+		fmt.Fprintf(os.Stderr, "bm: output is saved to log file at %s\n", logPath)
+		stopLogging, err := startFileLogging(logPath)
+		if err != nil {
+			return fmt.Errorf("open log file %s: %w", logPath, err)
+		}
+		defer stopLogging()
+	}
+
 	key, generated, err := config.LoadDataKey(paths)
 	if err != nil {
 		return err
@@ -166,6 +186,122 @@ func runWeb(rawArgs []string) error {
 	}
 
 	return app.Serve(context.Background(), srv)
+}
+
+// maxLogBytes caps bm.log: once a write would push it past this size the file
+// is rolled over to "<path>.1" (one backup, overwritten on each roll) and a
+// fresh file is started. At most maxLogBytes×2 of log data lives on disk.
+const maxLogBytes = 10 << 20 // 10 MiB
+
+// startFileLogging redirects os.Stdout and os.Stderr into logPath (opened in
+// append mode). It works by swapping the global streams for OS pipes and
+// copying each pipe into the shared log file. Nothing is echoed back to the
+// terminal — all of bm web's output goes to the file only.
+//
+// The returned cleanup func restores the original streams, drains the pipes,
+// and closes the file; callers should defer it for the lifetime of the process.
+func startFileLogging(logPath string) (func(), error) {
+	lf, err := newRotatingWriter(logPath, maxLogBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		lf.Close()
+		return nil, err
+	}
+	errR, errW, err := os.Pipe()
+	if err != nil {
+		outR.Close()
+		outW.Close()
+		lf.Close()
+		return nil, err
+	}
+
+	origStdout, origStderr := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = outW, errW
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	// Both streams go to the log file only; nothing is echoed to the terminal.
+	go func() { defer wg.Done(); _, _ = io.Copy(lf, outR) }()
+	go func() { defer wg.Done(); _, _ = io.Copy(lf, errR) }()
+
+	return func() {
+		os.Stdout, os.Stderr = origStdout, origStderr
+		// Closing the write ends makes the copiers see EOF and return.
+		outW.Close()
+		errW.Close()
+		wg.Wait()
+		outR.Close()
+		errR.Close()
+		lf.Close()
+	}, nil
+}
+
+// rotatingWriter is the shared log-file sink. Its mutex both serializes the
+// concurrent writes from the stdout and stderr copiers (so lines don't
+// interleave byte-wise) and guards the rollover bookkeeping.
+type rotatingWriter struct {
+	mu   sync.Mutex
+	f    *os.File
+	path string
+	max  int64
+	size int64
+}
+
+func newRotatingWriter(path string, max int64) (*rotatingWriter, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	var size int64
+	if info, statErr := f.Stat(); statErr == nil {
+		size = info.Size()
+	}
+	return &rotatingWriter{f: f, path: path, max: max, size: size}, nil
+}
+
+func (rw *rotatingWriter) Write(p []byte) (int, error) {
+	rw.mu.Lock()
+	defer rw.mu.Unlock()
+	if rw.size > 0 && rw.size+int64(len(p)) > rw.max {
+		// Best effort: if rollover fails we keep appending to the current file
+		// rather than dropping the line.
+		_ = rw.rotate()
+	}
+	n, err := rw.f.Write(p)
+	rw.size += int64(n)
+	return n, err
+}
+
+// rotate closes the current file, renames it to "<path>.1" (replacing any
+// previous backup), and opens a fresh empty file at path.
+func (rw *rotatingWriter) rotate() error {
+	if err := rw.f.Close(); err != nil {
+		return err
+	}
+	backup := rw.path + ".1"
+	_ = os.Remove(backup) // Rename won't overwrite an existing target on Windows.
+	if err := os.Rename(rw.path, backup); err != nil {
+		// Rename failed; reopen the original so logging continues.
+		rw.f, _ = os.OpenFile(rw.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		return err
+	}
+	f, err := os.OpenFile(rw.path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	rw.f = f
+	rw.size = 0
+	return nil
+}
+
+func (rw *rotatingWriter) Close() error {
+	rw.mu.Lock()
+	defer rw.mu.Unlock()
+	return rw.f.Close()
 }
 
 func defaultWebDist() string {

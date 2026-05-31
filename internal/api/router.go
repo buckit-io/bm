@@ -144,7 +144,7 @@ func New(opts Options) http.Handler {
 func healthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",
-		"version": version.String(),
+		"version": version.Version,
 		"time":    time.Now().UTC().Format(time.RFC3339),
 	})
 }

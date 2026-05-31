@@ -22,6 +22,9 @@
   --c-accent-fg: #ffffff;
   --c-accent-soft: #dbeafe;
 
+  --c-secondary: #7c3aed;
+  --c-secondary-fg: #ffffff;
+
   --c-success: #16a34a;
   --c-success-soft: #dcfce7;
   --c-warning: #d97706;
@@ -104,6 +107,9 @@
     --c-accent: #3b82f6;
     --c-accent-fg: #ffffff;
     --c-accent-soft: #1e3a8a55;
+
+    --c-secondary: #8b5cf6;
+    --c-secondary-fg: #ffffff;
 
     --c-success: #22c55e;
     --c-success-soft: #14532d55;

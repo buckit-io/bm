@@ -392,8 +392,11 @@ func refreshAllClusters(opts Options) http.HandlerFunc {
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
 		refreshConcurrently(ctx, opts, all, false)
-		// Re-fetch after refresh so we return the updated rows.
-		updated, err := opts.Clusters.List(ctx)
+		// Re-fetch off r.Context(), not the refresh ctx. When every cluster is
+		// unreachable the admin calls hold ctx open until its 30s deadline, so
+		// ctx is drained by the time refreshConcurrently returns. The bbolt read
+		// here is cheap and local — it must not inherit the exhausted ctx.
+		updated, err := opts.Clusters.List(r.Context())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "list_failed", err.Error())
 			return

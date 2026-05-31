@@ -97,6 +97,16 @@ p {
   border-color: color-mix(in srgb, var(--c-accent) 90%, black);
 }
 
+.btn--secondary {
+  background: var(--c-secondary);
+  border-color: var(--c-secondary);
+  color: var(--c-secondary-fg);
+}
+.btn--secondary:hover {
+  background: color-mix(in srgb, var(--c-secondary) 90%, black);
+  border-color: color-mix(in srgb, var(--c-secondary) 90%, black);
+}
+
 .btn--danger {
   background: var(--c-danger);
   border-color: var(--c-danger);

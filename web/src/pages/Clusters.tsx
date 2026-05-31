@@ -121,8 +121,8 @@ export function Clusters() {
           <Link to="/clusters/new" className="btn btn--primary">
             + Deploy new cluster
           </Link>
-          <Link to="/clusters/import" className="btn btn--primary" data-testid="clusters-import-link">
-            + Import cluster
+          <Link to="/clusters/import" className="btn btn--secondary" data-testid="clusters-import-link">
+            + Import existing cluster
           </Link>
         </div>
       </header>
