@@ -148,10 +148,18 @@ jobs:
         with:
           ref: gh-pages
           path: pages
+      - uses: actions/checkout@v5
+        with:
+          path: src
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
+      - name: Publish install scripts
+        run: |
+          set -euo pipefail
+          cp src/packaging/install.sh pages/install.sh
+          cp src/packaging/install.ps1 pages/install.ps1
       - name: Write self-update pointer files
         run: |
           set -euo pipefail
@@ -247,6 +255,9 @@ jobs:
                 <span class="eyebrow">Latest Stable Release</span>
                 <h1>Buckit Manager</h1>
                 <p class="subhead">Signed desktop binaries for operating Buckit clusters locally.</p>
+                <p class="section-copy" style="margin-bottom:8px">Quick install (downloads, checksum-verifies, and installs the latest stable build):</p>
+                <div style="margin:0 0 8px;padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:var(--surface-alt);overflow-x:auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px"><span style="color:var(--muted)"># macOS / Linux</span><br>curl -fsSL https://buckit-io.github.io/bm/install.sh | sh</div>
+                <div style="margin:0 0 16px;padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:var(--surface-alt);overflow-x:auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px"><span style="color:var(--muted)"># Windows (PowerShell)</span><br>irm https://buckit-io.github.io/bm/install.ps1 | iex</div>
                 <div class="hero-actions">
                   <a class="button" href="../archives/">Browse release archive</a>
                 </div>
@@ -597,7 +608,7 @@ jobs:
           cd pages
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add index.html manager/index.html manager/bm/index.html manager/bm/release manager/bm/archives
+          git add index.html install.sh install.ps1 manager/index.html manager/bm/index.html manager/bm/release manager/bm/archives
           if git diff --cached --quiet; then
             echo "No gh-pages changes to commit"
             exit 0

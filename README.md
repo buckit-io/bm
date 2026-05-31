@@ -13,6 +13,32 @@ The Phase 1 UI spec is in
 The implementation plan that drives this directory is at
 [`buckit/docs/manager/phase1-implementation.md`](../buckit/docs/manager/phase1-implementation.md).
 
+## Install
+
+`bm` is a single per-user binary — no sudo, no system-wide install.
+
+macOS / Linux:
+
+```sh
+curl -fsSL https://buckit-io.github.io/bm/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://buckit-io.github.io/bm/install.ps1 | iex
+```
+
+The installer downloads the latest stable build for your OS/arch,
+verifies its SHA-256 against the published release pointer, and installs
+to `~/.local/bin` (`%LOCALAPPDATA%\Programs\bm` on Windows). Set
+`BM_INSTALL_DIR` to override. You can also grab a signed binary directly
+from the [download site](https://buckit-io.github.io/bm/manager/bm/release/)
+or the [GitHub releases](https://github.com/buckit-io/bm/releases).
+
+Once installed, `bm update` self-updates to the latest stable release
+(verifying SHA-256 + minisign signature).
+
 ## Requirements
 
 - Go 1.25+
@@ -61,7 +87,7 @@ The frontend dev server proxies `/api/*` to `http://localhost:9443`.
 | `internal/config/` | Server configuration |
 | `internal/version/` | Build-time version metadata |
 | `web/` | React + Vite + TypeScript frontend |
-| `packaging/` | nfpm config, systemd unit, install scripts |
+| `packaging/` | Per-user install scripts (`install.sh`, `install.ps1`) |
 
 ## Status
 
