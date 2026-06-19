@@ -18,8 +18,9 @@ import { Deploy } from "./steps/Deploy";
 import { Done } from "./steps/Done";
 
 function clusterRouteForDraft(draft: NewClusterDraft): string {
-  const slug = draft.done.clusterId || draft.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "cluster";
-  return `/clusters/${encodeURIComponent(slug)}`;
+  return draft.done.clusterId
+    ? `/clusters/${encodeURIComponent(draft.done.clusterId)}`
+    : "/clusters";
 }
 
 export function NewClusterWizard() {
@@ -81,7 +82,7 @@ export function NewClusterWizard() {
     if (index === 6) {
       // Deploy step: enable Next only after deploy completes, so the
       // operator can review the final state before continuing.
-      return draft.deploy.overallPct < 100;
+      return draft.deploy.overallPct < 100 || !draft.done.clusterId;
     }
     return false;
   }, [index, draft]);

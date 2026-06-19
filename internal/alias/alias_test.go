@@ -46,7 +46,7 @@ func TestSyncJoinsAdminCreds(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "config.json")
 
-	if err := clusters.New(s).Put(ctx, domain.Cluster{ID: "prod-1", Name: "prod"}); err != nil {
+	if err := clusters.New(s).Put(ctx, domain.Cluster{ID: "my-production-east", Name: "My Production East!"}); err != nil {
 		t.Fatal(err)
 	}
 	creds := domain.AdminCreds{
@@ -54,7 +54,7 @@ func TestSyncJoinsAdminCreds(t *testing.T) {
 		AccessKey: "AKIA",
 		SecretKey: "shhh",
 	}
-	if err := clusteradmin.New(s).Put(ctx, "prod-1", creds); err != nil {
+	if err := clusteradmin.New(s).Put(ctx, "my-production-east", creds); err != nil {
 		t.Fatal(err)
 	}
 
@@ -63,9 +63,12 @@ func TestSyncJoinsAdminCreds(t *testing.T) {
 	}
 
 	cfg := readConfig(t, path)
-	got, ok := cfg.Aliases["prod"]
+	got, ok := cfg.Aliases["my-production-east"]
 	if !ok {
-		t.Fatalf("alias %q missing; aliases=%v", "prod", cfg.Aliases)
+		t.Fatalf("alias %q missing; aliases=%v", "my-production-east", cfg.Aliases)
+	}
+	if _, ok := cfg.Aliases["My Production East!"]; ok {
+		t.Fatalf("raw cluster name should not be used as an alias key: %v", cfg.Aliases)
 	}
 	if got.URL != creds.URL || got.AccessKey != creds.AccessKey || got.SecretKey != creds.SecretKey {
 		t.Errorf("alias creds mismatch: got %+v want url/keys from %+v", got, creds)

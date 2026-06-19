@@ -245,6 +245,8 @@ export interface DeployNodeState {
 
 export interface DoneState {
   clusterId: string;
+  aliasSaved: boolean;
+  aliasWarning?: string;
   consoleUrl: string;
   nodesHealthy: number;
   poolsOnline: number;
@@ -281,6 +283,7 @@ export function emptyDraft(): NewClusterDraft {
     deploy: { perNode: {}, overallPct: 0, canceled: false },
     done: {
       clusterId: "",
+      aliasSaved: false,
       consoleUrl: "",
       nodesHealthy: 0,
       poolsOnline: 0,

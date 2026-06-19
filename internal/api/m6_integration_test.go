@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/buckit-io/bm/internal/alias"
 	"github.com/buckit-io/bm/internal/clusteradmin"
 	"github.com/buckit-io/bm/internal/clusters"
 	"github.com/buckit-io/bm/internal/deploy"
@@ -38,6 +40,7 @@ type m6Harness struct {
 	sshSrv      *sshtest.Server
 	svcSrv      *httptest.Server
 	artifactURL string
+	aliasPath   string
 }
 
 func newM6Harness(t *testing.T) *m6Harness {
@@ -72,6 +75,7 @@ func newM6Harness(t *testing.T) *m6Harness {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
+	aliasPath := filepath.Join(dir, "config.json")
 
 	clustersRepo := clusters.New(st)
 	clusterAdminRepo := clusteradmin.New(st)
@@ -190,6 +194,9 @@ func newM6Harness(t *testing.T) *m6Harness {
 				SmokeTestPassed: true,
 			}, nil
 		},
+		AfterCommit: func(ctx context.Context, _ string) error {
+			return alias.Sync(ctx, st, aliasPath)
+		},
 	})
 
 	handler := New(Options{
@@ -213,6 +220,7 @@ func newM6Harness(t *testing.T) *m6Harness {
 		sshSrv:      sshSrv,
 		svcSrv:      svcSrv,
 		artifactURL: artifactSrv.URL + "/buckit.rpm",
+		aliasPath:   aliasPath,
 	}
 }
 
@@ -292,6 +300,7 @@ func TestM6DeployHappyPath(t *testing.T) {
 
 func TestM6DeploySlugCollision(t *testing.T) {
 	h := newM6Harness(t)
+	host, port := h.sshSrv.HostPort()
 	// Pre-seed a cluster with the slug the wizard would pick.
 	if err := h.clusters.Put(context.Background(), domain.Cluster{ID: "test", Name: "test"}); err != nil {
 		t.Fatal(err)
@@ -299,18 +308,60 @@ func TestM6DeploySlugCollision(t *testing.T) {
 	draft := domain.NewClusterDraft{
 		Name:        "test",
 		Version:     "custom",
-		CustomURL:   "https://example.test/buckit.rpm",
+		CustomURL:   h.artifactURL,
 		API:         domain.APIPorts{Port: 9000, ConsolePort: 9001},
 		Region:      "us-east-1",
 		Credentials: domain.Credentials{RootUser: "rootuser", RootPassword: "supersecret"},
-		Hosts:       []domain.HostRow{{ID: "h1", Hostname: "node1", Port: 22, Probe: domain.HostProbeReachable}},
-		SSH:         domain.SshCreds{AuthMethod: domain.AuthAgent, User: "ops"},
+		Hosts:       []domain.HostRow{{ID: "h1", Hostname: host, Port: port, Probe: domain.HostProbeReachable}},
+		SSH:         domain.SshCreds{AuthMethod: domain.AuthPassword, User: h.sshSrv.User(), Password: h.sshSrv.Password(), Sudo: true},
 		Topology:    domain.Topology{SetSize: 4, Parity: 2, SelectedMounts: []string{"/data/disk1"}},
 	}
 	body, _ := json.Marshal(draft)
 	resp := do(t, h.server, http.MethodPost, "/api/v1/clusters/new/deploy", body)
-	if resp.code != http.StatusConflict {
-		t.Fatalf("want 409, got %d %s", resp.code, resp.body)
+	if resp.code != http.StatusAccepted {
+		t.Fatalf("want 202, got %d %s", resp.code, resp.body)
+	}
+	var disp tasks.DispatchResponse
+	_ = json.Unmarshal(resp.body, &disp)
+	if !waitTerminal(t, h.server, disp.TaskID, 5*time.Second) {
+		t.Fatalf("deploy did not terminate in time")
+	}
+
+	history := do(t, h.server, http.MethodGet, "/api/v1/history?limit=50", nil)
+	var rows []tasks.HistoryEntry
+	_ = json.Unmarshal(history.body, &rows)
+	var found *tasks.HistoryEntry
+	for i := range rows {
+		if rows[i].ID == disp.TaskID {
+			found = &rows[i]
+			break
+		}
+	}
+	if found == nil || found.Result == nil {
+		t.Fatalf("missing history result for %s: %+v", disp.TaskID, rows)
+	}
+	if got := summaryValue(found.Result.Summary, "Cluster ID"); got != "test-1" {
+		t.Fatalf("Cluster ID summary: want test-1, got %q", got)
+	}
+	if got := summaryValue(found.Result.Summary, "Alias saved"); got != "test-1" {
+		t.Fatalf("Alias saved summary: want test-1, got %q", got)
+	}
+
+	if _, err := h.clusters.Get(context.Background(), "test-1"); err != nil {
+		t.Fatalf("expected suffixed cluster committed: %v", err)
+	}
+	body, err := os.ReadFile(h.aliasPath)
+	if err != nil {
+		t.Fatalf("read alias config: %v", err)
+	}
+	var cfg struct {
+		Aliases map[string]json.RawMessage `json:"aliases"`
+	}
+	if err := json.Unmarshal(body, &cfg); err != nil {
+		t.Fatalf("decode alias config: %v", err)
+	}
+	if _, ok := cfg.Aliases["test-1"]; !ok {
+		t.Fatalf("alias test-1 missing from config: %v", cfg.Aliases)
 	}
 }
 
@@ -357,6 +408,15 @@ func waitTerminal(t *testing.T, srv *httptest.Server, taskID string, within time
 		time.Sleep(50 * time.Millisecond)
 	}
 	return false
+}
+
+func summaryValue(summary []tasks.SummaryItem, label string) string {
+	for _, item := range summary {
+		if item.Label == label {
+			return item.Value
+		}
+	}
+	return ""
 }
 
 // _ keeps these imports referenced so the test compiles even when one of the
