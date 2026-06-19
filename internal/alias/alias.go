@@ -35,22 +35,21 @@ type configFile struct {
 }
 
 // Sync writes the alias file to path mode 0600 from the current state of the
-// store. Each alias joins the cluster's name (from the plaintext `clusters`
-// bucket) with its URL + admin credentials (from the AES-GCM encrypted
-// `cluster_admin` bucket, keyed by the same cluster ID). M1 has no clusters
-// yet, so the typical output is the empty skeleton — callers should still
-// invoke Sync at startup so downstream bm-cli reads don't fail on a missing
-// file.
+// store. Each alias joins the cluster's canonical ID (from the plaintext
+// `clusters` bucket) with its URL + admin credentials (from the AES-GCM
+// encrypted `cluster_admin` bucket, keyed by the same cluster ID). M1 has no
+// clusters yet, so the typical output is the empty skeleton — callers should
+// still invoke Sync at startup so downstream bm-cli reads don't fail on a
+// missing file.
 func Sync(ctx context.Context, s *store.Store, path string) error {
 	cfg := configFile{
 		Version: configFileVersion,
 		Aliases: map[string]aliasEntry{},
 	}
 
-	// Collect (id, name) inside a read txn, then fetch the encrypted creds
+	// Collect cluster IDs inside a read txn, then fetch the encrypted creds
 	// outside it — GetEncrypted opens its own txn to unseal.
-	type clusterMeta struct{ id, name string }
-	var metas []clusterMeta
+	var clusterIDs []string
 	if err := s.View(ctx, func(tx *bbolt.Tx) error {
 		b := tx.Bucket(store.BucketClusters)
 		if b == nil {
@@ -58,26 +57,25 @@ func Sync(ctx context.Context, s *store.Store, path string) error {
 		}
 		return b.ForEach(func(k, v []byte) error {
 			var entry struct {
-				ID   string `json:"id"`
-				Name string `json:"name"`
+				ID string `json:"id"`
 			}
 			if err := json.Unmarshal(v, &entry); err != nil {
 				return fmt.Errorf("alias: decode cluster %s: %w", k, err)
 			}
-			if entry.ID == "" || entry.Name == "" {
+			if entry.ID == "" {
 				return nil
 			}
-			metas = append(metas, clusterMeta{id: entry.ID, name: entry.Name})
+			clusterIDs = append(clusterIDs, entry.ID)
 			return nil
 		})
 	}); err != nil {
 		return err
 	}
 
-	for _, m := range metas {
-		raw, err := s.GetEncrypted(ctx, store.BucketClusterAdmin, []byte(m.id))
+	for _, clusterID := range clusterIDs {
+		raw, err := s.GetEncrypted(ctx, store.BucketClusterAdmin, []byte(clusterID))
 		if err != nil {
-			return fmt.Errorf("alias: read admin creds for %s: %w", m.id, err)
+			return fmt.Errorf("alias: read admin creds for %s: %w", clusterID, err)
 		}
 		if raw == nil {
 			// No admin creds — can't form a usable alias. Skip.
@@ -89,12 +87,12 @@ func Sync(ctx context.Context, s *store.Store, path string) error {
 			SecretKey string `json:"secretKey"`
 		}
 		if err := json.Unmarshal(raw, &creds); err != nil {
-			return fmt.Errorf("alias: decode admin creds for %s: %w", m.id, err)
+			return fmt.Errorf("alias: decode admin creds for %s: %w", clusterID, err)
 		}
 		if creds.URL == "" {
 			continue
 		}
-		cfg.Aliases[m.name] = aliasEntry{
+		cfg.Aliases[clusterID] = aliasEntry{
 			URL:       creds.URL,
 			AccessKey: creds.AccessKey,
 			SecretKey: creds.SecretKey,

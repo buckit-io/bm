@@ -147,10 +147,8 @@ export function Deploy({ draft, update }: Props) {
       }
       const total = p.total ?? hosts.length;
       const current = p.current ?? 0;
-      const anyHostRunning = p.hostStatuses?.some((x) => x.state === "running") ?? false;
       const pct =
-        p.state === "succeeded" ||
-        (p.state !== "failed" && p.state !== "canceled" && current >= total && !anyHostRunning)
+        p.state === "succeeded"
           ? 100
           : total > 0
             ? Math.min(99, Math.round((current / total) * 100))
@@ -282,6 +280,16 @@ function applyVerifySummary(
   if (consoleUrl) next.consoleUrl = consoleUrl;
   const clusterId = summaryValue(summary, "Cluster ID");
   if (clusterId) next.clusterId = clusterId;
+  const aliasSaved = summaryValue(summary, "Alias saved");
+  if (aliasSaved) {
+    next.aliasSaved = true;
+    next.aliasWarning = undefined;
+  }
+  const aliasWarning = summaryValue(summary, "Alias warning");
+  if (aliasWarning) {
+    next.aliasSaved = false;
+    next.aliasWarning = aliasWarning;
+  }
   const nodesHealthy = summaryFraction(summary, "Nodes healthy");
   if (nodesHealthy) next.nodesHealthy = nodesHealthy.ok;
   const poolsOnline = summaryFraction(summary, "Pools online");

@@ -7,19 +7,6 @@ interface Props {
   onFinish: () => void;
 }
 
-// Cluster names can be anything ("My Production East!"), but the alias
-// has to be CLI-friendly: lowercase letters, digits, dashes only. bm
-// derives the alias from the cluster name at save time.
-function toAliasName(name: string): string {
-  const slug = name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 32);
-  return slug || "cluster";
-}
-
 export function Done({ draft, update, onFinish }: Props) {
   // Done renders the post-deploy verification captured during the Deploy
   // step. Only fill in a fallback console URL if the verify summary has not
@@ -42,7 +29,7 @@ export function Done({ draft, update, onFinish }: Props) {
   const d = draft.done;
   const rootUser = draft.credentials.rootUser || "admin";
   const rootPass = draft.credentials.rootPassword;
-  const alias = toAliasName(draft.name);
+  const alias = d.clusterId;
   const aliasDiffers = alias !== draft.name.trim();
   const totalHosts = draft.hosts.filter((h) => h.hostname.trim()).length;
   const quickChecks = [
@@ -144,37 +131,72 @@ export function Done({ draft, update, onFinish }: Props) {
 
       <div className="card vstack" style={{ gap: "var(--s-2)" }}>
         <h3 className="card-stat__title">bm alias</h3>
-        <p style={{ fontSize: "var(--fs-sm)" }}>
-          ✓ Alias <span className="mono">{alias}</span> saved to{" "}
-          <span className="mono">~/.bm/config.json</span>
-          {aliasDiffers && (
+        {alias ? (
+          <p style={{ fontSize: "var(--fs-sm)" }}>
+            {d.aliasSaved ? (
+              <>
+                ✓ Alias <span className="mono">{alias}</span> saved to{" "}
+                <span className="mono">~/.config/bm/config.json</span>
+                {aliasDiffers && (
+                  <>
+                    {" "}
+                    <span className="subtle">
+                      (canonical cluster ID for{" "}
+                      <span className="mono">{draft.name}</span>)
+                    </span>
+                  </>
+                )}
+                .
+              </>
+            ) : (
+              <>
+                Alias <span className="mono">{alias}</span> was assigned, but BM
+                could not confirm it was saved to{" "}
+                <span className="mono">~/.config/bm/config.json</span>.
+              </>
+            )}
+          </p>
+        ) : (
+          <p style={{ fontSize: "var(--fs-sm)" }}>
+            BM did not receive the committed cluster ID yet, so CLI alias
+            guidance is not available.
+          </p>
+        )}
+        {d.aliasWarning && (
+          <p className="subtle" style={{ fontSize: "var(--fs-xs)" }}>
+            Alias sync warning: {d.aliasWarning}
+          </p>
+        )}
+        <p className="subtle" style={{ fontSize: "var(--fs-sm)" }}>
+          {d.aliasSaved ? (
             <>
-              {" "}
-              <span className="subtle">
-                (derived from cluster name{" "}
-                <span className="mono">{draft.name}</span>)
-              </span>
+              With the alias saved, the <span className="mono">bm</span> CLI
+              can target this cluster by name.
+            </>
+          ) : (
+            <>
+              If the commands below fail, set the alias manually from the
+              section for another machine.
             </>
           )}
-          .
         </p>
-        <p className="subtle" style={{ fontSize: "var(--fs-sm)" }}>
-          With the alias saved, the <span className="mono">bm</span> CLI
-          can target this cluster by name.
-        </p>
-        <pre className="codeblock">{`bm admin info ${alias}
+        {alias && (
+          <>
+            <pre className="codeblock">{`bm admin info ${alias}
 bm admin user add ${alias} alice`}</pre>
-        <details>
-          <summary
-            className="subtle"
-            style={{ fontSize: "var(--fs-xs)", cursor: "pointer" }}
-          >
-            If you need to run the bm CLI on another machine
-          </summary>
-          <pre className="codeblock" style={{ marginTop: "var(--s-2)" }}>
+            <details>
+              <summary
+                className="subtle"
+                style={{ fontSize: "var(--fs-xs)", cursor: "pointer" }}
+              >
+                If you need to run the bm CLI on another machine
+              </summary>
+              <pre className="codeblock" style={{ marginTop: "var(--s-2)" }}>
 {`bm alias set ${alias} ${d.consoleUrl} ${rootUser} <password>`}
-          </pre>
-        </details>
+              </pre>
+            </details>
+          </>
+        )}
       </div>
 
       <div className="hstack" style={{ justifyContent: "flex-end" }}>

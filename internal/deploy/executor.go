@@ -26,8 +26,9 @@ type Executor struct {
 	SSHConfig    *sshconfig.Repo
 	Verify       func(context.Context, DeployParams) (VerifyResult, error)
 	// AfterCommit is called once the cluster commit succeeds. Production wires
-	// this to alias.Sync so bm-cli verbs see the new cluster.
-	AfterCommit func(ctx context.Context, clusterID string)
+	// this to alias.Sync so bm-cli verbs see the new cluster. Errors are
+	// reported as warnings because the cluster is already committed.
+	AfterCommit func(ctx context.Context, clusterID string) error
 }
 
 // Register wires the executor into the tasks registry. Idempotent — repeat
@@ -196,13 +197,26 @@ func (e *Executor) Execute(ctx context.Context, run *tasks.Run) error {
 	if err != nil {
 		return fmt.Errorf("commit cluster: %w", err)
 	}
+	aliasWarning := ""
+	aliasSynced := false
 	if e.AfterCommit != nil {
-		e.AfterCommit(ctx, clusterID)
+		if err := e.AfterCommit(ctx, clusterID); err != nil {
+			aliasWarning = err.Error()
+			run.LogWarn("alias sync: %v", err)
+		} else {
+			aliasSynced = true
+			run.LogOK("alias sync: saved %s", clusterID)
+		}
 	}
 	run.MutateState(func(s *tasks.OperationProgress) {
 		s.Detail = "Cluster committed: " + clusterID
 		s.Summary = append(s.Summary, tasks.SummaryItem{Label: "Cluster ID", Value: clusterID})
 		s.Summary = append(s.Summary, tasks.SummaryItem{Label: "Hosts", Value: strconv.Itoa(len(params.Hosts))})
+		if aliasSynced {
+			s.Summary = append(s.Summary, tasks.SummaryItem{Label: "Alias saved", Value: clusterID})
+		} else if aliasWarning != "" {
+			s.Summary = append(s.Summary, tasks.SummaryItem{Label: "Alias warning", Value: aliasWarning})
+		}
 	})
 	return nil
 }

@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 
 	"github.com/buckit-io/bm/internal/clusters"
@@ -32,15 +31,7 @@ func newClusterDeploy(opts Options) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "validation_failed", err.Error())
 			return
 		}
-		// Cluster slug collision check up-front — the executor handles
-		// collisions internally, but rejecting at dispatch is a nicer UX.
 		slug := deploy.SlugifyName(params.Name)
-		if exists, err := opts.Clusters.Exists(r.Context(), slug); err == nil && exists {
-			logAction(r, "new_cluster.deploy", "result", "slug_taken", "cluster", draft.Name, "slug", slug)
-			writeError(w, http.StatusConflict, "slug_taken", fmt.Sprintf("cluster id %q already exists", slug))
-			return
-		}
-
 		raw, err := json.Marshal(draft)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "marshal_failed", err.Error())
