@@ -72,11 +72,6 @@ export function Clusters() {
     return () => clearInterval(id);
   }, []);
 
-  // Redirect to /welcome when the backend has no clusters yet (first run).
-  if (!isLoading && clusters && clusters.length === 0) {
-    return <Navigate to="/welcome" replace />;
-  }
-
   const filtered = clusters ?? [];
   const mostStale = pickMostStale(clusters ?? []);
   const stale = mostStale ? ageSeconds(mostStale) : null;
@@ -88,6 +83,13 @@ export function Clusters() {
     autoRefreshStarted.current = true;
     refresh.mutate();
   }, [clusters, isLoading, refresh, stale]);
+
+  // First run: once the list request settles and there are no clusters, send
+  // the operator to the welcome page. Keep this after the hooks so render
+  // order stays stable between the loading and empty-list states.
+  if (!isLoading && clusters && clusters.length === 0) {
+    return <Navigate to="/welcome" replace />;
+  }
 
   return (
     <section className="clusters">
