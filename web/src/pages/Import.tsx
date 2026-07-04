@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { commitImport } from "../api/client";
 import { discoverClusterStream, SseError } from "../api/sse";
@@ -25,12 +25,14 @@ type Phase =
 
 export function Import() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const qc = useQueryClient();
 
-  const [url, setUrl] = useState("");
-  const [username, setUsername] = useState("");
+  const [url, setUrl] = useState(() => searchParams.get("url") ?? "");
+  const [username, setUsername] = useState(() => searchParams.get("username") ?? "");
   const [password, setPassword] = useState("");
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
+  const formIncomplete = !url.trim() || !username.trim() || !password.trim();
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -152,14 +154,14 @@ export function Import() {
             id="username"
             className="input"
             data-testid="import-username"
-            placeholder="MINIO_ROOT_USER"
+            placeholder="root username"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
             autoComplete="username"
             required
           />
           <p className="subtle import__hint">
-            The root username the server was started with.
+            The root username.
           </p>
         </div>
 
@@ -172,14 +174,14 @@ export function Import() {
             type="password"
             className="input"
             data-testid="import-password"
-            placeholder="MINIO_ROOT_PASSWORD"
+            placeholder="root password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             autoComplete="current-password"
             required
           />
           <p className="subtle import__hint">
-            The matching root password.
+            The root password.
           </p>
         </div>
 
@@ -192,7 +194,7 @@ export function Import() {
           >
             Cancel
           </button>
-          <button type="submit" className="btn btn--primary" data-testid="import-submit">
+          <button type="submit" className="btn btn--primary" data-testid="import-submit" disabled={formIncomplete}>
             Add cluster
           </button>
         </div>

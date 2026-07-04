@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/buckit-io/bm/internal/domain"
 )
 
 // CertsDir is where the install pipeline drops the cert material. MinIO's
@@ -87,6 +89,22 @@ func (p DeployParams) LeafCert() (*x509.Certificate, error) {
 		return nil, nil
 	}
 	return parseLeafCert(p.TLS.CertPEM)
+}
+
+// ValidateTLSConfig validates standalone TLS material against the supplied
+// hostnames. It is used by non-systemd local deployment preparation, where
+// there is no full DeployParams value but the same certificate parsing and
+// key-pair checks should apply.
+func ValidateTLSConfig(tls domain.TLSConfig, hosts []string) error {
+	p := DeployParams{TLS: tls}
+	for _, h := range hosts {
+		h = strings.TrimSpace(h)
+		if h == "" {
+			continue
+		}
+		p.Hosts = append(p.Hosts, domain.HostRow{Hostname: h})
+	}
+	return p.validateTLS()
 }
 
 // parseLeafCert returns the leaf certificate from a PEM that may also contain
@@ -236,4 +254,3 @@ func parseCABundle(pemBytes string) error {
 	}
 	return nil
 }
-

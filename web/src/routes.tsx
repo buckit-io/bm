@@ -13,6 +13,7 @@ import { NodeLogs } from "./pages/cluster/NodeLogs";
 import { ClusterSettings } from "./pages/cluster/ClusterSettings";
 import { ClusterSshSettings } from "./pages/cluster/ClusterSshSettings";
 import { NewClusterWizard } from "./pages/wizards/new/Wizard";
+import { LocalSingleNodeWizard } from "./pages/wizards/local/Wizard";
 import { MigrationWizard } from "./pages/wizards/migrate/Wizard";
 
 export function AppRoutes() {
@@ -23,6 +24,7 @@ export function AppRoutes() {
 
       {/* Wizards render outside the global shell (own chrome) */}
       <Route path="/clusters/new" element={<NewClusterWizard />} />
+      <Route path="/clusters/new/local" element={<LocalSingleNodeWizard />} />
       <Route path="/clusters/migrate" element={<MigrationWizard />} />
 
       {/* Everything else gets the global shell */}

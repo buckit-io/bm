@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "test": "tsc -p tsconfig.test.json && cp .test-dist/pages/wizards/new/steps/driveIntersection.js .test-dist/pages/wizards/new/steps/driveIntersection && cp .test-dist/pages/wizards/new/steps/customDataVolumes.js .test-dist/pages/wizards/new/steps/customDataVolumes && cp .test-dist/pages/wizards/new/steps/topologyValidation.js .test-dist/pages/wizards/new/steps/topologyValidation && cp .test-dist/pages/wizards/new/steps/deploymentMode.js .test-dist/pages/wizards/new/steps/deploymentMode && cp .test-dist/pages/wizards/new/state.js .test-dist/pages/wizards/new/state && node --test .test-dist/**/*.test.js",
+    "test": "tsc -p tsconfig.test.json && cp .test-dist/pages/wizards/new/steps/driveIntersection.js .test-dist/pages/wizards/new/steps/driveIntersection && cp .test-dist/pages/wizards/new/steps/customDataVolumes.js .test-dist/pages/wizards/new/steps/customDataVolumes && cp .test-dist/pages/wizards/new/steps/topologyValidation.js .test-dist/pages/wizards/new/steps/topologyValidation && cp .test-dist/pages/wizards/new/steps/deploymentMode.js .test-dist/pages/wizards/new/steps/deploymentMode && cp .test-dist/pages/wizards/new/state.js .test-dist/pages/wizards/new/state && cp .test-dist/pages/wizards/local/localDataPaths.js .test-dist/pages/wizards/local/localDataPaths && node --test .test-dist/**/*.test.js",
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit"
   },
