@@ -309,8 +309,6 @@ export interface LocalTLSConfig {
 
 export interface LocalPrepareRequest {
   version: string;
-  customUrl?: string;
-  customSha256?: string;
   rootUser: string;
   rootPassword: string;
   apiPort: number;

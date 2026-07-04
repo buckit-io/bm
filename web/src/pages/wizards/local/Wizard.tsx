@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useMe } from "../../../api/hooks";
-import { prepareLocalDeployment, previewLocalDeployment, listVersions, validateCustomArtifact } from "../../../api/client";
+import { prepareLocalDeployment, previewLocalDeployment, listVersions } from "../../../api/client";
 import type {
-  ArtifactCheck,
   BuckitVersion,
   LocalPrepareRequest,
   LocalPrepareResponse,
@@ -22,8 +21,6 @@ import { localRootOSDrivePaths, parseLocalDataPaths } from "./localDataPaths";
 import type { ParsedLocalDataPaths } from "./localDataPaths";
 import "./Wizard.css";
 
-const CUSTOM_VERSION = "custom";
-const CHECK_DEBOUNCE_MS = 700;
 const FALLBACK_VERSIONS: BuckitVersion[] = [
   { tag: "v1.0.0", label: "v1.0.0 (latest stable)" },
 ];
@@ -39,8 +36,6 @@ const VALID_SET_SIZES = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 
 interface LocalDraft {
   version: string;
-  customUrl: string;
-  customUrlCheck: ArtifactCheck;
   credentials: { rootUser: string; rootPassword: string };
   api: { port: number; consolePort: number };
   tls: Required<LocalTLSConfig>;
@@ -57,8 +52,6 @@ interface LocalDraft {
 function emptyDraft(): LocalDraft {
   return {
     version: "v1.0.0",
-    customUrl: "",
-    customUrlCheck: { state: "idle" },
     credentials: { rootUser: "", rootPassword: "" },
     api: { port: 9000, consolePort: 9001 },
     tls: { mode: "off", certPem: "", keyPem: "", caBundlePem: "" },
@@ -84,11 +77,6 @@ export function LocalSingleNodeWizard() {
     }));
 
   const settingsInvalid = useMemo(() => {
-    if (draft.version === CUSTOM_VERSION) {
-      if (!draft.customUrl.trim()) return true;
-      const s = draft.customUrlCheck.state;
-      if (s !== "valid" || !draft.customUrlCheck.sha256) return true;
-    }
     if (!validateRootUser(draft.credentials.rootUser).ok) return true;
     if (!validateRootPassword(draft.credentials.rootPassword).ok) return true;
     const p = draft.api.port;
@@ -129,8 +117,6 @@ export function LocalSingleNodeWizard() {
     if (settingsInvalid || storageInvalid) return null;
     return {
       version: draft.version,
-      customUrl: draft.customUrl,
-      customSha256: draft.customUrlCheck.sha256,
       rootUser: draft.credentials.rootUser,
       rootPassword: draft.credentials.rootPassword,
       apiPort: draft.api.port,
@@ -139,7 +125,7 @@ export function LocalSingleNodeWizard() {
       parity: pathCount > 1 ? draft.parity : undefined,
       tls: draft.tls,
     };
-  }, [draft.version, draft.customUrl, draft.customUrlCheck.sha256, draft.credentials, draft.api, draft.parity, draft.tls, parsedDataPaths.paths, pathCount, settingsInvalid, storageInvalid]);
+  }, [draft.version, draft.credentials, draft.api, draft.parity, draft.tls, parsedDataPaths.paths, pathCount, settingsInvalid, storageInvalid]);
 
   useEffect(() => {
     if (index !== 2 || !localRequest) return;
@@ -228,46 +214,19 @@ interface StepProps {
 }
 
 function SettingsStep({ draft, update }: StepProps) {
-  const isCustom = draft.version === CUSTOM_VERSION;
   const [versions, setVersions] = useState<BuckitVersion[]>(FALLBACK_VERSIONS);
   const [showPass, setShowPass] = useState(false);
-  const genRef = useRef(0);
 
   useEffect(() => {
     listVersions().then(setVersions).catch(() => {});
   }, []);
 
   useEffect(() => {
-    if (draft.version === CUSTOM_VERSION) return;
     if (versions.length === 0) return;
     if (versions.some((v) => v.tag === draft.version)) return;
     update({ version: versions[0].tag });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [versions, draft.version]);
-
-  useEffect(() => {
-    if (!isCustom) return;
-    const url = draft.customUrl.trim();
-    if (!url) {
-      update({ customUrlCheck: { state: "idle" } });
-      return;
-    }
-    const gen = ++genRef.current;
-    update({ customUrlCheck: { state: "checking" } });
-    const handle = setTimeout(async () => {
-      try {
-        const result = await validateCustomArtifact(url);
-        if (gen !== genRef.current) return;
-        update({ customUrlCheck: result });
-      } catch (err) {
-        if (gen !== genRef.current) return;
-        const message = err instanceof Error ? err.message : "Validation failed.";
-        update({ customUrlCheck: { state: "error", message } });
-      }
-    }, CHECK_DEBOUNCE_MS);
-    return () => clearTimeout(handle);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draft.customUrl, isCustom]);
 
   const userValidation = draft.credentials.rootUser.length > 0
     ? validateRootUser(draft.credentials.rootUser)
@@ -302,23 +261,8 @@ function SettingsStep({ draft, update }: StepProps) {
           {versions.map((v) => (
             <option key={v.tag} value={v.tag}>{v.label}</option>
           ))}
-          <option value={CUSTOM_VERSION}>Custom URL…</option>
         </select>
       </div>
-
-      {isCustom && (
-        <div className="field">
-          <label className="field-label" htmlFor="local-custom-url">Custom binary URL</label>
-          <input
-            id="local-custom-url"
-            className="input"
-            value={draft.customUrl}
-            onChange={(e) => update({ customUrl: e.target.value })}
-            placeholder="https://example.com/buckit-darwin-arm64"
-          />
-          <CheckStatus check={draft.customUrlCheck} />
-        </div>
-      )}
 
       <div className="local-wizard__grid">
         <div className="field">
@@ -659,8 +603,7 @@ function ReviewStep({
       )}
 
       <div className="card local-wizard__summary">
-        <Summary label="Version" value={draft.version === CUSTOM_VERSION ? "Custom URL" : draft.version} />
-        {draft.version === CUSTOM_VERSION && <Summary label="Custom URL" value={draft.customUrl} />}
+        <Summary label="Version" value={draft.version} />
         <Summary label="API" value={`${scheme}://127.0.0.1:${draft.api.port}`} />
         <Summary label="Console" value={`${scheme}://127.0.0.1:${draft.api.consolePort}`} />
         <Summary label="TLS" value={draft.tls.mode === "byo" ? "Enabled" : "Off"} />
@@ -828,20 +771,4 @@ function defaultParityBlocks(driveCount: number): number {
   if (driveCount <= 5) return 2;
   if (driveCount <= 7) return 3;
   return 4;
-}
-
-function CheckStatus({ check }: { check: ArtifactCheck }) {
-  if (check.state === "idle") {
-    return <span className="field-hint">Enter a downloadable Buckit binary URL.</span>;
-  }
-  if (check.state === "checking") {
-    return <span className="field-hint">Checking URL…</span>;
-  }
-  if (check.state === "valid") {
-    return <span className="field-hint" style={{ color: "var(--c-success)" }}>Reachable with SHA256 sidecar.</span>;
-  }
-  if (check.state === "warn") {
-    return <span className="field-hint" style={{ color: "var(--c-warning)" }}>{check.message} Local binary URLs require a SHA256 sidecar.</span>;
-  }
-  return <span className="field-hint" style={{ color: "var(--c-danger)" }}>{check.message ?? "URL check failed."}</span>;
 }

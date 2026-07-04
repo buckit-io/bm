@@ -25,12 +25,36 @@ import (
 	"github.com/buckit-io/bm/internal/domain"
 )
 
+func TestMain(m *testing.M) {
+	restore := deploy.RestoreVersionsCacheForTest([]domain.BuckitVersion{{
+		Tag:   "vtest",
+		Label: "vtest",
+		Artifacts: []domain.BuckitArtifact{
+			{
+				Kind:   "binary",
+				OS:     "darwin",
+				Arch:   "arm64",
+				URL:    "https://example.test/buckit",
+				SHA256: sha256Hex("fake-buckit"),
+			},
+			{
+				Kind:   "binary",
+				OS:     "windows",
+				Arch:   "amd64",
+				URL:    "https://example.test/buckit.exe",
+				SHA256: sha256Hex("fake-buckit"),
+			},
+		},
+	}})
+	code := m.Run()
+	restore()
+	os.Exit(code)
+}
+
 func TestPrepareWritesDarwinScriptAndDownloadsBinary(t *testing.T) {
 	home := t.TempDir()
 	resp, err := Prepare(context.Background(), Request{
-		Version:      "custom",
-		CustomURL:    "https://example.test/buckit",
-		CustomSHA256: sha256Hex("fake-buckit"),
+		Version:      "vtest",
 		RootUser:     "buckitadmin",
 		RootPassword: "buckit-secret-key-CHANGE-ME",
 		APIPort:      9000,
@@ -102,9 +126,7 @@ func TestPrepareWritesTLSFilesAndHTTPSURLs(t *testing.T) {
 	certPEM, keyPEM := genLocalCert(t)
 	home := t.TempDir()
 	resp, err := Prepare(context.Background(), Request{
-		Version:      "custom",
-		CustomURL:    "https://example.test/buckit",
-		CustomSHA256: sha256Hex("fake-buckit"),
+		Version:      "vtest",
 		RootUser:     "buckitadmin",
 		RootPassword: "buckit-secret-key-CHANGE-ME",
 		APIPort:      9443,
@@ -196,9 +218,7 @@ func TestPrepareKnownVersionVerifiesCatalogChecksum(t *testing.T) {
 func TestPrepareRejectsOverlappingDataPaths(t *testing.T) {
 	home := t.TempDir()
 	_, err := Prepare(context.Background(), Request{
-		Version:      "custom",
-		CustomURL:    "https://example.test/buckit",
-		CustomSHA256: sha256Hex("fake-buckit"),
+		Version:      "vtest",
 		RootUser:     "buckitadmin",
 		RootPassword: "buckit-secret-key-CHANGE-ME",
 		APIPort:      9000,
@@ -220,9 +240,7 @@ func TestPrepareRejectsOverlappingDataPaths(t *testing.T) {
 func TestPrepareRejectsDataPathAtDeploymentRoot(t *testing.T) {
 	home := t.TempDir()
 	_, err := Prepare(context.Background(), Request{
-		Version:      "custom",
-		CustomURL:    "https://example.test/buckit",
-		CustomSHA256: sha256Hex("fake-buckit"),
+		Version:      "vtest",
 		RootUser:     "buckitadmin",
 		RootPassword: "buckit-secret-key-CHANGE-ME",
 		APIPort:      9000,
@@ -238,37 +256,38 @@ func TestPrepareRejectsDataPathAtDeploymentRoot(t *testing.T) {
 	}
 }
 
-func TestPrepareRejectsInsecureCustomURLAndMissingChecksum(t *testing.T) {
+func TestPrepareRejectsCustomVersion(t *testing.T) {
 	home := t.TempDir()
-	req := Request{
+	_, err := Prepare(context.Background(), Request{
 		Version:      "custom",
-		CustomURL:    "http://example.test/buckit",
-		CustomSHA256: sha256Hex("fake-buckit"),
 		RootUser:     "buckitadmin",
 		RootPassword: "buckit-secret-key-CHANGE-ME",
 		APIPort:      9000,
 		ConsolePort:  9001,
 		DataPaths:    []string{filepath.Join(home, "Buckit", "local", "data")},
 		TLS:          domain.TLSConfig{Mode: domain.TLSOff},
-	}
-	_, err := Prepare(context.Background(), req, Options{HomeDir: home, GOOS: "darwin", GOARCH: "arm64", Client: fakeDownloadClient("fake-buckit")})
-	if err == nil || !strings.Contains(err.Error(), "https") {
-		t.Fatalf("expected https error, got %v", err)
-	}
-	req.CustomURL = "https://example.test/buckit"
-	req.CustomSHA256 = ""
-	_, err = Prepare(context.Background(), req, Options{HomeDir: home, GOOS: "darwin", GOARCH: "arm64", Client: fakeDownloadClient("fake-buckit")})
-	if err == nil || !strings.Contains(err.Error(), "customSha256") {
-		t.Fatalf("expected checksum error, got %v", err)
+	}, Options{HomeDir: home, GOOS: "darwin", GOARCH: "arm64", Client: fakeDownloadClient("fake-buckit")})
+	if err == nil || !strings.Contains(err.Error(), "does not support custom binary URLs") {
+		t.Fatalf("expected custom version error, got %v", err)
 	}
 }
 
 func TestPrepareRejectsChecksumMismatch(t *testing.T) {
 	home := t.TempDir()
+	restore := deploy.RestoreVersionsCacheForTest([]domain.BuckitVersion{{
+		Tag:   "vbad",
+		Label: "vbad",
+		Artifacts: []domain.BuckitArtifact{{
+			Kind:   "binary",
+			OS:     "darwin",
+			Arch:   "arm64",
+			URL:    "https://example.test/buckit",
+			SHA256: strings.Repeat("0", 64),
+		}},
+	}})
+	defer restore()
 	_, err := Prepare(context.Background(), Request{
-		Version:      "custom",
-		CustomURL:    "https://example.test/buckit",
-		CustomSHA256: strings.Repeat("0", 64),
+		Version:      "vbad",
 		RootUser:     "buckitadmin",
 		RootPassword: "buckit-secret-key-CHANGE-ME",
 		APIPort:      9000,
@@ -291,9 +310,7 @@ func TestPrepareRejectsNonEmptyDataPath(t *testing.T) {
 		t.Fatalf("write existing file: %v", err)
 	}
 	_, err := Prepare(context.Background(), Request{
-		Version:      "custom",
-		CustomURL:    "https://example.test/buckit",
-		CustomSHA256: sha256Hex("fake-buckit"),
+		Version:      "vtest",
 		RootUser:     "buckitadmin",
 		RootPassword: "buckit-secret-key-CHANGE-ME",
 		APIPort:      9000,
@@ -316,9 +333,7 @@ func TestPreviewWarnsWhenBinaryExists(t *testing.T) {
 		t.Fatalf("write binary: %v", err)
 	}
 	resp, err := Preview(Request{
-		Version:      "custom",
-		CustomURL:    "https://example.test/buckit",
-		CustomSHA256: sha256Hex("fake-buckit"),
+		Version:      "vtest",
 		RootUser:     "buckitadmin",
 		RootPassword: "buckit-secret-key-CHANGE-ME",
 		APIPort:      9000,
@@ -347,9 +362,7 @@ func TestPrepareOmitsOverwrittenBinaryWarning(t *testing.T) {
 		t.Fatalf("write binary: %v", err)
 	}
 	resp, err := Prepare(context.Background(), Request{
-		Version:      "custom",
-		CustomURL:    "https://example.test/buckit",
-		CustomSHA256: sha256Hex("fake-buckit"),
+		Version:      "vtest",
 		RootUser:     "buckitadmin",
 		RootPassword: "buckit-secret-key-CHANGE-ME",
 		APIPort:      9000,
@@ -375,9 +388,7 @@ func TestPrepareOmitsOverwrittenBinaryWarning(t *testing.T) {
 func TestPrepareUsesRequestedParity(t *testing.T) {
 	home := t.TempDir()
 	resp, err := Prepare(context.Background(), Request{
-		Version:      "custom",
-		CustomURL:    "https://example.test/buckit",
-		CustomSHA256: sha256Hex("fake-buckit"),
+		Version:      "vtest",
 		RootUser:     "buckitadmin",
 		RootPassword: "buckit-secret-key-CHANGE-ME",
 		APIPort:      9000,
@@ -410,9 +421,7 @@ func TestPrepareUsesRequestedParity(t *testing.T) {
 func TestPrepareRejectsInvalidParity(t *testing.T) {
 	home := t.TempDir()
 	_, err := Prepare(context.Background(), Request{
-		Version:      "custom",
-		CustomURL:    "https://example.test/buckit",
-		CustomSHA256: sha256Hex("fake-buckit"),
+		Version:      "vtest",
 		RootUser:     "buckitadmin",
 		RootPassword: "buckit-secret-key-CHANGE-ME",
 		APIPort:      9000,
@@ -426,9 +435,7 @@ func TestPrepareRejectsInvalidParity(t *testing.T) {
 	}
 
 	_, err = Prepare(context.Background(), Request{
-		Version:      "custom",
-		CustomURL:    "https://example.test/buckit",
-		CustomSHA256: sha256Hex("fake-buckit"),
+		Version:      "vtest",
 		RootUser:     "buckitadmin",
 		RootPassword: "buckit-secret-key-CHANGE-ME",
 		APIPort:      9000,
@@ -445,9 +452,7 @@ func TestPrepareRejectsInvalidParity(t *testing.T) {
 func TestPrepareRejectsUnsupportedErasurePathCount(t *testing.T) {
 	home := t.TempDir()
 	_, err := Prepare(context.Background(), Request{
-		Version:      "custom",
-		CustomURL:    "https://example.test/buckit",
-		CustomSHA256: sha256Hex("fake-buckit"),
+		Version:      "vtest",
 		RootUser:     "buckitadmin",
 		RootPassword: "buckit-secret-key-CHANGE-ME",
 		APIPort:      9000,
@@ -463,9 +468,7 @@ func TestPrepareRejectsUnsupportedErasurePathCount(t *testing.T) {
 func TestPrepareExpandsDataPathPatterns(t *testing.T) {
 	home := t.TempDir()
 	resp, err := Prepare(context.Background(), Request{
-		Version:      "custom",
-		CustomURL:    "https://example.test/buckit",
-		CustomSHA256: sha256Hex("fake-buckit"),
+		Version:      "vtest",
 		RootUser:     "buckitadmin",
 		RootPassword: "buckit-secret-key-CHANGE-ME",
 		APIPort:      9000,
@@ -504,9 +507,7 @@ func TestPrepareExpandsDataPathPatterns(t *testing.T) {
 func TestPrepareRejectsInvalidDataPathPattern(t *testing.T) {
 	home := t.TempDir()
 	_, err := Prepare(context.Background(), Request{
-		Version:      "custom",
-		CustomURL:    "https://example.test/buckit",
-		CustomSHA256: sha256Hex("fake-buckit"),
+		Version:      "vtest",
 		RootUser:     "buckitadmin",
 		RootPassword: "buckit-secret-key-CHANGE-ME",
 		APIPort:      9000,
@@ -525,9 +526,7 @@ func TestPrepareWarnsForMultiplePathsOnRootDrive(t *testing.T) {
 	}
 	home := t.TempDir()
 	resp, err := Prepare(context.Background(), Request{
-		Version:      "custom",
-		CustomURL:    "https://example.test/buckit",
-		CustomSHA256: sha256Hex("fake-buckit"),
+		Version:      "vtest",
 		RootUser:     "buckitadmin",
 		RootPassword: "buckit-secret-key-CHANGE-ME",
 		APIPort:      9000,
@@ -550,9 +549,7 @@ func TestPrepareWritesWindowsScriptAndQuotesValues(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
 	resp, err := Prepare(context.Background(), Request{
-		Version:      "custom",
-		CustomURL:    "https://example.test/buckit.exe",
-		CustomSHA256: sha256Hex("fake-buckit"),
+		Version:      "vtest",
 		RootUser:     "buckitadmin",
 		RootPassword: "secret';$(bad)#CHANGE",
 		APIPort:      9000,
@@ -598,9 +595,7 @@ func TestPrepareWritesWindowsScriptAndQuotesValues(t *testing.T) {
 func TestPrepareWritesShellScriptAndQuotesValues(t *testing.T) {
 	home := t.TempDir()
 	resp, err := Prepare(context.Background(), Request{
-		Version:      "custom",
-		CustomURL:    "https://example.test/buckit",
-		CustomSHA256: sha256Hex("fake-buckit"),
+		Version:      "vtest",
 		RootUser:     "buckitadmin",
 		RootPassword: "secret';$(bad)#CHANGE",
 		APIPort:      9000,
@@ -644,9 +639,7 @@ func TestPrepareWritesShellScriptAndQuotesValues(t *testing.T) {
 func TestPrepareRejectsUnsupportedOS(t *testing.T) {
 	home := t.TempDir()
 	_, err := Prepare(context.Background(), Request{
-		Version:      "custom",
-		CustomURL:    "https://example.test/buckit",
-		CustomSHA256: sha256Hex("fake-buckit"),
+		Version:      "vtest",
 		RootUser:     "buckitadmin",
 		RootPassword: "buckit-secret-key-CHANGE-ME",
 		APIPort:      9000,

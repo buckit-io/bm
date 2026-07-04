@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	neturl "net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -30,8 +29,6 @@ var pathPatternRE = regexp.MustCompile(`^(.*)\{(\d+)(?:\.\.|\.\.\.)(\d+)\}(.*)$`
 
 type Request struct {
 	Version      string           `json:"version"`
-	CustomURL    string           `json:"customUrl,omitempty"`
-	CustomSHA256 string           `json:"customSha256,omitempty"`
 	RootUser     string           `json:"rootUser"`
 	RootPassword string           `json:"rootPassword"`
 	APIPort      int              `json:"apiPort"`
@@ -482,36 +479,9 @@ func pathKey(p string) string {
 	return strings.ToLower(filepath.Clean(p))
 }
 
-func isSHA256Hex(s string) bool {
-	if len(s) != 64 {
-		return false
-	}
-	for _, r := range s {
-		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
-			return false
-		}
-	}
-	return true
-}
-
 func resolveBinaryArtifact(req Request, goos, goarch string) (deploy.Artifact, error) {
 	if req.Version == "custom" {
-		u := strings.TrimSpace(req.CustomURL)
-		if u == "" {
-			return deploy.Artifact{}, errors.New("customUrl required when version=custom")
-		}
-		parsed, err := neturl.Parse(u)
-		if err != nil {
-			return deploy.Artifact{}, fmt.Errorf("customUrl: %w", err)
-		}
-		if parsed.Scheme != "https" {
-			return deploy.Artifact{}, errors.New("customUrl must use https")
-		}
-		sha := strings.ToLower(strings.TrimSpace(req.CustomSHA256))
-		if !isSHA256Hex(sha) {
-			return deploy.Artifact{}, errors.New("customSha256 required when version=custom")
-		}
-		return deploy.Artifact{Kind: "binary", URL: u, SHA256: sha}, nil
+		return deploy.Artifact{}, errors.New("local deployment does not support custom binary URLs")
 	}
 	artifact, err := deploy.ResolveBinaryArtifact(req.Version, goos, goarch)
 	if err != nil {
