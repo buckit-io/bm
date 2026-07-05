@@ -674,7 +674,7 @@ function ReadyStep({ draft }: { draft: LocalDraft }) {
           <div className="local-wizard__action-body">
             <h3>Import into Buckit Manager <span className="local-wizard__optional">(optional)</span></h3>
             <p className="muted">
-              After Buckit server starts successfully, click <Link to={importURL}>here</Link> to import into Buckit Manager.
+              After Buckit server starts successfully, click <Link to={importURL}>here</Link> to import into Buckit Manager for easy monitoring and management.
             </p>
           </div>
         </section>
