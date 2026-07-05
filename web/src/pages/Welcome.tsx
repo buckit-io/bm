@@ -1,10 +1,25 @@
-import { Link } from "react-router-dom";
-import { useClusters } from "../api/hooks";
+import { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { useClusters, useMe } from "../api/hooks";
+import { NewClusterChoiceModal } from "./NewClusterChoiceModal";
 import "./Welcome.css";
 
 export function Welcome() {
   const { data: clusters } = useClusters();
+  const { data: session, isLoading: sessionLoading } = useMe();
+  const navigate = useNavigate();
   const hasClusters = (clusters?.length ?? 0) > 0;
+  const [deployOpen, setDeployOpen] = useState(false);
+  const showDeployChoice =
+    sessionLoading || session?.goos === "darwin" || session?.goos === "windows";
+
+  const startDeploy = () => {
+    if (showDeployChoice) {
+      setDeployOpen(true);
+      return;
+    }
+    navigate("/clusters/new");
+  };
 
   return (
     <div className="welcome">
@@ -18,14 +33,18 @@ export function Welcome() {
       </header>
 
       <div className="welcome__choices">
-        <Link to="/clusters/new" className="card welcome__card">
+        <button
+          className="card welcome__card"
+          onClick={startDeploy}
+          data-testid="welcome-deploy-new"
+        >
           <div className="welcome__icon welcome__icon--blue">🟦</div>
-          <h2>Deploy a new cluster</h2>
-          <p className="muted">
+          <span className="welcome__card-title">Deploy a new cluster</span>
+          <span className="muted">
             Install Buckit on fresh hosts and form a new cluster over SSH.
-          </p>
+          </span>
           <span className="welcome__cta">Get started →</span>
-        </Link>
+        </button>
 
         <Link to="/clusters/import" className="card welcome__card">
           <div className="welcome__icon welcome__icon--orange">🟧</div>
@@ -45,6 +64,7 @@ export function Welcome() {
           install guide ↗
         </a>
       </p>
+      {deployOpen && <NewClusterChoiceModal onClose={() => setDeployOpen(false)} />}
     </div>
   );
 }

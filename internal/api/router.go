@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -106,6 +107,8 @@ func New(opts Options) http.Handler {
 		r.Post("/artifacts/validate", validateArtifact())
 		r.Post("/clusters/new/discover", newClusterDiscover(opts.SSHPool))
 		r.Post("/clusters/new/preflight", newClusterPreflight(opts.SSHPool))
+		r.Post("/local-deployments/preview", previewLocalDeployment())
+		r.Post("/local-deployments/prepare", prepareLocalDeployment())
 		r.Post("/clusters/{id}/migrate/snapshot", migrateSnapshot(opts))
 		r.Post("/clusters/{id}/migrate/preflight", migratePreflight(opts))
 		r.Post("/clusters/{id}/migrate/cutover", migrateCutover(opts))
@@ -308,7 +311,7 @@ func clearHistory(mgr *tasks.Manager) http.HandlerFunc {
 }
 
 func loopbackMe(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"username": "admin"})
+	writeJSON(w, http.StatusOK, map[string]any{"username": "admin", "goos": runtime.GOOS})
 }
 
 func currentSettings(w http.ResponseWriter, _ *http.Request) {

@@ -20,6 +20,8 @@ import type {
   DispatchResponse,
   HealthInfo,
   HistoryEntry,
+  LocalPrepareRequest,
+  LocalPrepareResponse,
   NodeLogsRange,
   NodeLogsResponse,
   ImportCandidate,
@@ -333,6 +335,16 @@ export const newClusterPreflight = (draft: unknown, signal?: AbortSignal) =>
 
 export const newClusterDeploy = (draft: unknown, signal?: AbortSignal) =>
   post<DispatchResponse>("/clusters/new/deploy", draft, signal);
+
+export const previewLocalDeployment = (
+  body: LocalPrepareRequest,
+  signal?: AbortSignal,
+) => post<LocalPrepareResponse>("/local-deployments/preview", body, signal);
+
+export const prepareLocalDeployment = (
+  body: LocalPrepareRequest,
+  signal?: AbortSignal,
+) => post<LocalPrepareResponse>("/local-deployments/prepare", body, signal);
 
 // ---- migration wizard ----
 

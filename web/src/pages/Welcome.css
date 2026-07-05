@@ -24,6 +24,7 @@
   flex-direction: column;
   gap: var(--s-3);
   color: var(--c-fg);
+  text-align: left;
   transition: border-color 120ms ease, transform 120ms ease;
 }
 .welcome__card:hover {
@@ -44,7 +45,8 @@
 .welcome__icon--blue { background: var(--c-accent-soft); }
 .welcome__icon--orange { background: var(--c-warning-soft); }
 
-.welcome__card h2 {
+.welcome__card h2,
+.welcome__card-title {
   font-size: var(--fs-lg);
   font-weight: var(--fw-semibold);
 }

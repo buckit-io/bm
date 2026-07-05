@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, Navigate } from "react-router-dom";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 import { Pill } from "../components/Pill";
-import { useClusters, useRefreshClusters } from "../api/hooks";
+import { useClusters, useMe, useRefreshClusters } from "../api/hooks";
 import { Cluster } from "../api/types";
 import { formatBytes } from "../lib/format";
+import { NewClusterChoiceModal } from "./NewClusterChoiceModal";
 import "./Clusters.css";
 
 function pickMostStale(clusters: Cluster[]): string | null {
@@ -61,8 +62,21 @@ function ratioCell(ok: number, total: number) {
 
 export function Clusters() {
   const { data: clusters, isLoading } = useClusters();
+  const { data: session, isLoading: sessionLoading } = useMe();
   const refresh = useRefreshClusters();
+  const navigate = useNavigate();
   const autoRefreshStarted = useRef(false);
+  const [deployOpen, setDeployOpen] = useState(false);
+  const showDeployChoice =
+    sessionLoading || session?.goos === "darwin" || session?.goos === "windows";
+
+  const startDeploy = () => {
+    if (showDeployChoice) {
+      setDeployOpen(true);
+      return;
+    }
+    navigate("/clusters/new");
+  };
 
   // Re-render every second so "Fetched Ns ago" actually ticks while the
   // operator stares at the page. Cheap — one setState per second.
@@ -120,9 +134,9 @@ export function Clusters() {
             </span>
             {refresh.isPending ? "Refreshing…" : "Refresh"}
           </button>
-          <Link to="/clusters/new" className="btn btn--primary">
+          <button className="btn btn--primary" onClick={startDeploy}>
             + Deploy new cluster
-          </Link>
+          </button>
           <Link to="/clusters/import" className="btn btn--secondary" data-testid="clusters-import-link">
             + Import existing cluster
           </Link>
@@ -202,6 +216,7 @@ export function Clusters() {
           </table>
         )}
       </div>
+      {deployOpen && <NewClusterChoiceModal onClose={() => setDeployOpen(false)} />}
     </section>
   );
 }

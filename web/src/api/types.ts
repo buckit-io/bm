@@ -296,6 +296,40 @@ export interface BuckitVersion {
   sha256Url?: string;
 }
 
+// ---- local single-node prepare ----
+
+export type LocalTLSMode = "off" | "byo";
+
+export interface LocalTLSConfig {
+  mode: LocalTLSMode;
+  certPem?: string;
+  keyPem?: string;
+  caBundlePem?: string;
+}
+
+export interface LocalPrepareRequest {
+  version: string;
+  rootUser: string;
+  rootPassword: string;
+  apiPort: number;
+  consolePort: number;
+  dataPaths: string[];
+  parity?: number;
+  tls: LocalTLSConfig;
+}
+
+export interface LocalPrepareResponse {
+  scriptPath: string;
+  binaryPath: string;
+  dataPaths: string[];
+  apiUrl: string;
+  consoleUrl: string;
+  command: string;
+  setSize?: number;
+  parity?: number;
+  warnings?: string[];
+}
+
 // ---- operations + history ----
 
 // OpKind is the union of every operation the UI can dispatch. Matches the
@@ -519,6 +553,7 @@ export interface MigrationVerifyResult {
 
 export interface SessionMe {
   username: string;
+  goos?: string;
 }
 
 export interface ManagerSettings {

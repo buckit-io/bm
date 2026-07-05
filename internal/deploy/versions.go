@@ -240,12 +240,25 @@ func ResolveArtifact(version, kind, arch string) (Artifact, error) {
 }
 
 func ResolveBinaryURL(version, osName, arch string) (string, error) {
+	artifact, err := ResolveBinaryArtifact(version, osName, arch)
+	if err != nil {
+		return "", err
+	}
+	return artifact.URL, nil
+}
+
+func BinaryURLForOSArch(v *domain.BuckitVersion, osName, arch string) string {
+	artifact := BinaryArtifactForOSArch(v, osName, arch)
+	return artifact.URL
+}
+
+func ResolveBinaryArtifact(version, osName, arch string) (Artifact, error) {
 	v := VersionByTag(version)
 	if v == nil {
-		return "", errors.New("unsupported version " + version)
+		return Artifact{}, errors.New("unsupported version " + version)
 	}
-	artifact := BinaryURLForOSArch(v, osName, arch)
-	if artifact == "" {
+	artifact := BinaryArtifactForOSArch(v, osName, arch)
+	if artifact.URL == "" {
 		target := strings.TrimSpace(osName)
 		if target == "" {
 			target = "requested platform"
@@ -253,14 +266,14 @@ func ResolveBinaryURL(version, osName, arch string) (string, error) {
 		if normArch := normalizeReleaseArch(arch); normArch != "" {
 			target += " " + normArch
 		}
-		return "", errors.New("no binary URL for " + version + " on " + target)
+		return Artifact{}, errors.New("no binary URL for " + version + " on " + target)
 	}
 	return artifact, nil
 }
 
-func BinaryURLForOSArch(v *domain.BuckitVersion, osName, arch string) string {
+func BinaryArtifactForOSArch(v *domain.BuckitVersion, osName, arch string) Artifact {
 	if v == nil {
-		return ""
+		return Artifact{}
 	}
 	normOS := strings.ToLower(strings.TrimSpace(osName))
 	normArch := normalizeReleaseArch(arch)
@@ -275,9 +288,15 @@ func BinaryURLForOSArch(v *domain.BuckitVersion, osName, arch string) string {
 		if normArch != "" && normalizeReleaseArch(a.Arch) != normArch {
 			continue
 		}
-		return a.URL
+		shaURLs := uniqueStrings(append([]string{strings.TrimSpace(a.SHA256URL)}, DefaultSHA256URLs(a.URL)...))
+		return Artifact{
+			Kind:       "binary",
+			URL:        a.URL,
+			SHA256URLs: shaURLs,
+			SHA256:     strings.TrimSpace(a.SHA256),
+		}
 	}
-	return ""
+	return Artifact{}
 }
 
 // githubRelease is the subset of the GitHub releases API response we parse.
