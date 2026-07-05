@@ -245,6 +245,12 @@ function opDisabledForEngine(op: OperationDef, cluster: Cluster): boolean {
   return !!op.buckitOnly && cluster.engine !== "buckit";
 }
 
+function isLocalManualCluster(cluster: Cluster, nodes: Node[] | undefined): boolean {
+  if (cluster.nodeCount !== 1 || nodes?.length !== 1) return false;
+  const os = (nodes[0].os ?? "").toLowerCase();
+  return os === "darwin" || os === "windows";
+}
+
 export function ClusterDetailLayout() {
   const { clusterId } = useParams();
   const navigate = useNavigate();
@@ -457,8 +463,14 @@ export function ClusterDetailLayout() {
   const [activeOp, setActiveOp] = useState<ActiveOp | null>(null);
   const [showSshRequired, setShowSshRequired] = useState(false);
   const sshConfigured = !!sshConfig;
+  const localManualCluster = cluster
+    ? isLocalManualCluster(cluster, nodes)
+    : false;
   const runHostAction = (op: OperationDef) => {
     if (!cluster || selected.size === 0) return;
+    if (localManualCluster) {
+      return;
+    }
     if (!sshConfigured) {
       setShowSshRequired(true);
       return;
@@ -498,12 +510,16 @@ export function ClusterDetailLayout() {
       : poolsByPriority;
 
   const hostSelectionReady = selected.size > 0;
+  const localManualHint =
+    "Systemd/SSH actions are not available for local macOS or Windows single-node deployments.";
   const hostActionsHint =
-    !sshConfigured
-      ? "SSH is not configured for this cluster. Set it up in Settings to enable host actions."
-      : selected.size === 0
-        ? "Select one or more hosts below to enable actions."
-        : null;
+    localManualCluster
+      ? localManualHint
+      : !sshConfigured
+        ? "SSH is not configured for this cluster. Set it up in Settings to enable host actions."
+        : selected.size === 0
+          ? "Select one or more hosts below to enable actions."
+          : null;
 
   return (
     <section className="cdetail">
@@ -592,18 +608,22 @@ export function ClusterDetailLayout() {
             </button>
             {actionsOpen && (
               <div className="cdetail__menu cdetail__menu--wide" role="menu">
-                {renderActionsMenu(cluster, (op) => {
-                  setActionsOpen(false);
-                  if (clusterOpRequiresSSH(op) && !sshConfigured) {
-                    setShowSshRequired(true);
-                    return;
-                  }
-                  if (op.flavor === "navigate" && op.navigateTo) {
-                    navigate(op.navigateTo(cluster));
-                    return;
-                  }
-                  setActiveOp({ op });
-                })}
+                {renderActionsMenu(
+                  cluster,
+                  localManualCluster ? localManualHint : undefined,
+                  (op) => {
+                    setActionsOpen(false);
+                    if (clusterOpRequiresSSH(op) && !sshConfigured) {
+                      setShowSshRequired(true);
+                      return;
+                    }
+                    if (op.flavor === "navigate" && op.navigateTo) {
+                      navigate(op.navigateTo(cluster));
+                      return;
+                    }
+                    setActiveOp({ op });
+                  },
+                )}
               </div>
             )}
           </div>
@@ -733,7 +753,7 @@ export function ClusterDetailLayout() {
           <div className="hstack" style={{ flexWrap: "wrap" }}>
             {BULK_HOST_OPERATIONS.map((op) => {
               const engineDisabled = opDisabledForEngine(op, cluster);
-              const disabled = !hostSelectionReady || engineDisabled;
+              const disabled = localManualCluster || !hostSelectionReady || engineDisabled;
               const title = engineDisabled
                 ? BUCKIT_ONLY_HINT
                 : hostActionsHint ?? undefined;
@@ -1018,6 +1038,7 @@ export function ClusterDetailLayout() {
 // Filters out items hidden by their `visible` predicate.
 function renderActionsMenu(
   cluster: Cluster,
+  sshDisabledHint: string | undefined,
   onPick: (op: OperationDef) => void,
 ) {
   const visible = CLUSTER_OPERATIONS.filter(
@@ -1033,6 +1054,13 @@ function renderActionsMenu(
       </div>,
       ...items.map((op) => {
         const engineDisabled = opDisabledForEngine(op, cluster);
+        const sshDisabled = clusterOpRequiresSSH(op) && !!sshDisabledHint;
+        const disabled = engineDisabled || sshDisabled;
+        const title = engineDisabled
+          ? BUCKIT_ONLY_HINT
+          : sshDisabled
+            ? sshDisabledHint
+            : undefined;
         return (
           <button
             key={op.id}
@@ -1042,8 +1070,8 @@ function renderActionsMenu(
             }
             data-testid={`cluster-action-${op.id}`}
             onClick={() => onPick(op)}
-            disabled={engineDisabled}
-            title={engineDisabled ? BUCKIT_ONLY_HINT : undefined}
+            disabled={disabled}
+            title={title}
             role="menuitem"
           >
             <div>{op.dynamicLabel ? op.dynamicLabel(cluster) : op.label}</div>
