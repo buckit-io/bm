@@ -136,34 +136,8 @@ export function Settings() {
       */}
 
       <div className="card settings__group">
-        <h2 className="settings__group-title">About</h2>
-        <div className="settings__row">
-          <div>
-            <div className="field-label">Version</div>
-            <div className="settings__value mono">{settings?.version ?? "unknown"}</div>
-            {updateStatus?.installedVersion &&
-              updateStatus.installedVersion !== updateStatus.currentVersion && (
-                <div className="subtle settings__note">
-                  Installed on disk: <span className="mono">{updateStatus.installedVersion}</span>
-                </div>
-              )}
-            {updateStatus?.latestVersion &&
-              (updateStatus.updateAvailable || updateStatus.restartRequired) && (
-              <div className="subtle settings__note">
-                Latest stable: <span className="mono">{updateStatus.latestVersion}</span>
-              </div>
-            )}
-            {noUpdateMessage && <div className="subtle settings__note">{noUpdateMessage}</div>}
-            {updateStatus?.reason && (
-              <div className="subtle settings__note">{updateStatus.reason}</div>
-            )}
-            {updateError instanceof Error && (
-              <div className="subtle settings__note">{updateError.message}</div>
-            )}
-            {applyUpdate.data?.message && (
-              <div className="subtle settings__note">{applyUpdate.data.message}</div>
-            )}
-          </div>
+        <div className="settings__about-header">
+          <h2 className="settings__group-title">About</h2>
           {!applyUpdate.isPending && (
             <div className="settings__actions">
               <button
@@ -178,19 +152,31 @@ export function Settings() {
             </div>
           )}
         </div>
-        <div className="settings__row">
-          <div>
-            <div className="field-label">Documentation</div>
+        <div className="settings__version-list">
+          <div className="settings__version-row">
+            <div className="settings__version-label">Running version</div>
+            <div className="settings__version-value mono">{settings?.version ?? "unknown"}</div>
           </div>
-          <a
-            className="btn btn--sm"
-            href="https://github.com/buckit-io/buckit/tree/main/buckit/docs/manager"
-            target="_blank"
-            rel="noreferrer"
-          >
-            Open docs ↗
-          </a>
+          {updateStatus?.installedVersion &&
+            updateStatus.installedVersion !== updateStatus.currentVersion && (
+              <div className="settings__version-row">
+                <div className="settings__version-label">Installed on disk</div>
+                <div className="settings__version-value mono">{updateStatus.installedVersion}</div>
+              </div>
+            )}
+          {updateStatus?.latestVersion &&
+            (updateStatus.updateAvailable || updateStatus.restartRequired) && (
+              <div className="settings__version-row">
+                <div className="settings__version-label">Latest stable</div>
+                <div className="settings__version-value mono">{updateStatus.latestVersion}</div>
+              </div>
+            )}
         </div>
+        {(noUpdateMessage || updateStatus?.reason || updateError instanceof Error || applyUpdate.data?.message) && (
+          <div className={updateError instanceof Error ? "settings__status settings__status--error" : "settings__status"}>
+            {noUpdateMessage ?? updateStatus?.reason ?? (updateError instanceof Error ? updateError.message : undefined) ?? applyUpdate.data?.message}
+          </div>
+        )}
       </div>
     </section>
   );

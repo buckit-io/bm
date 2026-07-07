@@ -167,9 +167,6 @@ func preview(req Request, opts Options) (Response, error) {
 		if err := deploy.ValidateTLSConfig(tls, nil); err != nil {
 			return Response{}, err
 		}
-		if err := deploy.ValidateTLSConfig(tls, []string{"localhost", "127.0.0.1"}); err != nil {
-			warnings = append(warnings, "TLS certificate should include localhost and 127.0.0.1 in Subject Alternative Names.")
-		}
 		req.TLS = tls
 	}
 
@@ -325,7 +322,7 @@ func warnRootDriveDataPaths(goos string, dataPaths []string, warnings []string) 
 		verb = "is"
 		drive = "drive"
 	}
-	return append(warnings, fmt.Sprintf("%s %s %s on the root/OS %s. It's recommended using root drives only for dev or test deployment.", label, strings.Join(rootPaths, ", "), verb, drive))
+	return append(warnings, fmt.Sprintf("%s %s %s on the root/OS %s. Using root drives is acceptable for development or testing, but it is not recommended for production deployments.", label, strings.Join(rootPaths, ", "), verb, drive))
 }
 
 func warnExistingBinary(binaryPath string, warnings []string) []string {
