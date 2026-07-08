@@ -3,10 +3,10 @@ module github.com/buckit-io/bm
 go 1.25.10
 
 require (
-	github.com/buckit-io/bm-cli v0.0.0-20260530032858-2f5fe11ff4d1
-	github.com/buckit-io/madmin-go/v3 v3.0.0-20260530032651-21b29d3fb93e
-	github.com/buckit-io/minio-go/v7 v7.0.0-20260518233947-e88e1acf1753
-	github.com/buckit-io/pkg/v3 v3.0.0-20260518235113-81b0390d37a9
+	github.com/buckit-io/bm-cli v0.1.0
+	github.com/buckit-io/buckit-go/v7 v7.0.0
+	github.com/buckit-io/madmin-go/v3 v3.0.0
+	github.com/buckit-io/pkg/v3 v3.0.0
 	github.com/buckit-io/selfupdate v0.0.0-20260518233624-b264e5557082
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/oklog/ulid/v2 v2.1.1
