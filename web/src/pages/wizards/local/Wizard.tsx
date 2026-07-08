@@ -367,7 +367,9 @@ function SettingsStep({ draft, update }: StepProps) {
               value={draft.tls.keyPem}
               onChange={(e) => update({ tls: { ...draft.tls, keyPem: e.target.value } })}
             />
-            <span className="field-hint">Certificate SANs should include localhost and 127.0.0.1.</span>
+            <span className="field-hint">
+              Certificate SANs should include every hostname or IP address you will use to connect, such as localhost, 127.0.0.1, or this computer's DNS name.
+            </span>
           </div>
           <div className="field">
             <label className="field-label" htmlFor="local-ca">CA bundle PEM (optional)</label>
@@ -720,7 +722,7 @@ function rootOSDriveWarning(paths: string[]): string {
   const label = paths.length === 1 ? "Data path" : "Data paths";
   const verb = paths.length === 1 ? "is" : "are";
   const drive = paths.length === 1 ? "drive" : "drives";
-  return `${label} ${paths.join(", ")} ${verb} on the root/OS ${drive}. It's recommended using root drives only for dev or test deployment.`;
+  return `${label} ${paths.join(", ")} ${verb} on the root/OS ${drive}. Using root drives is acceptable for development or testing, but it is not recommended for production deployments.`;
 }
 
 function isRootOSDriveWarning(warning: string): boolean {
