@@ -1,96 +1,262 @@
-# bm — Buckit Manager
+# Buckit Manager CLI (`bm`)
 
-`bm` is the operational control plane for Buckit deployments. It is a
-single binary that ships with a CLI, an HTTP API, and an embedded web
-UI. Phase 1 delivers `bm server` and the two operator wizards required
-to (a) deploy a new Buckit cluster onto fresh hosts over SSH, and
-(b) migrate an existing MinIO deployment to Buckit in place.
+`bm` is the Buckit Manager command line tool for working with
+[Buckit](https://github.com/buckit-io/buckit) and other S3-compatible object
+storage services. It extends the open source
+[MinIO `mc` CLI](https://github.com/minio/mc) with Buckit-specific management
+features and a web-based UI.
 
-The high-level design lives in the buckit repo under
-[`buckit/docs/manager/README.md`](../buckit/docs/manager/README.md).
-The Phase 1 UI spec is in
-[`buckit/docs/manager/phase1-web-ui.md`](../buckit/docs/manager/phase1-web-ui.md).
-The implementation plan that drives this directory is at
-[`buckit/docs/manager/phase1-implementation.md`](../buckit/docs/manager/phase1-implementation.md).
+It provides object storage commands similar to familiar UNIX tools such as
+`ls`, `cat`, `cp`, `mirror`, and `diff`, plus administration commands for
+Buckit deployments.
+
+Full documentation: <https://buckit.sh/docs/reference/bm-cli>
+
+## Buckit Manager Web UI
+
+`bm` also includes Buckit Manager Web, a local web UI for deploying and
+managing Buckit clusters.
+
+Start the web UI:
+
+```sh
+bm web
+```
+
+By default, Buckit Manager opens at `http://127.0.0.1:9443/`.
+
+Use the web UI to:
+
+- Prepare a local single-node Buckit deployment on macOS or Windows.
+- Deploy Buckit as a managed cluster on one or more Linux servers over SSH.
+- Import an existing Buckit or MinIO cluster.
+- Monitor cluster health, nodes, pools, and drives.
+- Run supported cluster and node operations.
+
+Web UI documentation:
+<https://buckit.sh/docs/administration/buckit-manager>
 
 ## Install
 
-`bm` is a single per-user binary — no sudo, no system-wide install.
+Install `bm` on the computer where you want to run the CLI.
 
-macOS / Linux:
+macOS and Linux:
 
 ```sh
 curl -fsSL https://buckit-io.github.io/bm/install.sh | sh
+bm --help
 ```
 
-Windows (PowerShell):
+Windows PowerShell:
 
 ```powershell
 irm https://buckit-io.github.io/bm/install.ps1 | iex
+bm --help
 ```
 
-The installer downloads the latest stable build for your OS/arch,
-verifies its SHA-256 against the published release pointer, and installs
-to `~/.local/bin` (`%LOCALAPPDATA%\Programs\bm` on Windows). Set
-`BM_INSTALL_DIR` to override. You can also grab a signed binary directly
-from the [download site](https://buckit-io.github.io/bm/manager/bm/release/)
-or the [GitHub releases](https://github.com/buckit-io/bm/releases).
+The installer downloads the latest stable build for your platform, verifies
+its SHA-256 checksum, and installs it into your user account.
 
-Once installed, `bm update` self-updates to the latest stable release
-(verifying SHA-256 + minisign signature).
+## Quickstart
 
-## Requirements
+### 1. Add an Alias
 
-- Go 1.25+
-- Node 20+ and npm (for building the web UI)
-
-## Build
+Most `bm` commands operate against an alias. An alias stores the endpoint and
+credentials for a Buckit or S3-compatible service.
 
 ```sh
-make web      # build the React frontend into web/dist
-make build    # build the bm binary
-./bm version
+bm alias set ALIAS HOSTNAME ACCESS_KEY SECRET_KEY
 ```
 
-Cross-compile for all supported platforms:
+Example:
 
 ```sh
-make build-all
-ls dist/
+bm alias set mybuckit https://buckitserver.example.net ACCESS_KEY SECRET_KEY
 ```
 
-## Run (development)
+If you omit `ACCESS_KEY` and `SECRET_KEY`, `bm` prompts for them.
+
+To reduce the chance of credentials being saved in shell history, temporarily
+disable history while setting an alias:
 
 ```sh
-# Terminal 1 — Go server (will be wired in M1)
-make run
-
-# Terminal 2 — Vite dev server with API proxy
-cd web && npm install && npm run dev
+bash +o history
+bm alias set mybuckit https://buckitserver.example.net ACCESS_KEY SECRET_KEY
+bash -o history
 ```
 
-The frontend dev server proxies `/api/*` to `http://localhost:9443`.
+### 2. Test the Connection
 
-## Layout
+Use `bm admin info` to confirm that `bm` can connect to the deployment:
 
-| Path | Purpose |
-|---|---|
-| `cmd/bm/` | Entry point and CLI dispatch |
-| `internal/app/` | Shared application services (the "core") |
-| `internal/api/` | HTTP layer (chi router, handlers, SSE) |
-| `internal/store/` | bbolt-backed persistent state |
-| `internal/tasks/` | Task engine for long-running workflows |
-| `internal/ssh/` | SSH execution and file transfer |
-| `internal/deploy/` | Install / upgrade / config / systemd workflows |
-| `internal/cluster/` | Domain models and topology planning |
-| `internal/auth/` | Local admin auth |
-| `internal/config/` | Server configuration |
-| `internal/version/` | Build-time version metadata |
-| `web/` | React + Vite + TypeScript frontend |
-| `packaging/` | Per-user install scripts (`install.sh`, `install.ps1`) |
+```sh
+bm admin info mybuckit
+```
 
-## Status
+If the command fails, check network connectivity, the service URL, and the
+access key and secret key.
 
-This directory is being built milestone-by-milestone per
-[`phase1-implementation.md`](../buckit/docs/manager/phase1-implementation.md).
-M0 (module bootstrap) is the first landing.
+### 3. Work with Buckets and Objects
+
+Create a bucket:
+
+```sh
+bm mb mybuckit/mydata
+```
+
+List buckets or objects:
+
+```sh
+bm ls mybuckit
+bm ls mybuckit/mydata
+```
+
+Copy files to Buckit:
+
+```sh
+bm cp --recursive ~/mydata/ mybuckit/mydata/
+```
+
+Copy an object from Buckit:
+
+```sh
+bm cp mybuckit/mydata/object.txt ./object.txt
+```
+
+Display an object:
+
+```sh
+bm cat mybuckit/mydata/object.txt
+```
+
+Synchronize a local directory to Buckit:
+
+```sh
+bm mirror ~/mydata mybuckit/mydata
+```
+
+Watch a local directory and synchronize changes:
+
+```sh
+bm mirror --watch ~/mydata mybuckit/mydata
+```
+
+Remove objects:
+
+```sh
+bm rm mybuckit/mydata/object.txt
+```
+
+Use `--dry-run` before large or recursive remove operations:
+
+```sh
+bm rm --recursive --dry-run mybuckit/mydata
+```
+
+## Common Commands
+
+| Command | Purpose |
+| --- | --- |
+| `bm alias set` | Add or update an alias for a Buckit or S3-compatible service. |
+| `bm alias list` | List configured aliases. |
+| `bm admin info` | Show deployment information and test connectivity. |
+| `bm ls` | List buckets, prefixes, objects, or local files. |
+| `bm mb` | Create a bucket or local directory. |
+| `bm cp` | Copy files or objects between local storage and object storage. |
+| `bm cat` | Print object or file contents to standard output. |
+| `bm mirror` | Synchronize content between filesystems and object storage. |
+| `bm rm` | Remove objects or local files. |
+| `bm version` | Manage bucket versioning. |
+| `bm retention` | Manage object retention settings. |
+| `bm legalhold` | Manage object legal holds. |
+| `bm tag` | Manage object tags. |
+| `bm ilm` | Manage lifecycle rules and tiers. |
+| `bm replicate` | Manage bucket replication. |
+| `bm update` | Update the `bm` binary to the latest stable version. |
+
+Run any command with `--help` for usage details:
+
+```sh
+bm COMMAND --help
+bm cp --help
+bm alias set --help
+```
+
+## Global Options
+
+Common global options include:
+
+| Option | Purpose |
+| --- | --- |
+| `--config-dir` | Use a custom configuration directory. |
+| `--debug` | Print verbose debug output. |
+| `--insecure` | Disable TLS certificate verification. Use only for trusted test environments. |
+| `--json` | Print JSON lines output. |
+| `--no-color` | Disable colored output. |
+| `--quiet` | Suppress console output. |
+| `--version` | Print the current `bm` version. |
+| `--help` | Show command usage. |
+
+Global options go before the command:
+
+```sh
+bm --json ls mybuckit
+bm --debug admin info mybuckit
+```
+
+## Configuration
+
+`bm` stores aliases and CLI settings in a JSON configuration file.
+
+Default paths:
+
+| Platform | Configuration path |
+| --- | --- |
+| Linux and macOS | `~/.config/bm/config.json` |
+| Windows | `%APPDATA%\bm\config.json` |
+
+You can override the configuration directory with `--config-dir` or the
+`MC_CONFIG_DIR` environment variable.
+
+## Certificates
+
+`bm` stores certificates and certificate authorities under the configuration
+directory.
+
+Linux, macOS, and other Unix-like systems:
+
+```sh
+~/.config/bm/certs/
+~/.config/bm/certs/CAs/
+```
+
+Windows:
+
+```powershell
+%APPDATA%\bm\certs\
+%APPDATA%\bm\certs\CAs\
+```
+
+When you create a new alias, `bm` can fetch the service certificate, show its
+public key fingerprint, and ask whether to trust it.
+
+For test environments only, some commands support `--insecure` to bypass
+certificate verification.
+
+## Update
+
+Update `bm` to the latest stable version:
+
+```sh
+bm update
+```
+
+For best compatibility, use a `bm` version released close to your Buckit Server
+version. A newer `bm` can usually work with older Buckit Server releases, but
+large version differences may result in warnings or unsupported flags.
+
+## More Documentation
+
+- CLI reference: <https://buckit.sh/docs/reference/bm-cli>
+- Administration commands: <https://buckit.sh/docs/reference/bm-admin>
+- Buckit Manager web UI: <https://buckit.sh/docs/administration/buckit-manager>
