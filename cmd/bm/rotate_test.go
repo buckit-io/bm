@@ -1,10 +1,13 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/buckit-io/bm/internal/store"
 )
 
 func TestRotatingWriterCapsAndKeepsBackup(t *testing.T) {
@@ -61,5 +64,23 @@ func TestRotatingWriterAppendsExistingSize(t *testing.T) {
 	}
 	if !strings.HasPrefix(string(b), "yyy") {
 		t.Fatalf("backup should hold the original content, got %q", string(b[:3]))
+	}
+}
+
+func TestBusyStoreErrorIncludesShutdownHint(t *testing.T) {
+	err := busyStoreError("127.0.0.1:9443", store.ErrBusy)
+	msg := err.Error()
+
+	if !errors.Is(err, store.ErrBusy) {
+		t.Fatal("busyStoreError should wrap store.ErrBusy")
+	}
+	for _, want := range []string{
+		"another bm process is using the database",
+		"Open http://127.0.0.1:9443/",
+		"click Stop Server",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("message missing %q:\n%s", want, msg)
+		}
 	}
 }
