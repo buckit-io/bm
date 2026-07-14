@@ -203,7 +203,7 @@ func runWeb(rawArgs []string) error {
 
 func busyStoreError(addr string, err error) error {
 	url := fmt.Sprintf("http://%s/", addr)
-	return fmt.Errorf("%w\n\nA Buckit Manager web server is probably already running.\nOpen %s and click Stop Server to shut it down.", err, url)
+	return fmt.Errorf("%w\n\nA Buckit Manager web server is probably already running.\nOpen %s and click Exit to stop the instance.", err, url)
 }
 
 // maxLogBytes caps bm.log: once a write would push it past this size the file

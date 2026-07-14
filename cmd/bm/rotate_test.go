@@ -77,7 +77,7 @@ func TestBusyStoreErrorIncludesShutdownHint(t *testing.T) {
 	for _, want := range []string{
 		"another bm process is using the database",
 		"Open http://127.0.0.1:9443/",
-		"click Stop Server",
+		"click Exit to stop the instance",
 	} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("message missing %q:\n%s", want, msg)

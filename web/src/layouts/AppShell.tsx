@@ -74,7 +74,7 @@ export function AppShell() {
             onClick={onExit}
             disabled={shutdownState !== "idle"}
           >
-            {shutdownState === "shutting_down" ? "Stopping..." : "Stop Server"}
+            {shutdownState === "shutting_down" ? "Exiting..." : "Exit"}
           </button>
         </div>
       </header>
