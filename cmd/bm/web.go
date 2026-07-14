@@ -86,6 +86,9 @@ func runWeb(rawArgs []string) error {
 	}
 	st, err := store.Open(paths.DBFile, key)
 	if err != nil {
+		if errors.Is(err, store.ErrBusy) {
+			return busyStoreError(*addr, err)
+		}
 		return err
 	}
 	defer st.Close()
@@ -160,6 +163,10 @@ func runWeb(rawArgs []string) error {
 	}
 	defer mgr.Shutdown()
 
+	serveCtx, requestShutdown := context.WithCancel(context.Background())
+	defer requestShutdown()
+	var shutdownOnce sync.Once
+
 	handler := api.New(api.Options{
 		Store:        st,
 		Tasks:        mgr,
@@ -172,6 +179,12 @@ func runWeb(rawArgs []string) error {
 		AliasPath:    paths.AliasFile,
 		Updater:      update.NewService(),
 		WebDist:      *webDist,
+		Shutdown: func() {
+			shutdownOnce.Do(func() {
+				fmt.Fprintln(os.Stderr, "bm: shutdown requested from web UI")
+				requestShutdown()
+			})
+		},
 	})
 	srv := &http.Server{
 		Addr:              *addr,
@@ -185,7 +198,12 @@ func runWeb(rawArgs []string) error {
 		openBrowser(url)
 	}
 
-	return app.Serve(context.Background(), srv)
+	return app.Serve(serveCtx, srv)
+}
+
+func busyStoreError(addr string, err error) error {
+	url := fmt.Sprintf("http://%s/", addr)
+	return fmt.Errorf("%w\n\nA Buckit Manager web server is probably already running.\nOpen %s and click Exit to stop the instance.", err, url)
 }
 
 // maxLogBytes caps bm.log: once a write would push it past this size the file

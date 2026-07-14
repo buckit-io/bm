@@ -134,6 +134,9 @@ export const getManagerUpdateStatus = (signal?: AbortSignal) =>
 export const applyManagerUpdate = (signal?: AbortSignal) =>
   post<ManagerUpdateApplyResult>("/manager/update/apply", undefined, signal);
 
+export const shutdownManager = (signal?: AbortSignal) =>
+  post<{ status: "shutting_down" }>("/manager/shutdown", undefined, signal);
+
 // ---- clusters ----
 
 export const listClusters = (signal?: AbortSignal) =>

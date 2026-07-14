@@ -55,6 +55,9 @@ type Options struct {
 	// Used for local development against a freshly built web/dist tree.
 	WebDist string
 	Updater *update.Service
+	// Shutdown requests bm web process shutdown. It is nil when the router is
+	// mounted outside the real bm web lifecycle, such as tests.
+	Shutdown func()
 }
 
 // resolveAliasSync returns opts.AliasSync or the package default.
@@ -92,6 +95,7 @@ func New(opts Options) http.Handler {
 		r.Get("/settings", currentSettings)
 		r.Get("/manager/update", getManagerUpdate(opts.Updater))
 		r.Post("/manager/update/apply", postManagerUpdateApply(opts.Updater))
+		r.Post("/manager/shutdown", postManagerShutdown(opts.Shutdown))
 		r.Get("/sessions/me", loopbackMe)
 
 		// M4: discovery + cluster lifecycle.
@@ -150,6 +154,27 @@ func healthz(w http.ResponseWriter, _ *http.Request) {
 		"version": version.Version,
 		"time":    time.Now().UTC().Format(time.RFC3339),
 	})
+}
+
+const managerShutdownDelay = 100 * time.Millisecond
+
+func postManagerShutdown(shutdown func()) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		if shutdown == nil {
+			writeError(w, http.StatusServiceUnavailable, "shutdown_unavailable", "shutdown is not wired")
+			return
+		}
+
+		writeJSON(w, http.StatusAccepted, map[string]any{"status": "shutting_down"})
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+
+		go func() {
+			time.Sleep(managerShutdownDelay)
+			shutdown()
+		}()
+	}
 }
 
 func postOperation(mgr *tasks.Manager) http.HandlerFunc {
