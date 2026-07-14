@@ -1,6 +1,6 @@
 module github.com/buckit-io/bm
 
-go 1.25.10
+go 1.25.12
 
 require (
 	github.com/buckit-io/bm-cli v0.1.0

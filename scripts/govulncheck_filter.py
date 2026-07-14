@@ -9,6 +9,9 @@ from collections import Counter
 
 ALLOWED_OSVS = {
     "GO-2026-5662",
+    # Reported at the golang.org/x/crypto module level; bm imports
+    # x/crypto/ssh, and govulncheck reports no openpgp package call path.
+    "GO-2026-5932",
 }
 
 
