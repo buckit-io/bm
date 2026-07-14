@@ -160,6 +160,10 @@ func runWeb(rawArgs []string) error {
 	}
 	defer mgr.Shutdown()
 
+	serveCtx, requestShutdown := context.WithCancel(context.Background())
+	defer requestShutdown()
+	var shutdownOnce sync.Once
+
 	handler := api.New(api.Options{
 		Store:        st,
 		Tasks:        mgr,
@@ -172,6 +176,12 @@ func runWeb(rawArgs []string) error {
 		AliasPath:    paths.AliasFile,
 		Updater:      update.NewService(),
 		WebDist:      *webDist,
+		Shutdown: func() {
+			shutdownOnce.Do(func() {
+				fmt.Fprintln(os.Stderr, "bm: shutdown requested from web UI")
+				requestShutdown()
+			})
+		},
 	})
 	srv := &http.Server{
 		Addr:              *addr,
@@ -185,7 +195,7 @@ func runWeb(rawArgs []string) error {
 		openBrowser(url)
 	}
 
-	return app.Serve(context.Background(), srv)
+	return app.Serve(serveCtx, srv)
 }
 
 // maxLogBytes caps bm.log: once a write would push it past this size the file

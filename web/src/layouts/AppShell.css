@@ -82,6 +82,34 @@
   animation: pulse 2s ease-in-out infinite;
 }
 
+.shell__utilities {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-shrink: 0;
+}
+
+.shell__utility {
+  color: var(--c-fg-muted);
+}
+
+.shell__exit {
+  color: var(--c-danger);
+}
+.shell__exit:hover {
+  background: var(--c-danger-soft);
+  color: var(--c-danger);
+}
+
+.shell__shutdown-error {
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--c-danger);
+  font-size: var(--fs-sm);
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
@@ -137,4 +165,34 @@
   flex: 1;
   overflow: auto;
   padding: var(--s-6) var(--s-8);
+}
+
+.shell__stopped {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: grid;
+  place-items: center;
+  padding: var(--s-6);
+  background: color-mix(in srgb, var(--c-surface) 92%, transparent);
+}
+
+.shell__stopped-panel {
+  width: min(420px, 100%);
+  display: grid;
+  gap: var(--s-4);
+  padding: var(--s-6);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-lg);
+  text-align: center;
+}
+
+.shell__stopped-panel h1 {
+  font-size: var(--fs-2xl);
+}
+
+.shell__stopped-panel .btn {
+  justify-self: center;
 }
