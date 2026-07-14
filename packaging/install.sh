@@ -145,20 +145,55 @@ main() {
 
 	info "installed bm to $dest"
 
+	echo
+	"$dest" version || true
+
 	# PATH hint.
+	path_hint_printed=0
 	case ":$PATH:" in
 	*":$INSTALL_DIR:"*) ;;
 	*)
+		path_hint_printed=1
 		echo
-		echo "Note: $INSTALL_DIR is not on your PATH. Add it, e.g.:"
-		echo "  export PATH=\"$INSTALL_DIR:\$PATH\""
+		echo "To start the Buckit Manager, complete these two steps:"
+		echo
+		echo "Step 1: Add $INSTALL_DIR to your PATH"
+		shell_name="${SHELL:-}"
+		case "${shell_name##*/}" in
+		zsh)
+			echo "Run:"
+			echo
+			echo "  echo 'export PATH=\"$INSTALL_DIR:\$PATH\"' >> ~/.zshrc && source ~/.zshrc"
+			;;
+		bash)
+			echo "Run:"
+			echo
+			echo "  echo 'export PATH=\"$INSTALL_DIR:\$PATH\"' >> ~/.bashrc && source ~/.bashrc"
+			;;
+		fish)
+			echo "Run:"
+			echo
+			echo "  mkdir -p ~/.config/fish && echo 'fish_add_path \"$INSTALL_DIR\"' >> ~/.config/fish/config.fish && source ~/.config/fish/config.fish"
+			;;
+		*)
+			echo "For POSIX-style shells, add it, e.g.:"
+			echo
+			echo "  export PATH=\"$INSTALL_DIR:\$PATH\""
+			;;
+		esac
 		;;
 	esac
 
 	echo
-	"$dest" version || true
-	echo
-	echo "Run 'bm web' to start the manager."
+	if [ "$path_hint_printed" -eq 1 ]; then
+		echo "Step 2: Start the Buckit Manager"
+		echo "Run:"
+		echo "  bm web"
+	else
+		echo "Start the Buckit Manager"
+		echo "Run:"
+		echo "  bm web"
+	fi
 }
 
 main "$@"
