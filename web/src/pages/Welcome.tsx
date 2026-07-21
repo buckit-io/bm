@@ -60,7 +60,7 @@ export function Welcome() {
 
       <p className="welcome__hint">
         Need help? See the{" "}
-        <a href="https://github.com/buckit-io/buckit" target="_blank" rel="noreferrer">
+        <a href="https://buckit.sh/docs/operations/deployments/guided-deployment-using-bucket-manager" target="_blank" rel="noreferrer">
           install guide ↗
         </a>
       </p>
