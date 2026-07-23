@@ -314,7 +314,7 @@ func TestM6DeploySlugCollision(t *testing.T) {
 		Credentials: domain.Credentials{RootUser: "rootuser", RootPassword: "supersecret"},
 		Hosts:       []domain.HostRow{{ID: "h1", Hostname: host, Port: port, Probe: domain.HostProbeReachable}},
 		SSH:         domain.SshCreds{AuthMethod: domain.AuthPassword, User: h.sshSrv.User(), Password: h.sshSrv.Password(), Sudo: true},
-		Topology:    domain.Topology{SetSize: 4, Parity: 2, SelectedMounts: []string{"/data/disk1"}},
+		Topology:    domain.Topology{SetSize: 1, SelectedMounts: []string{"/data/disk1"}},
 	}
 	body, _ := json.Marshal(draft)
 	resp := do(t, h.server, http.MethodPost, "/api/v1/clusters/new/deploy", body)

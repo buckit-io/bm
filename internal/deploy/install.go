@@ -387,11 +387,11 @@ const secondaryEnvFile = "/etc/minio/config.env"
 
 // renderConfigEnv writes the /etc/default/minio body with the path to the
 // secondary env file (which carries the root credentials), region, listen
-// ports, and the selected MINIO_VOLUMES. When TLS is enabled the rendered
-// scheme flips to https and MINIO_OPTS gains --certs-dir. MINIO_SERVER_URL is
-// only written when the operator explicitly sets a cluster-wide server URL;
-// deriving a per-host default makes distributed nodes reject each other due to
-// mismatched MINIO_* environment values.
+// ports, selected MINIO_VOLUMES, and the erasure storage class. When TLS is
+// enabled the rendered scheme flips to https and MINIO_OPTS gains --certs-dir.
+// MINIO_SERVER_URL is only written when the operator explicitly sets a
+// cluster-wide server URL; deriving a per-host default makes distributed nodes
+// reject each other due to mismatched MINIO_* environment values.
 func renderConfigEnv(p DeployParams, _ domain.HostRow) string {
 	opts := fmt.Sprintf("--address :%d --console-address :%d", p.API.Port, p.API.ConsolePort)
 	if p.TLS.Enabled() {
@@ -404,6 +404,16 @@ func renderConfigEnv(p DeployParams, _ domain.HostRow) string {
 	b.WriteString(formatEnv("MINIO_VOLUMES", volumes))
 	b.WriteString(formatEnv("MINIO_REGION", p.Region))
 	b.WriteString(formatEnv("MINIO_OPTS", opts))
+	if p.totalDriveCount() > 1 {
+		setSize := p.resolvedSetSize()
+		parity := p.effectiveParity()
+		if setSize != p.defaultSetSize() {
+			b.WriteString(formatEnv("MINIO_ERASURE_SET_DRIVE_COUNT", fmt.Sprintf("%d", setSize)))
+		}
+		if parity != defaultParityBlocks(setSize) {
+			b.WriteString(formatEnv("MINIO_STORAGE_CLASS_STANDARD", fmt.Sprintf("EC:%d", parity)))
+		}
+	}
 	if serverURL != "" {
 		b.WriteString(formatEnv("MINIO_SERVER_URL", serverURL))
 	}

@@ -34,6 +34,8 @@ type DeployParams struct {
 	PersistSsh bool `json:"persistSsh"`
 }
 
+var supportedErasureSetSizes = []int{2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+
 // FromDraft turns a NewClusterDraft into the executor's DeployParams. Drops
 // the UI-only fields and validates basic invariants the wizard normally
 // guards client-side.
@@ -64,7 +66,7 @@ func FromDraft(d domain.NewClusterDraft) DeployParams {
 	tls.CertPEM = normalizeLineEndings(tls.CertPEM)
 	tls.KeyPEM = normalizeLineEndings(tls.KeyPEM)
 	tls.CABundlePEM = normalizeLineEndings(tls.CABundlePEM)
-	return DeployParams{
+	params := DeployParams{
 		Name:        strings.TrimSpace(d.Name),
 		Description: d.Description,
 		Version:     d.Version,
@@ -80,6 +82,12 @@ func FromDraft(d domain.NewClusterDraft) DeployParams {
 		Topology:    d.Topology,
 		PersistSsh:  d.PersistSsh,
 	}
+	// Older/direct API clients may omit parity. Match Buckit's default rather
+	// than rejecting an otherwise valid erasure deployment.
+	if params.totalDriveCount() > 1 && params.Topology.Parity == 0 {
+		params.Topology.Parity = params.effectiveParity()
+	}
+	return params
 }
 
 func normalizeLineEndings(s string) string {
@@ -110,6 +118,9 @@ func (p DeployParams) Validate() error {
 	if len(p.Topology.SelectedMounts) == 0 {
 		return errors.New("deploy: at least one drive mount required (topology.selectedMounts)")
 	}
+	if err := p.validateTopology(); err != nil {
+		return err
+	}
 	if p.SSH.User == "" {
 		return errors.New("deploy: ssh user required")
 	}
@@ -118,6 +129,78 @@ func (p DeployParams) Validate() error {
 	}
 	if err := p.validateTLS(); err != nil {
 		return err
+	}
+	return nil
+}
+
+// totalDriveCount is the number of endpoints in the first (and only) pool
+// created by the remote deployment wizard: every selected mount on every host.
+func (p DeployParams) totalDriveCount() int {
+	return len(p.Hosts) * len(p.Topology.SelectedMounts)
+}
+
+// defaultSetSize mirrors Buckit's automatic largest-divisor choice.
+func (p DeployParams) defaultSetSize() int {
+	total := p.totalDriveCount()
+	best := 0
+	for _, size := range supportedErasureSetSizes {
+		if total%size == 0 && size > best {
+			best = size
+		}
+	}
+	return best
+}
+
+// resolvedSetSize returns the requested set size, or Buckit's automatic
+// largest-divisor choice for legacy callers that omit topology.setSize.
+func (p DeployParams) resolvedSetSize() int {
+	if p.Topology.SetSize > 0 {
+		return p.Topology.SetSize
+	}
+	return p.defaultSetSize()
+}
+
+// defaultParityBlocks mirrors Buckit's DefaultParityBlocks() in
+// internal/config/storageclass/storage-class.go.
+func defaultParityBlocks(setSize int) int {
+	switch {
+	case setSize <= 1:
+		return 0
+	case setSize <= 3:
+		return 1
+	case setSize <= 5:
+		return 2
+	case setSize <= 7:
+		return 3
+	default:
+		return 4
+	}
+}
+
+func (p DeployParams) effectiveParity() int {
+	if p.Topology.Parity != 0 || p.totalDriveCount() <= 1 {
+		return p.Topology.Parity
+	}
+	return defaultParityBlocks(p.resolvedSetSize())
+}
+
+func (p DeployParams) validateTopology() error {
+	total := p.totalDriveCount()
+	if total <= 1 {
+		if p.Topology.Parity != 0 {
+			return errors.New("deploy: parity requires at least two total drives")
+		}
+		return nil
+	}
+
+	setSize := p.resolvedSetSize()
+	if setSize < 2 || setSize > 16 || total%setSize != 0 {
+		return fmt.Errorf("deploy: set size %d must be a supported divisor of %d total drives", setSize, total)
+	}
+	maxParity := setSize / 2
+	parity := p.effectiveParity()
+	if parity < 1 || parity > maxParity {
+		return fmt.Errorf("deploy: parity must be between 1 and %d for erasure set size %d", maxParity, setSize)
 	}
 	return nil
 }

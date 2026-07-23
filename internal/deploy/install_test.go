@@ -62,6 +62,64 @@ func TestRenderConfigEnvFallsBackToExplicitHostsWhenHostnamePatternDoesNotFit(t 
 	}
 }
 
+func TestRenderConfigEnvUsesCustomErasureTopology(t *testing.T) {
+	params := DeployParams{
+		API:    domain.APIPorts{Port: 9000, ConsolePort: 9001},
+		Region: "us-east-1",
+		Hosts: []domain.HostRow{
+			{Hostname: "node1"}, {Hostname: "node2"},
+			{Hostname: "node3"}, {Hostname: "node4"},
+		},
+		Topology: domain.Topology{
+			SetSize:        8,
+			Parity:         3,
+			SelectedMounts: []string{"/data/disk1", "/data/disk2", "/data/disk3", "/data/disk4"},
+		},
+	}
+
+	got := renderConfigEnv(params, domain.HostRow{Hostname: "node1"})
+	if !strings.Contains(got, `MINIO_ERASURE_SET_DRIVE_COUNT="8"`) {
+		t.Fatalf("renderConfigEnv() missing selected erasure set size:\n%s", got)
+	}
+	if !strings.Contains(got, `MINIO_STORAGE_CLASS_STANDARD="EC:3"`) {
+		t.Fatalf("renderConfigEnv() missing selected storage class parity:\n%s", got)
+	}
+}
+
+func TestRenderConfigEnvOmitsDefaultErasureConfiguration(t *testing.T) {
+	params := DeployParams{
+		API:    domain.APIPorts{Port: 9000, ConsolePort: 9001},
+		Region: "us-east-1",
+		Hosts: []domain.HostRow{
+			{Hostname: "node1"}, {Hostname: "node2"},
+			{Hostname: "node3"}, {Hostname: "node4"},
+		},
+		Topology: domain.Topology{
+			SetSize:        16,
+			SelectedMounts: []string{"/data/disk1", "/data/disk2", "/data/disk3", "/data/disk4"},
+		},
+	}
+
+	got := renderConfigEnv(params, domain.HostRow{Hostname: "node1"})
+	if strings.Contains(got, "MINIO_ERASURE_SET_DRIVE_COUNT=") || strings.Contains(got, "MINIO_STORAGE_CLASS_STANDARD=") {
+		t.Fatalf("default erasure config must not be written:\n%s", got)
+	}
+}
+
+func TestRenderConfigEnvOmitsErasureConfigurationForStandalone(t *testing.T) {
+	params := DeployParams{
+		API:      domain.APIPorts{Port: 9000, ConsolePort: 9001},
+		Region:   "us-east-1",
+		Hosts:    []domain.HostRow{{Hostname: "node1"}},
+		Topology: domain.Topology{SetSize: 1, SelectedMounts: []string{"/data/drive0"}},
+	}
+
+	got := renderConfigEnv(params, domain.HostRow{Hostname: "node1"})
+	if strings.Contains(got, "MINIO_ERASURE_SET_DRIVE_COUNT=") || strings.Contains(got, "MINIO_STORAGE_CLASS_STANDARD=") {
+		t.Fatalf("standalone config must not set erasure configuration:\n%s", got)
+	}
+}
+
 func TestPrepareStorageCmdTargetsManagedStorageSubdirs(t *testing.T) {
 	got := prepareStorageCmd([]string{"/data/drive0"}, "buckit", "buckit")
 	if !strings.Contains(got, "mkdir -p /data/drive0/buckit\n") {
