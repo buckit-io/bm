@@ -519,7 +519,15 @@ func refreshOne(ctx context.Context, opts Options, c domain.Cluster, includeProb
 					}
 				}
 				if includeProbes && len(nodeList) > 0 {
-					startAsyncNodeProbeRefresh(opts, c.ID, nodeList, creds, c.ConsolePort)
+					// The detail-page refresh is already waiting for the admin
+					// request to time out. Wait for the follow-up node checks too
+					// so its response reflects the full, bounded probe cycle. This
+					// intentionally detaches from the request context: the probe
+					// persists the latest reachability state even if the browser
+					// navigates away, and remains capped by refreshProbeTimeout.
+					probeCtx, probeCancel := context.WithTimeout(context.Background(), refreshProbeTimeout)
+					_ = refreshNodeConnectivity(probeCtx, opts, c.ID, nodeList, creds, c.ConsolePort)
+					probeCancel()
 				}
 			}
 		}

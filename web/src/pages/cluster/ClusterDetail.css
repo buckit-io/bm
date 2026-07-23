@@ -5,6 +5,50 @@
   max-width: var(--layout-content-max);
 }
 
+.cdetail__loading {
+  align-items: center;
+  justify-content: center;
+  min-height: 280px;
+}
+
+.cdetail__loading-card {
+  width: min(100%, 520px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  padding: var(--s-6);
+}
+
+.cdetail__loading-card h1 {
+  margin: 0;
+  font-size: var(--fs-xl);
+}
+
+.cdetail__loading-card p {
+  margin: 0;
+  color: var(--c-fg-muted);
+}
+
+.cdetail__loading-card .progress__bar {
+  transition: width 220ms ease-out;
+}
+
+.cdetail__loading-note {
+  font-size: var(--fs-sm);
+}
+
+.cdetail__loading-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .cdetail__header {
   display: flex;
   flex-direction: column;

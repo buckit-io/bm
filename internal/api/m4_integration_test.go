@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	madmin "github.com/buckit-io/madmin-go/v3"
 
@@ -352,6 +353,96 @@ func TestRefreshNodeConnectivityUpdatesProbeFlags(t *testing.T) {
 	}
 	if !got.Pingable || !got.Sshable || !got.APIAccessible || got.ConsoleAccessible {
 		t.Fatalf("unexpected probe flags: %+v", got)
+	}
+}
+
+func TestRefreshOneWaitsForUnreachableClusterNodeProbes(t *testing.T) {
+	h := newM4Harness(t)
+	clusterID := "unreachable"
+	clustersRepo := clusters.New(h.store)
+	nodesRepo := nodes.New(h.store)
+	cluster := domain.Cluster{ID: clusterID, Name: "Unreachable"}
+	if err := clustersRepo.Put(context.Background(), cluster); err != nil {
+		t.Fatal(err)
+	}
+	adminSrv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	t.Cleanup(adminSrv.Close)
+	if err := h.admin.Put(context.Background(), clusterID, domain.AdminCreds{
+		URL: adminSrv.URL, AccessKey: "ak", SecretKey: "sk", Insecure: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	node := domain.Node{ID: "n1", ClusterID: clusterID, Hostname: "node1", SSHPort: 2222}
+	if err := nodesRepo.Put(context.Background(), node); err != nil {
+		t.Fatal(err)
+	}
+
+	prevTCP := refreshTCPProbe.Load()
+	prevHTTP := refreshHTTPProbe.Load()
+	prevICMP := refreshICMPProbe.Load()
+	t.Cleanup(func() {
+		refreshTCPProbe.Store(prevTCP)
+		refreshHTTPProbe.Store(prevHTTP)
+		refreshICMPProbe.Store(prevICMP)
+	})
+	tcpStarted := make(chan struct{}, 1)
+	releaseTCP := make(chan struct{})
+	tcp := tcpProbeFn(func(ctx context.Context, _ string) bool {
+		select {
+		case tcpStarted <- struct{}{}:
+		default:
+		}
+		select {
+		case <-releaseTCP:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	})
+	refreshTCPProbe.Store(&tcp)
+	httpProbe := httpProbeFn(func(context.Context, *http.Client, string) bool { return true })
+	refreshHTTPProbe.Store(&httpProbe)
+	icmp := icmpProbeFn(func(context.Context, string) bool { return false })
+	refreshICMPProbe.Store(&icmp)
+
+	done := make(chan struct{})
+	go func() {
+		refreshCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		refreshOne(refreshCtx, Options{
+			Clusters:     clustersRepo,
+			Nodes:        nodesRepo,
+			ClusterAdmin: h.admin,
+			AdminPool:    admin.NewPool(),
+		}, cluster, true)
+		close(done)
+	}()
+
+	select {
+	case <-tcpStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("node probes did not start")
+	}
+	select {
+	case <-done:
+		t.Fatal("refresh returned before the node probes completed")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseTCP)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("refresh did not return after the node probes completed")
+	}
+
+	got, err := nodesRepo.Get(context.Background(), clusterID, node.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Pingable || !got.Sshable || !got.APIAccessible || !got.ConsoleAccessible {
+		t.Fatalf("node probe results were not persisted before refresh returned: %+v", got)
 	}
 }
 

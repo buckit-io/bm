@@ -55,6 +55,82 @@ func TestDeployValidateRejectsPasswordWithSpaces(t *testing.T) {
 	}
 }
 
+func TestDeployValidateTopology(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*DeployParams)
+		wantErr string
+	}{
+		{
+			name: "parity exceeds set maximum",
+			mutate: func(p *DeployParams) {
+				p.Hosts = []domain.HostRow{{ID: "h1", Hostname: "node1"}}
+				p.Topology = domain.Topology{SetSize: 8, Parity: 5, SelectedMounts: []string{"/data/d1", "/data/d2", "/data/d3", "/data/d4", "/data/d5", "/data/d6", "/data/d7", "/data/d8"}}
+			},
+			wantErr: "parity must be between 1 and 4",
+		},
+		{
+			name: "set size is not a divisor",
+			mutate: func(p *DeployParams) {
+				p.Hosts = []domain.HostRow{{ID: "h1", Hostname: "node1"}}
+				p.Topology = domain.Topology{SetSize: 6, Parity: 2, SelectedMounts: []string{"/data/d1", "/data/d2", "/data/d3", "/data/d4", "/data/d5", "/data/d6", "/data/d7", "/data/d8"}}
+			},
+			wantErr: "set size 6 must be a supported divisor",
+		},
+		{
+			name: "standalone cannot set parity",
+			mutate: func(p *DeployParams) {
+				p.Topology = domain.Topology{SetSize: 1, Parity: 1, SelectedMounts: []string{"/data/disk1"}}
+			},
+			wantErr: "parity requires at least two total drives",
+		},
+		{
+			name: "custom valid set size and parity",
+			mutate: func(p *DeployParams) {
+				p.Hosts = []domain.HostRow{{ID: "h1", Hostname: "node1"}, {ID: "h2", Hostname: "node2"}}
+				p.Topology = domain.Topology{SetSize: 4, Parity: 2, SelectedMounts: []string{"/data/d1", "/data/d2", "/data/d3", "/data/d4"}}
+			},
+		},
+		{
+			name: "omitted parity uses the Buckit default",
+			mutate: func(p *DeployParams) {
+				p.Hosts = []domain.HostRow{{ID: "h1", Hostname: "node1"}}
+				p.Topology = domain.Topology{SetSize: 4, SelectedMounts: []string{"/data/d1", "/data/d2", "/data/d3", "/data/d4"}}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := validParams()
+			tt.mutate(&p)
+			err := p.Validate()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Validate() returned %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Validate() = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestFromDraftDefaultsOmittedParity(t *testing.T) {
+	p := FromDraft(domain.NewClusterDraft{
+		Hosts: []domain.HostRow{{ID: "h1", Hostname: "node1"}},
+		Topology: domain.Topology{
+			SetSize:        4,
+			SelectedMounts: []string{"/data/d1", "/data/d2", "/data/d3", "/data/d4"},
+		},
+	})
+	if p.Topology.Parity != 2 {
+		t.Fatalf("FromDraft() parity = %d, want Buckit default 2", p.Topology.Parity)
+	}
+}
+
 func TestDeployArtifactURLUsesArm64RPM(t *testing.T) {
 	restore := RestoreVersionsCacheForTest([]domain.BuckitVersion{{
 		Tag:         "v1.0.0",

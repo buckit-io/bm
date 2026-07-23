@@ -241,6 +241,53 @@ function clusterOpRequiresSSH(op: OperationDef): boolean {
 const BUCKIT_ONLY_HINT =
   "Only available on Buckit clusters. Migrate this cluster from MinIO to enable it.";
 
+const INITIAL_REFRESH_EXPECTED_SECONDS = 30;
+const CLUSTER_PROBE_SECONDS = 15;
+
+function ClusterDetailLoading({
+  loadingCluster,
+  elapsedSeconds,
+}: {
+  loadingCluster: boolean;
+  elapsedSeconds: number;
+}) {
+  const detail = loadingCluster
+    ? "Loading cluster details"
+    : elapsedSeconds >= CLUSTER_PROBE_SECONDS
+      ? "Still probing the cluster"
+      : "Probing the cluster";
+  const progress = Math.min(
+    95,
+    5 + Math.round((elapsedSeconds / INITIAL_REFRESH_EXPECTED_SECONDS) * 90),
+  );
+
+  return (
+    <section className="cdetail cdetail__loading">
+      <div className="card cdetail__loading-card">
+        <h1>{detail}</h1>
+        <span className="cdetail__loading-status" role="status">
+          {detail}
+        </span>
+        <div
+          className="progress"
+          role="progressbar"
+          aria-label="Cluster refresh progress"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={progress}
+        >
+          <div className="progress__bar" style={{ width: `${progress}%` }} />
+        </div>
+        {!loadingCluster && (
+          <p className="muted cdetail__loading-note">
+            Unhealthy clusters can take a little longer…
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function opDisabledForEngine(op: OperationDef, cluster: Cluster): boolean {
   return !!op.buckitOnly && cluster.engine !== "buckit";
 }
@@ -260,8 +307,10 @@ export function ClusterDetailLayout() {
   const { data: nodes } = useNodes(clusterId);
   const { mutateAsync: refreshClusterAsync } = useRefreshCluster(clusterId);
   const [initialRefreshDone, setInitialRefreshDone] = useState(false);
+  const [initialRefreshElapsed, setInitialRefreshElapsed] = useState(0);
   const refreshRunningRef = useRef(false);
   const followupTimersRef = useRef<number[]>([]);
+  const initialLoad = isLoading || !initialRefreshDone;
 
   function clearFollowupTimers() {
     for (const id of followupTimersRef.current) window.clearTimeout(id);
@@ -317,6 +366,16 @@ export function ClusterDetailLayout() {
       clearFollowupTimers();
     };
   }, [clusterId, qc, refreshClusterAsync]);
+
+  useEffect(() => {
+    if (!initialLoad) return;
+    const startedAt = Date.now();
+    const updateElapsed = () =>
+      setInitialRefreshElapsed(Math.floor((Date.now() - startedAt) / 1000));
+    updateElapsed();
+    const timer = window.setInterval(updateElapsed, 1000);
+    return () => window.clearInterval(timer);
+  }, [clusterId, initialLoad]);
 
   useEffect(() => {
     if (!clusterId) return;
@@ -487,8 +546,13 @@ export function ClusterDetailLayout() {
     });
   };
 
-  if (isLoading || !initialRefreshDone) {
-    return <p className="muted">Refreshing cluster…</p>;
+  if (initialLoad) {
+    return (
+      <ClusterDetailLoading
+        loadingCluster={isLoading}
+        elapsedSeconds={initialRefreshElapsed}
+      />
+    );
   }
   if (!cluster) return <p className="muted">Cluster not found.</p>;
 

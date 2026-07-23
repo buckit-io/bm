@@ -92,8 +92,6 @@ func TestPrepareWritesDarwinScriptAndDownloadsBinary(t *testing.T) {
 		"export MINIO_ROOT_USER='buckitadmin'",
 		"data one'",
 		"export MINIO_ROOTDRIVE_THRESHOLD_SIZE='1B'",
-		"export MINIO_ERASURE_SET_DRIVE_COUNT='2'",
-		"export MINIO_STORAGE_CLASS_STANDARD='EC:1'",
 		"Storage class: ${MINIO_STORAGE_CLASS_STANDARD:-default}",
 		"echo 'Data paths:'",
 		"--address ':9000'",
@@ -105,6 +103,9 @@ func TestPrepareWritesDarwinScriptAndDownloadsBinary(t *testing.T) {
 	}
 	if strings.Contains(got, "--certs-dir") {
 		t.Fatalf("did not expect --certs-dir when TLS is off:\n%s", got)
+	}
+	if strings.Contains(got, "export MINIO_ERASURE_SET_DRIVE_COUNT") || strings.Contains(got, "export MINIO_STORAGE_CLASS_STANDARD") {
+		t.Fatalf("default erasure configuration should not be written:\n%s", got)
 	}
 	if strings.Contains(got, "mkdir -p") {
 		t.Fatalf("script should not create data paths:\n%s", got)
@@ -385,7 +386,7 @@ func TestPrepareOmitsOverwrittenBinaryWarning(t *testing.T) {
 	}
 }
 
-func TestPrepareUsesRequestedParity(t *testing.T) {
+func TestPrepareUsesCustomParity(t *testing.T) {
 	home := t.TempDir()
 	resp, err := Prepare(context.Background(), Request{
 		Version:      "vtest",
@@ -394,13 +395,13 @@ func TestPrepareUsesRequestedParity(t *testing.T) {
 		APIPort:      9000,
 		ConsolePort:  9001,
 		DataPaths:    []string{"~/buckit/local/data{1...4}"},
-		Parity:       2,
+		Parity:       1,
 		TLS:          domain.TLSConfig{Mode: domain.TLSOff},
 	}, Options{HomeDir: home, GOOS: "darwin", GOARCH: "arm64", Client: fakeDownloadClient("fake-buckit")})
 	if err != nil {
 		t.Fatalf("Prepare() error = %v", err)
 	}
-	if resp.Parity != 2 {
+	if resp.Parity != 1 {
 		t.Fatalf("unexpected parity %d", resp.Parity)
 	}
 	if resp.SetSize != 4 {
@@ -410,10 +411,10 @@ func TestPrepareUsesRequestedParity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read script: %v", err)
 	}
-	if !strings.Contains(string(script), "export MINIO_ERASURE_SET_DRIVE_COUNT='4'") {
-		t.Fatalf("script missing erasure set size:\n%s", string(script))
+	if strings.Contains(string(script), "export MINIO_ERASURE_SET_DRIVE_COUNT") {
+		t.Fatalf("script should not override the default erasure set size:\n%s", string(script))
 	}
-	if !strings.Contains(string(script), "export MINIO_STORAGE_CLASS_STANDARD='EC:2'") {
+	if !strings.Contains(string(script), "export MINIO_STORAGE_CLASS_STANDARD='EC:1'") {
 		t.Fatalf("script missing storage class parity:\n%s", string(script))
 	}
 }
@@ -576,8 +577,6 @@ func TestPrepareWritesWindowsScriptAndQuotesValues(t *testing.T) {
 		"$env:MINIO_ROOT_USER = 'buckitadmin'",
 		"$env:MINIO_ROOT_PASSWORD = 'secret'';$(bad)#CHANGE'",
 		"$env:MINIO_ROOTDRIVE_THRESHOLD_SIZE = '1B'",
-		"$env:MINIO_ERASURE_SET_DRIVE_COUNT = '2'",
-		"$env:MINIO_STORAGE_CLASS_STANDARD = 'EC:1'",
 		"$Volumes = @(",
 		"Write-Host \"Storage class:",
 		"Write-Host 'Data paths:'",
@@ -589,6 +588,9 @@ func TestPrepareWritesWindowsScriptAndQuotesValues(t *testing.T) {
 	}
 	if strings.Contains(got, "New-Item") {
 		t.Fatalf("script should not create data paths:\n%s", got)
+	}
+	if strings.Contains(got, "$env:MINIO_ERASURE_SET_DRIVE_COUNT") || strings.Contains(got, "$env:MINIO_STORAGE_CLASS_STANDARD =") {
+		t.Fatalf("default erasure configuration should not be written:\n%s", got)
 	}
 }
 

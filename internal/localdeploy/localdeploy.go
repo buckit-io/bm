@@ -291,6 +291,8 @@ func normalizeParity(requested int, dataPathCount int, setSize int) (int, error)
 	return requested, nil
 }
 
+// defaultParityBlocks mirrors Buckit's DefaultParityBlocks() in
+// internal/config/storageclass/storage-class.go.
 func defaultParityBlocks(driveCount int) int {
 	switch driveCount {
 	case 1:
@@ -628,6 +630,16 @@ type scriptParams struct {
 }
 
 func renderScript(goos string, p scriptParams) (string, error) {
+	customSetSize := false
+	customParity := false
+	if len(p.DataPaths) > 1 {
+		defaultSetSize, err := computeSetSize(len(p.DataPaths))
+		if err != nil {
+			return "", err
+		}
+		customSetSize = p.SetSize != defaultSetSize
+		customParity = p.Parity != defaultParityBlocks(p.SetSize)
+	}
 	if goos == "windows" {
 		var b strings.Builder
 		b.WriteString("$ErrorActionPreference = 'Stop'\n")
@@ -637,10 +649,14 @@ func renderScript(goos string, p scriptParams) (string, error) {
 		b.WriteString(psQuote(p.RootPassword))
 		if len(p.DataPaths) > 1 {
 			b.WriteString("\n$env:MINIO_ROOTDRIVE_THRESHOLD_SIZE = '1B'")
-			b.WriteString("\n$env:MINIO_ERASURE_SET_DRIVE_COUNT = ")
-			b.WriteString(psQuote(strconv.Itoa(p.SetSize)))
-			b.WriteString("\n$env:MINIO_STORAGE_CLASS_STANDARD = ")
-			b.WriteString(psQuote(fmt.Sprintf("EC:%d", p.Parity)))
+			if customSetSize {
+				b.WriteString("\n$env:MINIO_ERASURE_SET_DRIVE_COUNT = ")
+				b.WriteString(psQuote(strconv.Itoa(p.SetSize)))
+			}
+			if customParity {
+				b.WriteString("\n$env:MINIO_STORAGE_CLASS_STANDARD = ")
+				b.WriteString(psQuote(fmt.Sprintf("EC:%d", p.Parity)))
+			}
 		}
 		b.WriteString("\n\n$Volumes = @(\n")
 		for _, v := range p.DataPaths {
@@ -673,10 +689,14 @@ func renderScript(goos string, p scriptParams) (string, error) {
 	b.WriteString(shQuote(p.RootPassword))
 	if len(p.DataPaths) > 1 {
 		b.WriteString("\nexport MINIO_ROOTDRIVE_THRESHOLD_SIZE='1B'")
-		b.WriteString("\nexport MINIO_ERASURE_SET_DRIVE_COUNT=")
-		b.WriteString(shQuote(strconv.Itoa(p.SetSize)))
-		b.WriteString("\nexport MINIO_STORAGE_CLASS_STANDARD=")
-		b.WriteString(shQuote(fmt.Sprintf("EC:%d", p.Parity)))
+		if customSetSize {
+			b.WriteString("\nexport MINIO_ERASURE_SET_DRIVE_COUNT=")
+			b.WriteString(shQuote(strconv.Itoa(p.SetSize)))
+		}
+		if customParity {
+			b.WriteString("\nexport MINIO_STORAGE_CLASS_STANDARD=")
+			b.WriteString(shQuote(fmt.Sprintf("EC:%d", p.Parity)))
+		}
 	}
 	b.WriteString("\n\n")
 	b.WriteString("echo \"Storage class: ${MINIO_STORAGE_CLASS_STANDARD:-default}\"\n")
