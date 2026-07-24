@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useCluster,
@@ -18,6 +18,7 @@ import {
   NODE_OPERATIONS,
   NODE_GROUP_LABELS,
 } from "./operations/nodeCatalog";
+import type { ClusterDetailNavigationState, NodeDetailNavigationState } from "./navigationState";
 
 function statusDot(ok: boolean) {
   return (
@@ -89,6 +90,7 @@ function findHostFacts(
 
 export function NodeDetail() {
   const { clusterId, nodeId } = useParams();
+  const location = useLocation();
   const qc = useQueryClient();
   const navigate = useNavigate();
   const { data: cluster } = useCluster(clusterId);
@@ -100,6 +102,8 @@ export function NodeDetail() {
     isError: healthErrored,
   } = useClusterHealthInfo(clusterId);
   const { mutateAsync: refreshClusterAsync } = useRefreshCluster(clusterId);
+  const cameFromClusterDetail =
+    (location.state as NodeDetailNavigationState | null)?.fromClusterDetail === true;
 
   const [actionsOpen, setActionsOpen] = useState(false);
   const [activeOp, setActiveOp] = useState<OperationDef | null>(null);
@@ -245,7 +249,11 @@ export function NodeDetail() {
       return;
     }
     if (op.flavor === "navigate" && op.navigateTo) {
-      navigate(op.navigateTo(cluster, { nodeId: node.id }));
+      navigate(op.navigateTo(cluster, { nodeId: node.id }), {
+        state: cameFromClusterDetail
+          ? ({ fromClusterDetail: true } satisfies NodeDetailNavigationState)
+          : undefined,
+      });
       return;
     }
     setActiveOp(op);
@@ -264,7 +272,16 @@ export function NodeDetail() {
           >
             <Link to="/clusters">Clusters</Link>
             <span> / </span>
-            <Link to={`/clusters/${clusterId}`}>{cluster?.name ?? clusterId}</Link>
+            <Link
+              to={`/clusters/${clusterId}`}
+              state={
+                cameFromClusterDetail
+                  ? ({ skipInitialRefresh: true } satisfies ClusterDetailNavigationState)
+                  : undefined
+              }
+            >
+              {cluster?.name ?? clusterId}
+            </Link>
             <span> / </span>
             <span>{node.hostname}</span>
           </div>
