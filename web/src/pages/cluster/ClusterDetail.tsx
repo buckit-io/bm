@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useCluster,
@@ -15,6 +15,7 @@ import { OperationModal } from "./operations/OperationModal";
 import { SshRequiredDialog } from "./SshRequiredDialog";
 import { CLUSTER_OPERATIONS, GROUP_LABELS } from "./operations/catalog";
 import { BULK_HOST_OPERATIONS } from "./operations/bulkHostCatalog";
+import type { ClusterDetailNavigationState, NodeDetailNavigationState } from "./navigationState";
 import "./ClusterDetail.css";
 
 // ---- small render helpers ----
@@ -300,6 +301,7 @@ function isLocalManualCluster(cluster: Cluster, nodes: Node[] | undefined): bool
 
 export function ClusterDetailLayout() {
   const { clusterId } = useParams();
+  const location = useLocation();
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { data: cluster, isLoading } = useCluster(clusterId);
@@ -310,7 +312,26 @@ export function ClusterDetailLayout() {
   const [initialRefreshElapsed, setInitialRefreshElapsed] = useState(0);
   const refreshRunningRef = useRef(false);
   const followupTimersRef = useRef<number[]>([]);
-  const initialLoad = isLoading || !initialRefreshDone;
+  const initialRefreshIntentRef = useRef<{
+    clusterId: string | undefined;
+    skip: boolean;
+  } | null>(null);
+
+  if (
+    initialRefreshIntentRef.current === null ||
+    initialRefreshIntentRef.current.clusterId !== clusterId
+  ) {
+    initialRefreshIntentRef.current = {
+      clusterId,
+      skip:
+        (location.state as ClusterDetailNavigationState | null)?.skipInitialRefresh === true,
+    };
+  }
+
+  // A node breadcrumb supplies this one-shot hint when it returns to the
+  // already-loaded cluster view. Direct visits still get a fresh probe.
+  const skipInitialRefresh = initialRefreshIntentRef.current.skip;
+  const initialLoad = isLoading || (!initialRefreshDone && !skipInitialRefresh);
 
   function clearFollowupTimers() {
     for (const id of followupTimersRef.current) window.clearTimeout(id);
@@ -349,6 +370,10 @@ export function ClusterDetailLayout() {
       setInitialRefreshDone(true);
       return;
     }
+    if (skipInitialRefresh) {
+      setInitialRefreshDone(true);
+      return;
+    }
     let canceled = false;
     refreshRunningRef.current = true;
     setInitialRefreshDone(false);
@@ -365,7 +390,23 @@ export function ClusterDetailLayout() {
       canceled = true;
       clearFollowupTimers();
     };
-  }, [clusterId, qc, refreshClusterAsync]);
+  }, [clusterId, qc, refreshClusterAsync, skipInitialRefresh]);
+
+  useEffect(() => {
+    if (!skipInitialRefresh) return;
+    // Do not leave this hint in browser history: a reload or later
+    // Back/Forward revisit must use the normal initial refresh behavior.
+    navigate(`${location.pathname}${location.search}${location.hash}`, {
+      replace: true,
+      state: null,
+    });
+  }, [
+    location.hash,
+    location.pathname,
+    location.search,
+    navigate,
+    skipInitialRefresh,
+  ]);
 
   useEffect(() => {
     if (!initialLoad) return;
@@ -1032,6 +1073,7 @@ export function ClusterDetailLayout() {
                     <td>
                       <Link
                         to={`/clusters/${cluster.id}/nodes/${n.id}`}
+                        state={{ fromClusterDetail: true } satisfies NodeDetailNavigationState}
                         className="cdetail__hostname"
                       >
                         {n.hostname}
