@@ -3,10 +3,11 @@
 // tail — operators pick a range, hit refresh when they want fresher lines.
 
 import { useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 import { ApiError } from "../../api/client";
 import { useCluster, useNode, useNodeLogs } from "../../api/hooks";
 import type { NodeLogsRange } from "../../api/types";
+import type { NodeDetailNavigationState } from "./navigationState";
 import "../../components/TaskLogStream.css";
 
 const RANGE_OPTIONS: { value: NodeLogsRange; label: string }[] = [
@@ -19,8 +20,11 @@ const RANGE_OPTIONS: { value: NodeLogsRange; label: string }[] = [
 
 export function NodeLogs() {
   const { clusterId = "", nodeId = "" } = useParams();
+  const location = useLocation();
   const { data: cluster } = useCluster(clusterId);
   const { data: node, isLoading: nodeLoading } = useNode(clusterId, nodeId);
+  const cameFromClusterDetail =
+    (location.state as NodeDetailNavigationState | null)?.fromClusterDetail === true;
 
   const [since, setSince] = useState<NodeLogsRange>("1h");
   const [filter, setFilter] = useState("");
@@ -46,6 +50,11 @@ export function NodeLogs() {
       <header className="vstack" style={{ gap: 4 }}>
         <Link
           to={`/clusters/${cluster.id}/nodes/${node.id}`}
+          state={
+            cameFromClusterDetail
+              ? ({ fromClusterDetail: true } satisfies NodeDetailNavigationState)
+              : undefined
+          }
           className="subtle"
           style={{ fontSize: "var(--fs-sm)" }}
         >

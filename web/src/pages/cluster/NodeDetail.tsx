@@ -249,7 +249,11 @@ export function NodeDetail() {
       return;
     }
     if (op.flavor === "navigate" && op.navigateTo) {
-      navigate(op.navigateTo(cluster, { nodeId: node.id }));
+      navigate(op.navigateTo(cluster, { nodeId: node.id }), {
+        state: cameFromClusterDetail
+          ? ({ fromClusterDetail: true } satisfies NodeDetailNavigationState)
+          : undefined,
+      });
       return;
     }
     setActiveOp(op);
