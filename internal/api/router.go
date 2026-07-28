@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
@@ -473,7 +474,10 @@ func embeddedStaticHandler() (http.HandlerFunc, bool) {
 	}
 	fileServer := http.FileServer(http.FS(uiFS))
 	return func(w http.ResponseWriter, r *http.Request) {
-		clean := strings.TrimPrefix(filepath.Clean(r.URL.Path), "/")
+		// URL paths always use forward slashes. filepath.Clean converts them
+		// to backslashes on Windows, which embedded fs.FS rejects and would
+		// make every asset fall through to index.html.
+		clean := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
 		if clean != "" && clean != "." {
 			if _, err := fs.Stat(uiFS, clean); err == nil {
 				fileServer.ServeHTTP(w, r)

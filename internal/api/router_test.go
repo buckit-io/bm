@@ -1,6 +1,13 @@
 package api
 
-import "testing"
+import (
+	"io/fs"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	bmassets "github.com/buckit-io/bm"
+)
 
 func TestAssertLoopback(t *testing.T) {
 	t.Parallel()
@@ -30,5 +37,39 @@ func TestAssertLoopback(t *testing.T) {
 				t.Fatalf("AssertLoopback(%q): want nil, got %v", tc.addr, err)
 			}
 		})
+	}
+}
+
+func TestEmbeddedStaticHandlerServesJavaScriptAsset(t *testing.T) {
+	handler, ok := embeddedStaticHandler()
+	if !ok {
+		t.Fatal("embeddedStaticHandler() unavailable")
+	}
+
+	uiFS, err := bmassets.WebDist()
+	if err != nil {
+		t.Fatalf("WebDist(): %v", err)
+	}
+	entries, err := fs.ReadDir(uiFS, "assets")
+	if err != nil {
+		t.Fatalf("ReadDir(assets): %v", err)
+	}
+	var asset string
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".js") {
+			asset = entry.Name()
+			break
+		}
+	}
+	if asset == "" {
+		t.Fatal("embedded UI has no JavaScript asset")
+	}
+
+	req := httptest.NewRequest("GET", "/assets/"+asset, nil)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if got := res.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/javascript") {
+		t.Fatalf("Content-Type = %q, want JavaScript asset", got)
 	}
 }
