@@ -277,6 +277,11 @@ func (e *rollingRestartExecutor) Execute(ctx context.Context, run *tasks.Run) er
 
 type clusterUpgradeByAdminUpdateExecutor struct{ deps Deps }
 
+var clusterUpgradeVersionConvergenceWait = WaitOptions{
+	Timeout: 2 * time.Minute,
+	Tick:    3 * time.Second,
+}
+
 func (e *clusterUpgradeByAdminUpdateExecutor) Validate(req tasks.DispatchRequest) error {
 	if len(req.Params) > 0 {
 		var p rollingUpgradeParams
@@ -339,7 +344,7 @@ func (e *clusterUpgradeByAdminUpdateExecutor) Execute(ctx context.Context, run *
 			rc.admin.ServerInfo,
 			targetReleaseTime,
 			p.Version,
-			WaitOptions{Timeout: 2 * time.Minute, Tick: 3 * time.Second},
+			clusterUpgradeVersionConvergenceWait,
 		); err != nil {
 			return fmt.Errorf("post-update version check: %w", err)
 		}
@@ -621,7 +626,7 @@ func (e *clusterUpgradeBySystemctlExecutor) Execute(ctx context.Context, run *ta
 			rc.admin.ServerInfo,
 			targetReleaseTime,
 			p.Version,
-			WaitOptions{Timeout: 2 * time.Minute, Tick: 3 * time.Second},
+			clusterUpgradeVersionConvergenceWait,
 		); err != nil {
 			return fmt.Errorf("post-upgrade version check: %w", err)
 		}
