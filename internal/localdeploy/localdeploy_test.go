@@ -547,7 +547,10 @@ func TestPrepareWarnsForMultiplePathsOnRootDrive(t *testing.T) {
 }
 
 func TestPrepareWritesWindowsScriptAndQuotesValues(t *testing.T) {
-	home := t.TempDir()
+	home := filepath.Join(t.TempDir(), "Home Dir")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("create home: %v", err)
+	}
 	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
 	resp, err := Prepare(context.Background(), Request{
 		Version:      "vtest",
@@ -564,9 +567,15 @@ func TestPrepareWritesWindowsScriptAndQuotesValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare() error = %v", err)
 	}
-	wantCommand := `"` + resp.ScriptPath + `"`
+	wantCommand := `& "` + resp.ScriptPath + `"`
 	if resp.Command != wantCommand {
 		t.Fatalf("command = %q, want %q", resp.Command, wantCommand)
+	}
+	if resp.WindowsCmdCommand != `"`+resp.ScriptPath+`"` {
+		t.Fatalf("WindowsCmdCommand = %q", resp.WindowsCmdCommand)
+	}
+	if resp.WindowsPowerShellCommand != wantCommand {
+		t.Fatalf("WindowsPowerShellCommand = %q, want %q", resp.WindowsPowerShellCommand, wantCommand)
 	}
 	if !strings.HasSuffix(resp.ScriptPath, "Start-Buckit.cmd") {
 		t.Fatalf("script path = %q, want Windows launcher", resp.ScriptPath)
@@ -575,8 +584,13 @@ func TestPrepareWritesWindowsScriptAndQuotesValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read launcher: %v", err)
 	}
-	if want := "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0Start-Buckit.ps1\""; !strings.Contains(string(launcher), want) {
-		t.Fatalf("launcher missing %q:\n%s", want, launcher)
+	wantLauncher := "@echo off\r\n" +
+		"powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0Start-Buckit.ps1\"\r\n" +
+		"set \"BUCKIT_RC=%ERRORLEVEL%\"\r\n" +
+		"if not \"%BUCKIT_RC%\"==\"0\" pause\r\n" +
+		"exit /b %BUCKIT_RC%\r\n"
+	if got := string(launcher); got != wantLauncher {
+		t.Fatalf("launcher = %q, want %q", got, wantLauncher)
 	}
 	script, err := os.ReadFile(filepath.Join(filepath.Dir(resp.ScriptPath), "Start-Buckit.ps1"))
 	if err != nil {
@@ -592,6 +606,7 @@ func TestPrepareWritesWindowsScriptAndQuotesValues(t *testing.T) {
 		"Write-Host \"Storage class:",
 		"Write-Host 'Data paths:'",
 		"server @Volumes --address ':9000' --console-address ':9001'",
+		"exit $LASTEXITCODE",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("script missing %q:\n%s", want, got)

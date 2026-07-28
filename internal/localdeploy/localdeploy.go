@@ -39,15 +39,17 @@ type Request struct {
 }
 
 type Response struct {
-	ScriptPath string   `json:"scriptPath"`
-	BinaryPath string   `json:"binaryPath"`
-	DataPaths  []string `json:"dataPaths"`
-	APIURL     string   `json:"apiUrl"`
-	ConsoleURL string   `json:"consoleUrl"`
-	Command    string   `json:"command"`
-	SetSize    int      `json:"setSize,omitempty"`
-	Parity     int      `json:"parity,omitempty"`
-	Warnings   []string `json:"warnings,omitempty"`
+	ScriptPath               string   `json:"scriptPath"`
+	BinaryPath               string   `json:"binaryPath"`
+	DataPaths                []string `json:"dataPaths"`
+	APIURL                   string   `json:"apiUrl"`
+	ConsoleURL               string   `json:"consoleUrl"`
+	Command                  string   `json:"command"`
+	WindowsCmdCommand        string   `json:"windowsCmdCommand,omitempty"`
+	WindowsPowerShellCommand string   `json:"windowsPowerShellCommand,omitempty"`
+	SetSize                  int      `json:"setSize,omitempty"`
+	Parity                   int      `json:"parity,omitempty"`
+	Warnings                 []string `json:"warnings,omitempty"`
 }
 
 type Options struct {
@@ -133,6 +135,7 @@ func Prepare(ctx context.Context, req Request, opts Options) (Response, error) {
 	}
 	if paths.PowerShellScript != "" {
 		if err := os.WriteFile(paths.Script, []byte(renderWindowsLauncher(filepath.Base(paths.PowerShellScript))), executableMode(goos)); err != nil {
+			_ = os.Remove(scriptPath)
 			return Response{}, fmt.Errorf("write Windows launcher: %w", err)
 		}
 	}
@@ -198,7 +201,7 @@ func preview(req Request, opts Options) (Response, error) {
 	if req.TLS.Enabled() {
 		scheme = "https"
 	}
-	return Response{
+	response := Response{
 		ScriptPath: paths.Script,
 		BinaryPath: paths.Binary,
 		DataPaths:  dataPaths,
@@ -208,7 +211,12 @@ func preview(req Request, opts Options) (Response, error) {
 		SetSize:    setSize,
 		Parity:     parity,
 		Warnings:   warnings,
-	}, nil
+	}
+	if goos == "windows" {
+		response.WindowsCmdCommand = windowsCmdCommand(paths.Script)
+		response.WindowsPowerShellCommand = windowsPowerShellCommand(paths.Script)
+	}
+	return response, nil
 }
 
 func validateBasic(req Request) error {
@@ -688,7 +696,7 @@ func renderScript(goos string, p scriptParams) (string, error) {
 			b.WriteString(" --certs-dir ")
 			b.WriteString(psQuote(p.CertsDir))
 		}
-		b.WriteString("\n")
+		b.WriteString("\nexit $LASTEXITCODE\n")
 		return b.String(), nil
 	}
 	var b strings.Builder
@@ -746,14 +754,25 @@ func psQuote(s string) string {
 
 func renderWindowsLauncher(powerShellScript string) string {
 	return "@echo off\r\n" +
-		"powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0" + powerShellScript + "\"\r\n"
+		"powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0" + powerShellScript + "\"\r\n" +
+		"set \"BUCKIT_RC=%ERRORLEVEL%\"\r\n" +
+		"if not \"%BUCKIT_RC%\"==\"0\" pause\r\n" +
+		"exit /b %BUCKIT_RC%\r\n"
 }
 
 func commandFor(goos, script string) string {
 	if goos == "windows" {
-		return `"` + script + `"`
+		return windowsPowerShellCommand(script)
 	}
 	return shQuote(script)
+}
+
+func windowsCmdCommand(script string) string {
+	return `"` + script + `"`
+}
+
+func windowsPowerShellCommand(script string) string {
+	return `& "` + script + `"`
 }
 
 func homeDir(override string) (string, error) {
