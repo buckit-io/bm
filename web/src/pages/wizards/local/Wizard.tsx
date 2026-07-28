@@ -644,21 +644,27 @@ function ReviewStep({
 
 function ReadyStep({ draft }: { draft: LocalDraft }) {
   const prepared = draft.prepared;
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
+  const [copyState, setCopyState] = useState<string>("");
   if (!prepared) return null;
   const readyWarnings = (prepared.warnings ?? []).filter((warning) => !isRootOSDriveWarning(warning));
+  const commandOptions = prepared.windowsCmdCommand && prepared.windowsPowerShellCommand
+    ? [
+        { id: "cmd", label: "Command Prompt", command: prepared.windowsCmdCommand },
+        { id: "powershell", label: "PowerShell", command: prepared.windowsPowerShellCommand },
+      ]
+    : [{ id: "terminal", label: "", command: prepared.command }];
   const importParams = new URLSearchParams({
     url: prepared.apiUrl,
     username: draft.credentials.rootUser,
   });
   const importURL = `/clusters/import?${importParams.toString()}`;
-  const copyCommand = async () => {
+  const copyCommand = async (id: string, command: string) => {
     try {
-      await navigator.clipboard.writeText(prepared.command);
-      setCopyState("copied");
-      window.setTimeout(() => setCopyState("idle"), 1800);
+      await navigator.clipboard.writeText(command);
+      setCopyState(`${id}:copied`);
+      window.setTimeout(() => setCopyState(""), 1800);
     } catch {
-      setCopyState("error");
+      setCopyState(`${id}:error`);
     }
   };
   return (
@@ -673,20 +679,29 @@ function ReadyStep({ draft }: { draft: LocalDraft }) {
           <span className="local-wizard__action-number">1</span>
           <div className="local-wizard__action-body">
             <h3>Start the Buckit server</h3>
-            <p className="muted">Run this command in a terminal.</p>
-            <div className="local-wizard__command-box">
-              <pre className="local-wizard__command"><span className="local-wizard__prompt">&gt;</span> {prepared.command}</pre>
-              <button
-                className={"local-wizard__copy-button" + (copyState === "copied" ? " is-copied" : "")}
-                type="button"
-                onClick={copyCommand}
-                aria-label={copyState === "copied" ? "Copied command" : "Copy command"}
-                title={copyState === "copied" ? "Copied" : copyState === "error" ? "Copy failed" : "Copy command"}
-              >
-                {copyState === "copied" ? <CheckIcon /> : <CopyIcon />}
-              </button>
-              {copyState === "error" && <span className="local-wizard__copy-error">Copy failed</span>}
-            </div>
+            <p className="muted">{commandOptions.length > 1 ? "Choose the terminal you use." : "Run this command in a terminal."}</p>
+            {commandOptions.map((option) => {
+              const copied = copyState === `${option.id}:copied`;
+              const copyFailed = copyState === `${option.id}:error`;
+              return (
+                <div key={option.id}>
+                  {option.label && <p className="muted"><strong>{option.label}</strong></p>}
+                  <div className="local-wizard__command-box">
+                    <pre className="local-wizard__command"><span className="local-wizard__prompt">&gt;</span> {option.command}</pre>
+                    <button
+                      className={"local-wizard__copy-button" + (copied ? " is-copied" : "")}
+                      type="button"
+                      onClick={() => void copyCommand(option.id, option.command)}
+                      aria-label={copied ? `Copied ${option.label || "command"}` : `Copy ${option.label || "command"}`}
+                      title={copied ? "Copied" : copyFailed ? "Copy failed" : "Copy command"}
+                    >
+                      {copied ? <CheckIcon /> : <CopyIcon />}
+                    </button>
+                    {copyFailed && <span className="local-wizard__copy-error">Copy failed</span>}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </section>
 

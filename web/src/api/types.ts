@@ -325,6 +325,8 @@ export interface LocalPrepareResponse {
   apiUrl: string;
   consoleUrl: string;
   command: string;
+  windowsCmdCommand?: string;
+  windowsPowerShellCommand?: string;
   setSize?: number;
   parity?: number;
   warnings?: string[];
