@@ -333,11 +333,14 @@ func (e *clusterUpgradeByAdminUpdateExecutor) Execute(ctx context.Context, run *
 		return fmt.Errorf("post-update health: %w", err)
 	}
 	if hasTargetReleaseTime {
-		info, err := rc.admin.ServerInfo(ctx)
-		if err != nil {
-			return fmt.Errorf("post-update version check: server info: %w", err)
-		}
-		if err := ensureVersionReachedTarget(targetReleaseTime, p.Version, info); err != nil {
+		run.LogInfo("cluster healthy, waiting for all servers to report %s", p.Version)
+		if err := waitServerVersionsReached(
+			ctx,
+			rc.admin.ServerInfo,
+			targetReleaseTime,
+			p.Version,
+			WaitOptions{Timeout: 2 * time.Minute, Tick: 3 * time.Second},
+		); err != nil {
 			return fmt.Errorf("post-update version check: %w", err)
 		}
 	}
@@ -418,6 +421,42 @@ func ensureVersionReachedTarget(targetTime time.Time, targetLabel string, info *
 		}
 	}
 	return nil
+}
+
+// waitServerVersionsReached allows the admin API's view of each server to
+// converge after an asynchronous cluster restart. A cluster can be healthy
+// while a just-restarted peer still briefly reports its previous version.
+func waitServerVersionsReached(
+	ctx context.Context,
+	fetch func(context.Context) (*domain.ServerInfo, error),
+	targetTime time.Time,
+	targetLabel string,
+	opts WaitOptions,
+) error {
+	opts = opts.withDefaults(90 * time.Second)
+	deadline := time.Now().Add(opts.Timeout)
+	var lastErr error
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		info, err := fetch(ctx)
+		if err == nil {
+			err = ensureVersionReachedTarget(targetTime, targetLabel, info)
+		}
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			return fmt.Errorf("servers did not report %s after %s: %w", targetLabel, opts.Timeout, lastErr)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(opts.Tick):
+		}
+	}
 }
 
 func parseComparableVersionTime(v string) (time.Time, bool) {
@@ -576,11 +615,14 @@ func (e *clusterUpgradeBySystemctlExecutor) Execute(ctx context.Context, run *ta
 		return fmt.Errorf("post-upgrade restart health: %w", err)
 	}
 	if hasTargetReleaseTime {
-		info, err := rc.admin.ServerInfo(ctx)
-		if err != nil {
-			return fmt.Errorf("post-upgrade version check: server info: %w", err)
-		}
-		if err := ensureVersionReachedTarget(targetReleaseTime, p.Version, info); err != nil {
+		run.LogInfo("cluster healthy, waiting for all servers to report %s", p.Version)
+		if err := waitServerVersionsReached(
+			ctx,
+			rc.admin.ServerInfo,
+			targetReleaseTime,
+			p.Version,
+			WaitOptions{Timeout: 2 * time.Minute, Tick: 3 * time.Second},
+		); err != nil {
 			return fmt.Errorf("post-upgrade version check: %w", err)
 		}
 	}
