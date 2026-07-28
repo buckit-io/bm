@@ -188,6 +188,25 @@ export function Topology({ draft, update }: Props) {
           managed <span className="mono">buckit/</span> directory inside each
           selected path.
         </p>
+        <p className="muted" style={{ fontSize: "var(--fs-sm)", marginTop: 4 }}>
+          Learn about{" "}
+          <a
+            href="https://buckit.sh/docs/operations/concepts/erasure-coding"
+            target="_blank"
+            rel="noreferrer"
+          >
+            erasure coding ↗
+          </a>{" "}
+          or use the{" "}
+          <a
+            href="https://buckit.sh/docs/_static/ec-calculator"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Erasure Code Calculator ↗
+          </a>
+          .
+        </p>
       </header>
 
       {/* ── case banner ───────────────────────────────────────────── */}
