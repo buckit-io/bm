@@ -245,21 +245,24 @@ func (o WaitOptions) withDefaults(defaultTimeout time.Duration) WaitOptions {
 // is back in service before terminating the executor.
 func waitClusterHealthy(ctx context.Context, ac *admin.Client, opts WaitOptions) error {
 	opts = opts.withDefaults(90 * time.Second)
-	deadline := time.Now().Add(opts.Timeout)
+	loopCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
+	defer cancel()
 	for {
-		if err := ctx.Err(); err != nil {
-			return err
+		if err := loopCtx.Err(); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("cluster not healthy after %s", opts.Timeout)
 		}
-		info, err := ac.ServerInfo(ctx)
+		attemptCtx, attemptCancel := context.WithTimeout(loopCtx, 10*time.Second)
+		info, err := ac.ServerInfo(attemptCtx)
+		attemptCancel()
 		if err == nil && allOnline(info) {
 			return nil
 		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("cluster not healthy after %s", opts.Timeout)
-		}
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-loopCtx.Done():
+			continue
 		case <-time.After(opts.Tick):
 		}
 	}
