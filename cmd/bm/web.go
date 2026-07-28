@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,6 +32,7 @@ import (
 	"github.com/buckit-io/bm/internal/store"
 	"github.com/buckit-io/bm/internal/tasks"
 	"github.com/buckit-io/bm/internal/update"
+	"github.com/buckit-io/bm/internal/version"
 )
 
 const defaultAddr = "127.0.0.1:9443"
@@ -323,6 +325,15 @@ func (rw *rotatingWriter) Close() error {
 }
 
 func defaultWebDist() string {
+	// Released binaries carry their UI inside the executable. Do not
+	// accidentally select an adjacent web/dist left behind by an earlier
+	// development install: it can contain index.html without the matching
+	// hashed assets, causing the browser to receive the SPA fallback for every
+	// JavaScript module.
+	if strings.HasPrefix(version.Version, "RELEASE.") {
+		return ""
+	}
+
 	// Prefer an adjacent web/dist during local development so contributors
 	// see current frontend changes without rebuilding the binary first.
 	if exe, err := os.Executable(); err == nil {
