@@ -234,80 +234,85 @@ export function Basics({ draft, update }: Props) {
         </div>
       </div>
 
-      {/* ── Ports ─────────────────────────────────────────────────── */}
-      <div className="vstack" style={{ gap: "var(--s-3)" }}>
-        <div className="field-label" style={{ fontSize: "var(--fs-md)" }}>
-          Ports
-        </div>
-        <div className="hstack" style={{ gap: "var(--s-4)", flexWrap: "wrap" }}>
-          <div className="field" style={{ minWidth: 140 }}>
-            <label className="field-label" htmlFor="api-port">S3 API</label>
-            <input
-              id="api-port"
-              className="input"
-              type="number"
-              min={1}
-              max={65535}
-              value={draft.api.port}
-              onChange={(e) => setPort("port", e.target.value)}
-            />
+      <details>
+        <summary style={{ cursor: "pointer", fontWeight: 600 }}>Advanced</summary>
+        <div className="vstack" style={{ gap: "var(--s-5)", marginTop: "var(--s-4)" }}>
+          {/* ── Ports ───────────────────────────────────────────────── */}
+          <div className="vstack" style={{ gap: "var(--s-3)" }}>
+            <div className="field-label" style={{ fontSize: "var(--fs-md)" }}>
+              Ports
+            </div>
+            <div className="hstack" style={{ gap: "var(--s-4)", flexWrap: "wrap" }}>
+              <div className="field" style={{ minWidth: 140 }}>
+                <label className="field-label" htmlFor="api-port">S3 API</label>
+                <input
+                  id="api-port"
+                  className="input"
+                  type="number"
+                  min={1}
+                  max={65535}
+                  value={draft.api.port}
+                  onChange={(e) => setPort("port", e.target.value)}
+                />
+              </div>
+              <div className="field" style={{ minWidth: 140 }}>
+                <label className="field-label" htmlFor="console-port">Console</label>
+                <input
+                  id="console-port"
+                  className="input"
+                  type="number"
+                  min={1}
+                  max={65535}
+                  value={draft.api.consolePort}
+                  onChange={(e) => setPort("consolePort", e.target.value)}
+                />
+              </div>
+            </div>
+            {portsClash && (
+              <span className="field-hint" style={{ color: "var(--c-danger)" }}>
+                S3 API and Console ports must differ.
+              </span>
+            )}
           </div>
-          <div className="field" style={{ minWidth: 140 }}>
-            <label className="field-label" htmlFor="console-port">Console</label>
+
+          {/* ── Transport security ──────────────────────────────────── */}
+          <TlsSection
+            tls={draft.tls}
+            onChange={(tls) => update({ tls })}
+          />
+
+          {/* ── Region + Server URL ─────────────────────────────────── */}
+          <div className="field">
+            <label className="field-label" htmlFor="region">Region</label>
             <input
-              id="console-port"
+              id="region"
               className="input"
-              type="number"
-              min={1}
-              max={65535}
-              value={draft.api.consolePort}
-              onChange={(e) => setPort("consolePort", e.target.value)}
+              value={draft.region}
+              onChange={(e) => update({ region: e.target.value })}
+              placeholder="us-east-1"
             />
+            <span className="field-hint">
+              Returned in S3 headers. Some clients require a specific value.
+            </span>
+          </div>
+          <div className="field">
+            <label className="field-label" htmlFor="server-url">Server URL</label>
+            <input
+              id="server-url"
+              className="input"
+              value={draft.serverUrl}
+              onChange={(e) => update({ serverUrl: e.target.value })}
+              placeholder={`${draft.tls.mode === "byo" ? "https" : "http"}://<first host>:${draft.api.port}`}
+            />
+            <span className="field-hint">
+              Used in pre-signed URLs and admin responses. Prefer the load
+              balancer URL when one fronts the cluster — pre-signed links
+              will survive node failures. Otherwise leave blank to derive
+              from the first host at deploy time.
+            </span>
           </div>
         </div>
-        {portsClash && (
-          <span className="field-hint" style={{ color: "var(--c-danger)" }}>
-            S3 API and Console ports must differ.
-          </span>
-        )}
-      </div>
-
-      {/* ── Transport security ────────────────────────────────────── */}
-      <TlsSection
-        tls={draft.tls}
-        onChange={(tls) => update({ tls })}
-      />
-
-      {/* ── Region + Server URL ───────────────────────────────────── */}
-      <div className="field">
-        <label className="field-label" htmlFor="region">Region</label>
-        <input
-          id="region"
-          className="input"
-          value={draft.region}
-          onChange={(e) => update({ region: e.target.value })}
-          placeholder="us-east-1"
-        />
-        <span className="field-hint">
-          Returned in S3 headers. Some clients require a specific value.
-        </span>
-      </div>
-      <div className="field">
-        <label className="field-label" htmlFor="server-url">Server URL</label>
-        <input
-          id="server-url"
-          className="input"
-          value={draft.serverUrl}
-          onChange={(e) => update({ serverUrl: e.target.value })}
-          placeholder={`${draft.tls.mode === "byo" ? "https" : "http"}://<first host>:${draft.api.port}`}
-        />
-        <span className="field-hint">
-          Used in pre-signed URLs and admin responses. Prefer the load
-          balancer URL when one fronts the cluster — pre-signed links
-          will survive node failures. Otherwise leave blank to derive
-          from the first host at deploy time.
-        </span>
-      </div>
+      </details>
     </div>
   );
 }
