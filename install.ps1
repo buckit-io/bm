@@ -44,9 +44,11 @@ Info "platform: $platform"
 $pointerUrl = "$PagesBase/manager/bm/release/$platform/bm.sha256sum"
 Info 'resolving latest release'
 try {
-    $pointer = (Invoke-WebRequest -UseBasicParsing -Uri $pointerUrl).Content.Trim()
+    # Use Invoke-RestMethod here: it returns the small text payload directly and
+    # is the same cmdlet used by the documented `irm ... | iex` bootstrap.
+    $pointer = (Invoke-RestMethod -Uri $pointerUrl -ErrorAction Stop).Trim()
 } catch {
-    Fail "could not fetch release pointer at $pointerUrl"
+    Fail "could not fetch release pointer at ${pointerUrl}: $($_.Exception.Message)"
 }
 
 # Pointer format: "<sha256>  bm.exe.<tag>"
@@ -67,9 +69,9 @@ try {
     $binTmp = Join-Path $tmp 'bm.exe'
     Info "downloading $asset"
     try {
-        Invoke-WebRequest -UseBasicParsing -Uri $downloadUrl -OutFile $binTmp
+        Invoke-WebRequest -UseBasicParsing -Uri $downloadUrl -OutFile $binTmp -ErrorAction Stop
     } catch {
-        Fail "download failed: $downloadUrl"
+        Fail "download failed at ${downloadUrl}: $($_.Exception.Message)"
     }
 
     $gotSha = (Get-FileHash -Algorithm SHA256 -Path $binTmp).Hash.ToLower()
