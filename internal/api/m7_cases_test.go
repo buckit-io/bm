@@ -881,8 +881,8 @@ func TestM7ClusterUpgradeBySystemctlUsesArm64RPM(t *testing.T) {
 }
 
 func TestM7ClusterUpgradeBySystemctlFailsIfVersionUnchanged(t *testing.T) {
-	restoreVersionWait := operations.SetClusterUpgradeVersionConvergenceWaitForTest(operations.WaitOptions{
-		Timeout: 20 * time.Millisecond,
+	restoreVersionWait := operations.SetClusterUpgradePostRestartWaitForTest(operations.WaitOptions{
+		Timeout: 100 * time.Millisecond,
 		Tick:    time.Millisecond,
 	})
 	defer restoreVersionWait()

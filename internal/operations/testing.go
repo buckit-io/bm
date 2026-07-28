@@ -22,13 +22,13 @@ func SetRotateRootCredsRestartRequestTimeoutForTest(timeout time.Duration) func(
 	}
 }
 
-// SetClusterUpgradeVersionConvergenceWaitForTest overrides the post-restart
-// version-convergence wait for cross-package integration tests and returns a
-// restore function.
-func SetClusterUpgradeVersionConvergenceWaitForTest(opts WaitOptions) func() {
-	old := clusterUpgradeVersionConvergenceWait
-	clusterUpgradeVersionConvergenceWait = opts
+// SetClusterUpgradePostRestartWaitForTest overrides the shared post-restart
+// health and version-convergence wait for cross-package integration tests and
+// returns a restore function.
+func SetClusterUpgradePostRestartWaitForTest(opts WaitOptions) func() {
+	old := clusterUpgradePostRestartWait
+	clusterUpgradePostRestartWait = opts
 	return func() {
-		clusterUpgradeVersionConvergenceWait = old
+		clusterUpgradePostRestartWait = old
 	}
 }
