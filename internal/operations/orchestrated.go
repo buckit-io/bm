@@ -277,6 +277,13 @@ func (e *rollingRestartExecutor) Execute(ctx context.Context, run *tasks.Run) er
 
 type clusterUpgradeByAdminUpdateExecutor struct{ deps Deps }
 
+var clusterUpgradePostRestartWait = WaitOptions{
+	Timeout: 2 * time.Minute,
+	Tick:    3 * time.Second,
+}
+
+var errUncomparableServerVersion = errors.New("uncomparable server version")
+
 func (e *clusterUpgradeByAdminUpdateExecutor) Validate(req tasks.DispatchRequest) error {
 	if len(req.Params) > 0 {
 		var p rollingUpgradeParams
@@ -300,11 +307,13 @@ func (e *clusterUpgradeByAdminUpdateExecutor) Execute(ctx context.Context, run *
 		_ = json.Unmarshal(run.Params, &p)
 	}
 	targetReleaseTime, hasTargetReleaseTime := parseComparableVersionTime(p.Version)
+	expectedServers := 0
 	if hasTargetReleaseTime {
 		info, err := rc.admin.ServerInfo(ctx)
 		if err != nil {
 			return fmt.Errorf("admin update preflight: server info: %w", err)
 		}
+		expectedServers = len(info.Servers)
 		if err := ensureVersionIsNewer(p.Version, targetReleaseTime, info); err != nil {
 			return fmt.Errorf("admin update preflight: %w", err)
 		}
@@ -329,15 +338,33 @@ func (e *clusterUpgradeByAdminUpdateExecutor) Execute(ctx context.Context, run *
 	run.MutateState(func(s *tasks.OperationProgress) {
 		s.Detail = "Waiting for cluster healthy"
 	})
-	if err := waitClusterHealthy(ctx, rc.admin, WaitOptions{Timeout: 2 * time.Minute, Tick: 3 * time.Second}); err != nil {
+	postRestartWait := clusterUpgradePostRestartWait.withDefaults(2 * time.Minute)
+	postRestartDeadline := time.Now().Add(postRestartWait.Timeout)
+	if err := waitClusterHealthy(ctx, rc.admin, postRestartWait); err != nil {
 		return fmt.Errorf("post-update health: %w", err)
 	}
 	if hasTargetReleaseTime {
-		info, err := rc.admin.ServerInfo(ctx)
-		if err != nil {
-			return fmt.Errorf("post-update version check: server info: %w", err)
+		run.LogInfo("cluster healthy, waiting for all servers to report %s", p.Version)
+		run.MutateState(func(s *tasks.OperationProgress) {
+			s.Detail = "Waiting for version convergence"
+		})
+		remaining := time.Until(postRestartDeadline)
+		if remaining < minimumVersionConvergenceBudget(postRestartWait.Timeout) {
+			return fmt.Errorf(
+				"post-update version check: cluster health took %s of the %s post-restart budget, leaving no time for version convergence",
+				postRestartWait.Timeout-remaining,
+				postRestartWait.Timeout,
+			)
 		}
-		if err := ensureVersionReachedTarget(targetReleaseTime, p.Version, info); err != nil {
+		if err := waitServerVersionsReached(
+			ctx,
+			rc.admin.ServerInfo,
+			targetReleaseTime,
+			p.Version,
+			expectedServers,
+			WaitOptions{Timeout: remaining, Tick: postRestartWait.Tick},
+			versionWaitProgressLogger(run),
+		); err != nil {
 			return fmt.Errorf("post-update version check: %w", err)
 		}
 	}
@@ -404,20 +431,119 @@ func ensureVersionIsNewer(targetLabel string, targetTime time.Time, info *domain
 	return nil
 }
 
-func ensureVersionReachedTarget(targetTime time.Time, targetLabel string, info *domain.ServerInfo) error {
+func ensureVersionReachedTarget(targetTime time.Time, targetLabel string, expectedServers int, info *domain.ServerInfo) error {
 	if info == nil || len(info.Servers) == 0 {
 		return errors.New("no servers reported by admin API")
+	}
+	if expectedServers > 0 && len(info.Servers) < expectedServers {
+		return fmt.Errorf("admin API reports %d of %d servers", len(info.Servers), expectedServers)
+	}
+	for _, s := range info.Servers {
+		version := strings.TrimSpace(s.Version)
+		if version != "" {
+			if _, ok := parseComparableVersionTime(version); ok {
+				continue
+			}
+			return fmt.Errorf("%w: server %s reported %q", errUncomparableServerVersion, s.Endpoint, s.Version)
+		}
 	}
 	for _, s := range info.Servers {
 		currentTime, ok := parseComparableVersionTime(s.Version)
 		if !ok {
-			return fmt.Errorf("server %s reported an uncomparable version %q", s.Endpoint, s.Version)
+			return fmt.Errorf("server %s has not reported a version yet", s.Endpoint)
 		}
 		if currentTime.Before(targetTime) {
 			return fmt.Errorf("server %s still reports %s after update to %s", s.Endpoint, s.Version, targetLabel)
 		}
 	}
 	return nil
+}
+
+// waitServerVersionsReached allows the admin API's view of each server to
+// converge after an asynchronous cluster restart. A cluster can be healthy
+// while a just-restarted peer still briefly reports its previous version.
+func waitServerVersionsReached(
+	ctx context.Context,
+	fetch func(context.Context) (*domain.ServerInfo, error),
+	targetTime time.Time,
+	targetLabel string,
+	expectedServers int,
+	opts WaitOptions,
+	onRetry func(error),
+) error {
+	opts = opts.withDefaults(90 * time.Second)
+	loopCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
+	defer cancel()
+	var (
+		lastFetchErr   error
+		lastVersionErr error
+		lastWasFetch   bool
+		retries        int
+	)
+	for {
+		if err := loopCtx.Err(); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if lastFetchErr == nil && lastVersionErr == nil {
+				return fmt.Errorf("servers did not report %s after %s", targetLabel, opts.Timeout)
+			}
+			if lastFetchErr != nil && lastVersionErr != nil {
+				return fmt.Errorf(
+					"servers did not report %s after %s: last version state: %v; last admin API error: %v",
+					targetLabel,
+					opts.Timeout,
+					lastVersionErr,
+					lastFetchErr,
+				)
+			}
+			if lastFetchErr != nil {
+				return fmt.Errorf("admin API unavailable for %s while waiting for %s: %w", opts.Timeout, targetLabel, lastFetchErr)
+			}
+			return fmt.Errorf("servers did not report %s after %s: %w", targetLabel, opts.Timeout, lastVersionErr)
+		}
+
+		attemptCtx, attemptCancel := context.WithTimeout(loopCtx, 10*time.Second)
+		info, err := fetch(attemptCtx)
+		attemptCancel()
+		if err != nil {
+			lastFetchErr = err
+			lastWasFetch = true
+		} else {
+			err = ensureVersionReachedTarget(targetTime, targetLabel, expectedServers, info)
+			if err == nil {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				return nil
+			}
+			if errors.Is(err, errUncomparableServerVersion) {
+				return err
+			}
+			lastVersionErr = err
+			lastWasFetch = false
+		}
+		retries++
+		if onRetry != nil && retries%5 == 0 {
+			if lastWasFetch {
+				onRetry(lastFetchErr)
+			} else {
+				onRetry(lastVersionErr)
+			}
+		}
+
+		select {
+		case <-loopCtx.Done():
+			continue
+		case <-time.After(opts.Tick):
+		}
+	}
+}
+
+func versionWaitProgressLogger(run *tasks.Run) func(error) {
+	return func(err error) {
+		run.LogInfo("still waiting for version convergence: %v", err)
+	}
 }
 
 func parseComparableVersionTime(v string) (time.Time, bool) {
@@ -473,11 +599,13 @@ func (e *clusterUpgradeBySystemctlExecutor) Execute(ctx context.Context, run *ta
 		_ = json.Unmarshal(run.Params, &p)
 	}
 	targetReleaseTime, hasTargetReleaseTime := parseComparableVersionTime(p.Version)
+	expectedServers := 0
 	if hasTargetReleaseTime {
 		info, err := rc.admin.ServerInfo(ctx)
 		if err != nil {
 			return fmt.Errorf("systemctl upgrade preflight: server info: %w", err)
 		}
+		expectedServers = len(info.Servers)
 		if err := ensureVersionIsNewer(p.Version, targetReleaseTime, info); err != nil {
 			return fmt.Errorf("systemctl upgrade preflight: %w", err)
 		}
@@ -572,15 +700,33 @@ func (e *clusterUpgradeBySystemctlExecutor) Execute(ctx context.Context, run *ta
 		return fmt.Errorf("admin restart: %w", err)
 	}
 	run.LogOK("Restart request accepted, polling for healthy")
-	if err := waitClusterHealthy(ctx, rc.admin, WaitOptions{Timeout: 2 * time.Minute, Tick: 3 * time.Second}); err != nil {
+	postRestartWait := clusterUpgradePostRestartWait.withDefaults(2 * time.Minute)
+	postRestartDeadline := time.Now().Add(postRestartWait.Timeout)
+	if err := waitClusterHealthy(ctx, rc.admin, postRestartWait); err != nil {
 		return fmt.Errorf("post-upgrade restart health: %w", err)
 	}
 	if hasTargetReleaseTime {
-		info, err := rc.admin.ServerInfo(ctx)
-		if err != nil {
-			return fmt.Errorf("post-upgrade version check: server info: %w", err)
+		run.LogInfo("cluster healthy, waiting for all servers to report %s", p.Version)
+		run.MutateState(func(s *tasks.OperationProgress) {
+			s.Detail = "Waiting for version convergence"
+		})
+		remaining := time.Until(postRestartDeadline)
+		if remaining < minimumVersionConvergenceBudget(postRestartWait.Timeout) {
+			return fmt.Errorf(
+				"post-upgrade version check: cluster health took %s of the %s post-restart budget, leaving no time for version convergence",
+				postRestartWait.Timeout-remaining,
+				postRestartWait.Timeout,
+			)
 		}
-		if err := ensureVersionReachedTarget(targetReleaseTime, p.Version, info); err != nil {
+		if err := waitServerVersionsReached(
+			ctx,
+			rc.admin.ServerInfo,
+			targetReleaseTime,
+			p.Version,
+			expectedServers,
+			WaitOptions{Timeout: remaining, Tick: postRestartWait.Tick},
+			versionWaitProgressLogger(run),
+		); err != nil {
 			return fmt.Errorf("post-upgrade version check: %w", err)
 		}
 	}
@@ -598,6 +744,14 @@ func (e *clusterUpgradeBySystemctlExecutor) Execute(ctx context.Context, run *ta
 	})
 	refreshClusterRow(ctx, e.deps, run.ClusterID, rc.admin)
 	return nil
+}
+
+func minimumVersionConvergenceBudget(postRestartBudget time.Duration) time.Duration {
+	const preferredMinimum = 5 * time.Second
+	if reducedMinimum := postRestartBudget / 10; reducedMinimum < preferredMinimum {
+		return reducedMinimum
+	}
+	return preferredMinimum
 }
 
 // ---- redeploy_software: Buckit-only. stop -> reinstall -> start per host ----

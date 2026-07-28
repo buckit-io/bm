@@ -881,6 +881,12 @@ func TestM7ClusterUpgradeBySystemctlUsesArm64RPM(t *testing.T) {
 }
 
 func TestM7ClusterUpgradeBySystemctlFailsIfVersionUnchanged(t *testing.T) {
+	restoreVersionWait := operations.SetClusterUpgradePostRestartWaitForTest(operations.WaitOptions{
+		Timeout: 100 * time.Millisecond,
+		Tick:    time.Millisecond,
+	})
+	defer restoreVersionWait()
+
 	h := newM7Harness(t)
 	artifactLn, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -1155,4 +1161,3 @@ func TestM7SkipsHostsMissingUnit(t *testing.T) {
 		})
 	}
 }
-

@@ -245,21 +245,33 @@ func (o WaitOptions) withDefaults(defaultTimeout time.Duration) WaitOptions {
 // is back in service before terminating the executor.
 func waitClusterHealthy(ctx context.Context, ac *admin.Client, opts WaitOptions) error {
 	opts = opts.withDefaults(90 * time.Second)
-	deadline := time.Now().Add(opts.Timeout)
+	loopCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
+	defer cancel()
+	var lastFetchErr error
 	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		info, err := ac.ServerInfo(ctx)
-		if err == nil && allOnline(info) {
-			return nil
-		}
-		if time.Now().After(deadline) {
+		if err := loopCtx.Err(); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if lastFetchErr != nil {
+				return fmt.Errorf("admin API unavailable for %s while waiting for cluster healthy: %w", opts.Timeout, lastFetchErr)
+			}
 			return fmt.Errorf("cluster not healthy after %s", opts.Timeout)
 		}
+		attemptCtx, attemptCancel := context.WithTimeout(loopCtx, 10*time.Second)
+		info, err := ac.ServerInfo(attemptCtx)
+		attemptCancel()
+		if err != nil {
+			lastFetchErr = err
+		} else {
+			lastFetchErr = nil
+			if allOnline(info) {
+				return nil
+			}
+		}
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-loopCtx.Done():
+			continue
 		case <-time.After(opts.Tick):
 		}
 	}
