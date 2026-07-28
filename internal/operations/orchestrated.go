@@ -349,8 +349,12 @@ func (e *clusterUpgradeByAdminUpdateExecutor) Execute(ctx context.Context, run *
 			s.Detail = "Waiting for version convergence"
 		})
 		remaining := time.Until(postRestartDeadline)
-		if remaining <= 0 {
-			return fmt.Errorf("post-update version check: post-restart wait exceeded %s before version convergence", postRestartWait.Timeout)
+		if remaining < minimumVersionConvergenceBudget(postRestartWait.Timeout) {
+			return fmt.Errorf(
+				"post-update version check: cluster health took %s of the %s post-restart budget, leaving no time for version convergence",
+				postRestartWait.Timeout-remaining,
+				postRestartWait.Timeout,
+			)
 		}
 		if err := waitServerVersionsReached(
 			ctx,
@@ -707,8 +711,12 @@ func (e *clusterUpgradeBySystemctlExecutor) Execute(ctx context.Context, run *ta
 			s.Detail = "Waiting for version convergence"
 		})
 		remaining := time.Until(postRestartDeadline)
-		if remaining <= 0 {
-			return fmt.Errorf("post-upgrade version check: post-restart wait exceeded %s before version convergence", postRestartWait.Timeout)
+		if remaining < minimumVersionConvergenceBudget(postRestartWait.Timeout) {
+			return fmt.Errorf(
+				"post-upgrade version check: cluster health took %s of the %s post-restart budget, leaving no time for version convergence",
+				postRestartWait.Timeout-remaining,
+				postRestartWait.Timeout,
+			)
 		}
 		if err := waitServerVersionsReached(
 			ctx,
@@ -736,6 +744,14 @@ func (e *clusterUpgradeBySystemctlExecutor) Execute(ctx context.Context, run *ta
 	})
 	refreshClusterRow(ctx, e.deps, run.ClusterID, rc.admin)
 	return nil
+}
+
+func minimumVersionConvergenceBudget(postRestartBudget time.Duration) time.Duration {
+	const preferredMinimum = 5 * time.Second
+	if reducedMinimum := postRestartBudget / 10; reducedMinimum < preferredMinimum {
+		return reducedMinimum
+	}
+	return preferredMinimum
 }
 
 // ---- redeploy_software: Buckit-only. stop -> reinstall -> start per host ----

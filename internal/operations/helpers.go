@@ -247,18 +247,27 @@ func waitClusterHealthy(ctx context.Context, ac *admin.Client, opts WaitOptions)
 	opts = opts.withDefaults(90 * time.Second)
 	loopCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
 	defer cancel()
+	var lastFetchErr error
 	for {
 		if err := loopCtx.Err(); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
+			}
+			if lastFetchErr != nil {
+				return fmt.Errorf("admin API unavailable for %s while waiting for cluster healthy: %w", opts.Timeout, lastFetchErr)
 			}
 			return fmt.Errorf("cluster not healthy after %s", opts.Timeout)
 		}
 		attemptCtx, attemptCancel := context.WithTimeout(loopCtx, 10*time.Second)
 		info, err := ac.ServerInfo(attemptCtx)
 		attemptCancel()
-		if err == nil && allOnline(info) {
-			return nil
+		if err != nil {
+			lastFetchErr = err
+		} else {
+			lastFetchErr = nil
+			if allOnline(info) {
+				return nil
+			}
 		}
 		select {
 		case <-loopCtx.Done():
