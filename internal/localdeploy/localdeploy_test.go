@@ -564,12 +564,23 @@ func TestPrepareWritesWindowsScriptAndQuotesValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare() error = %v", err)
 	}
-	if !strings.Contains(resp.Command, "powershell -ExecutionPolicy Bypass -File ") {
-		t.Fatalf("unexpected command %q", resp.Command)
+	wantCommand := `"` + resp.ScriptPath + `"`
+	if resp.Command != wantCommand {
+		t.Fatalf("command = %q, want %q", resp.Command, wantCommand)
 	}
-	script, err := os.ReadFile(resp.ScriptPath)
+	if !strings.HasSuffix(resp.ScriptPath, "Start-Buckit.cmd") {
+		t.Fatalf("script path = %q, want Windows launcher", resp.ScriptPath)
+	}
+	launcher, err := os.ReadFile(resp.ScriptPath)
 	if err != nil {
-		t.Fatalf("read script: %v", err)
+		t.Fatalf("read launcher: %v", err)
+	}
+	if want := "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0Start-Buckit.ps1\""; !strings.Contains(string(launcher), want) {
+		t.Fatalf("launcher missing %q:\n%s", want, launcher)
+	}
+	script, err := os.ReadFile(filepath.Join(filepath.Dir(resp.ScriptPath), "Start-Buckit.ps1"))
+	if err != nil {
+		t.Fatalf("read PowerShell script: %v", err)
 	}
 	got := string(script)
 	for _, want := range []string{
