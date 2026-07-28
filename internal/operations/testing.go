@@ -21,3 +21,14 @@ func SetRotateRootCredsRestartRequestTimeoutForTest(timeout time.Duration) func(
 		rotateRootCredsRestartRequestTimeout = old
 	}
 }
+
+// SetClusterUpgradePostRestartWaitForTest overrides the shared post-restart
+// health and version-convergence wait for cross-package integration tests and
+// returns a restore function.
+func SetClusterUpgradePostRestartWaitForTest(opts WaitOptions) func() {
+	old := clusterUpgradePostRestartWait
+	clusterUpgradePostRestartWait = opts
+	return func() {
+		clusterUpgradePostRestartWait = old
+	}
+}
