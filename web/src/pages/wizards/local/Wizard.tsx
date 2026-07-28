@@ -416,6 +416,25 @@ function StorageStep({
       <header>
         <h2>Storage</h2>
         <p className="muted">Input one or more local filesystem paths for storing object data.</p>
+        <p className="muted">
+          Learn about{" "}
+          <a
+            href="https://buckit.sh/docs/operations/concepts/erasure-coding"
+            target="_blank"
+            rel="noreferrer"
+          >
+            erasure coding ↗
+          </a>{" "}
+          or use the{" "}
+          <a
+            href="https://buckit.sh/docs/_static/ec-calculator"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Erasure Code Calculator ↗
+          </a>
+          .
+        </p>
       </header>
 
       {rootOSDrivePaths.length > 0 && (

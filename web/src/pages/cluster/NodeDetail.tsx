@@ -58,6 +58,15 @@ function opRequires(op: OperationDef): "ssh" | "api" | undefined {
   return "ssh";
 }
 
+function isLocalManualDeployment(
+  cluster: { nodeCount: number } | null | undefined,
+  node: { os?: string },
+): boolean {
+  if (cluster?.nodeCount !== 1) return false;
+  const os = (node.os ?? "").toLowerCase();
+  return os === "darwin" || os === "windows";
+}
+
 // hostnameFromAddr strips the :port suffix from the upstream's reported
 // endpoint so we can join HealthInfo hosts against domain.Node by hostname.
 // Mirrors hostnameFromEndpoint in internal/api/m4_handlers.go.
@@ -226,10 +235,14 @@ export function NodeDetail() {
     !healthLoading && (healthErrored || (healthInfo !== undefined && !hostFacts));
 
   const sshOk = !!sshConfig;
+  const localManualDeployment = isLocalManualDeployment(cluster, node);
   const engineMismatch = (op: OperationDef): boolean =>
     !!op.buckitOnly && !!cluster && cluster.engine !== "buckit";
 
   const disabledHint = (op: OperationDef) => {
+    if (localManualDeployment && opRequires(op) === "ssh") {
+      return "Systemd/SSH actions are not available for local macOS or Windows single-node deployments.";
+    }
     if (engineMismatch(op)) {
       return "Only available on Buckit clusters. Migrate this cluster from MinIO to enable it.";
     }
@@ -241,6 +254,7 @@ export function NodeDetail() {
 
   const onPick = (op: OperationDef) => {
     if (!cluster) return;
+    if (localManualDeployment && opRequires(op) === "ssh") return;
     if (engineMismatch(op)) return;
     setActionsOpen(false);
     const requirement = opRequires(op);
@@ -313,7 +327,9 @@ export function NodeDetail() {
                     {NODE_GROUP_LABELS[group] ?? group}
                   </div>
                   {ops.map((op) => {
-                    const disabled = engineMismatch(op);
+                    const disabled =
+                      engineMismatch(op) ||
+                      (localManualDeployment && opRequires(op) === "ssh");
                     return (
                       <button
                         key={op.id}
