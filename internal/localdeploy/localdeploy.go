@@ -39,17 +39,15 @@ type Request struct {
 }
 
 type Response struct {
-	ScriptPath               string   `json:"scriptPath"`
-	BinaryPath               string   `json:"binaryPath"`
-	DataPaths                []string `json:"dataPaths"`
-	APIURL                   string   `json:"apiUrl"`
-	ConsoleURL               string   `json:"consoleUrl"`
-	Command                  string   `json:"command"`
-	WindowsCmdCommand        string   `json:"windowsCmdCommand,omitempty"`
-	WindowsPowerShellCommand string   `json:"windowsPowerShellCommand,omitempty"`
-	SetSize                  int      `json:"setSize,omitempty"`
-	Parity                   int      `json:"parity,omitempty"`
-	Warnings                 []string `json:"warnings,omitempty"`
+	ScriptPath string   `json:"scriptPath"`
+	BinaryPath string   `json:"binaryPath"`
+	DataPaths  []string `json:"dataPaths"`
+	APIURL     string   `json:"apiUrl"`
+	ConsoleURL string   `json:"consoleUrl"`
+	Command    string   `json:"command"`
+	SetSize    int      `json:"setSize,omitempty"`
+	Parity     int      `json:"parity,omitempty"`
+	Warnings   []string `json:"warnings,omitempty"`
 }
 
 type Options struct {
@@ -126,18 +124,8 @@ func Prepare(ctx context.Context, req Request, opts Options) (Response, error) {
 	if err != nil {
 		return Response{}, err
 	}
-	scriptPath := paths.Script
-	if paths.PowerShellScript != "" {
-		scriptPath = paths.PowerShellScript
-	}
-	if err := os.WriteFile(scriptPath, []byte(script), executableMode(goos)); err != nil {
+	if err := os.WriteFile(paths.Script, []byte(script), executableMode(goos)); err != nil {
 		return Response{}, fmt.Errorf("write start script: %w", err)
-	}
-	if paths.PowerShellScript != "" {
-		if err := os.WriteFile(paths.Script, []byte(renderWindowsLauncher(filepath.Base(paths.PowerShellScript))), executableMode(goos)); err != nil {
-			_ = os.Remove(scriptPath)
-			return Response{}, fmt.Errorf("write Windows launcher: %w", err)
-		}
 	}
 	plan.Warnings = postPrepareWarnings(plan.Warnings)
 	return plan, nil
@@ -211,10 +199,6 @@ func preview(req Request, opts Options) (Response, error) {
 		SetSize:    setSize,
 		Parity:     parity,
 		Warnings:   warnings,
-	}
-	if goos == "windows" {
-		response.WindowsCmdCommand = windowsCmdCommand(paths.Script)
-		response.WindowsPowerShellCommand = windowsPowerShellCommand(paths.Script)
 	}
 	return response, nil
 }
@@ -543,10 +527,9 @@ func normalizeLineEndings(s string) string {
 }
 
 type paths struct {
-	Root             string
-	Script           string
-	PowerShellScript string
-	Binary           string
+	Root   string
+	Script string
+	Binary string
 }
 
 func defaultPaths(home, goos string) paths {
@@ -557,10 +540,9 @@ func defaultPaths(home, goos string) paths {
 			localAppData = filepath.Join(home, "AppData", "Local")
 		}
 		return paths{
-			Root:             root,
-			Script:           filepath.Join(root, "Start-Buckit.cmd"),
-			PowerShellScript: filepath.Join(root, "Start-Buckit.ps1"),
-			Binary:           filepath.Join(localAppData, "Programs", "Buckit", "buckit.exe"),
+			Root:   root,
+			Script: filepath.Join(root, "Start-Buckit.ps1"),
+			Binary: filepath.Join(localAppData, "Programs", "Buckit", "buckit.exe"),
 		}
 	}
 	return paths{
@@ -752,14 +734,6 @@ func psQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
-func renderWindowsLauncher(powerShellScript string) string {
-	return "@echo off\r\n" +
-		"powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0" + powerShellScript + "\"\r\n" +
-		"set \"BUCKIT_RC=%ERRORLEVEL%\"\r\n" +
-		"if not \"%BUCKIT_RC%\"==\"0\" pause\r\n" +
-		"exit /b %BUCKIT_RC%\r\n"
-}
-
 func commandFor(goos, script string) string {
 	if goos == "windows" {
 		return windowsPowerShellCommand(script)
@@ -767,12 +741,24 @@ func commandFor(goos, script string) string {
 	return shQuote(script)
 }
 
-func windowsCmdCommand(script string) string {
-	return `"` + script + `"`
+func windowsPowerShellCommand(script string) string {
+	if isBarePowerShellPath(script) {
+		return script
+	}
+	return `& "` + script + `"`
 }
 
-func windowsPowerShellCommand(script string) string {
-	return `& "` + script + `"`
+func isBarePowerShellPath(path string) bool {
+	if path == "" {
+		return false
+	}
+	for _, r := range path {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
+			r == ':' || r == '\\' || r == '/' || r == '.' || r == '_' || r == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 func homeDir(override string) (string, error) {

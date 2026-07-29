@@ -10,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"io"
 	"math/big"
 	"net"
@@ -571,28 +572,13 @@ func TestPrepareWritesWindowsScriptAndQuotesValues(t *testing.T) {
 	if resp.Command != wantCommand {
 		t.Fatalf("command = %q, want %q", resp.Command, wantCommand)
 	}
-	if resp.WindowsCmdCommand != `"`+resp.ScriptPath+`"` {
-		t.Fatalf("WindowsCmdCommand = %q", resp.WindowsCmdCommand)
+	if !strings.HasSuffix(resp.ScriptPath, "Start-Buckit.ps1") {
+		t.Fatalf("script path = %q, want PowerShell script", resp.ScriptPath)
 	}
-	if resp.WindowsPowerShellCommand != wantCommand {
-		t.Fatalf("WindowsPowerShellCommand = %q, want %q", resp.WindowsPowerShellCommand, wantCommand)
+	if _, err := os.Stat(filepath.Join(filepath.Dir(resp.ScriptPath), "Start-Buckit.cmd")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Start-Buckit.cmd should not be written, stat error = %v", err)
 	}
-	if !strings.HasSuffix(resp.ScriptPath, "Start-Buckit.cmd") {
-		t.Fatalf("script path = %q, want Windows launcher", resp.ScriptPath)
-	}
-	launcher, err := os.ReadFile(resp.ScriptPath)
-	if err != nil {
-		t.Fatalf("read launcher: %v", err)
-	}
-	wantLauncher := "@echo off\r\n" +
-		"powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0Start-Buckit.ps1\"\r\n" +
-		"set \"BUCKIT_RC=%ERRORLEVEL%\"\r\n" +
-		"if not \"%BUCKIT_RC%\"==\"0\" pause\r\n" +
-		"exit /b %BUCKIT_RC%\r\n"
-	if got := string(launcher); got != wantLauncher {
-		t.Fatalf("launcher = %q, want %q", got, wantLauncher)
-	}
-	script, err := os.ReadFile(filepath.Join(filepath.Dir(resp.ScriptPath), "Start-Buckit.ps1"))
+	script, err := os.ReadFile(resp.ScriptPath)
 	if err != nil {
 		t.Fatalf("read PowerShell script: %v", err)
 	}
@@ -617,6 +603,13 @@ func TestPrepareWritesWindowsScriptAndQuotesValues(t *testing.T) {
 	}
 	if strings.Contains(got, "$env:MINIO_ERASURE_SET_DRIVE_COUNT") || strings.Contains(got, "$env:MINIO_STORAGE_CLASS_STANDARD =") {
 		t.Fatalf("default erasure configuration should not be written:\n%s", got)
+	}
+}
+
+func TestWindowsPowerShellCommandUsesBarePathWhenSafe(t *testing.T) {
+	const script = `C:\Users\KSUN\buckit\local\Start-Buckit.ps1`
+	if got := windowsPowerShellCommand(script); got != script {
+		t.Fatalf("windowsPowerShellCommand() = %q, want %q", got, script)
 	}
 }
 
