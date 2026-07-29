@@ -68,13 +68,17 @@ export function LocalSingleNodeWizard() {
   const [draft, setDraft] = useState<LocalDraft>(() => emptyDraft());
   const [index, setIndex] = useState(0);
   const previewSeq = useRef(0);
-  const update = (patch: Partial<LocalDraft>) =>
+  const update = (patch: Partial<LocalDraft>) => {
+    const deploymentInputChanged = ["version", "credentials", "api", "tls", "dataPaths", "parity"]
+      .some((key) => Object.prototype.hasOwnProperty.call(patch, key));
     setDraft((d) => ({
       ...d,
       ...patch,
-      preview: patch.preview ?? d.preview,
-      prepared: patch.prepared ?? d.prepared,
+      ...(deploymentInputChanged
+        ? { preview: undefined, previewError: undefined, prepared: undefined, prepareError: undefined }
+        : { preview: patch.preview ?? d.preview, prepared: patch.prepared ?? d.prepared }),
     }));
+  };
 
   const settingsInvalid = useMemo(() => {
     if (!validateRootUser(draft.credentials.rootUser).ok) return true;
