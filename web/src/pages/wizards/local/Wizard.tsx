@@ -651,7 +651,7 @@ function ReadyStep({ draft }: { draft: LocalDraft }) {
   const [copyState, setCopyState] = useState<string>("");
   if (!prepared) return null;
   const readyWarnings = (prepared.warnings ?? []).filter((warning) => !isRootOSDriveWarning(warning));
-  const isWindows = prepared.scriptPath.toLowerCase().endsWith(".ps1");
+  const isWindows = prepared.scriptPath.toLowerCase().endsWith(".cmd");
   const importParams = new URLSearchParams({
     url: prepared.apiUrl,
     username: draft.credentials.rootUser,

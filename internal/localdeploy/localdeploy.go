@@ -124,8 +124,19 @@ func Prepare(ctx context.Context, req Request, opts Options) (Response, error) {
 	if err != nil {
 		return Response{}, err
 	}
-	if err := os.WriteFile(paths.Script, []byte(script), executableMode(goos)); err != nil {
+	scriptPath := paths.Script
+	if paths.PowerShellScript != "" {
+		scriptPath = paths.PowerShellScript
+	}
+	if err := os.WriteFile(scriptPath, []byte(script), executableMode(goos)); err != nil {
 		return Response{}, fmt.Errorf("write start script: %w", err)
+	}
+	if paths.PowerShellScript != "" {
+		launcher := renderWindowsLauncher(filepath.Base(paths.PowerShellScript))
+		if err := os.WriteFile(paths.Script, []byte(launcher), executableMode(goos)); err != nil {
+			_ = os.Remove(scriptPath)
+			return Response{}, fmt.Errorf("write Windows launcher: %w", err)
+		}
 	}
 	plan.Warnings = postPrepareWarnings(plan.Warnings)
 	return plan, nil
@@ -527,9 +538,10 @@ func normalizeLineEndings(s string) string {
 }
 
 type paths struct {
-	Root   string
-	Script string
-	Binary string
+	Root             string
+	Script           string
+	PowerShellScript string
+	Binary           string
 }
 
 func defaultPaths(home, goos string) paths {
@@ -540,9 +552,10 @@ func defaultPaths(home, goos string) paths {
 			localAppData = filepath.Join(home, "AppData", "Local")
 		}
 		return paths{
-			Root:   root,
-			Script: filepath.Join(root, "Start-Buckit.ps1"),
-			Binary: filepath.Join(localAppData, "Programs", "Buckit", "buckit.exe"),
+			Root:             root,
+			Script:           filepath.Join(root, "Start-Buckit.cmd"),
+			PowerShellScript: filepath.Join(root, "Start-Buckit.ps1"),
+			Binary:           filepath.Join(localAppData, "Programs", "Buckit", "buckit.exe"),
 		}
 	}
 	return paths{
@@ -732,6 +745,12 @@ func shQuote(s string) string {
 
 func psQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+func renderWindowsLauncher(powerShellScript string) string {
+	return "@echo off\r\n" +
+		"powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0" + powerShellScript + "\"\r\n" +
+		"exit /b %ERRORLEVEL%\r\n"
 }
 
 func commandFor(goos, script string) string {
