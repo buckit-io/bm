@@ -647,12 +647,7 @@ function ReadyStep({ draft }: { draft: LocalDraft }) {
   const [copyState, setCopyState] = useState<string>("");
   if (!prepared) return null;
   const readyWarnings = (prepared.warnings ?? []).filter((warning) => !isRootOSDriveWarning(warning));
-  const commandOptions = prepared.windowsCmdCommand && prepared.windowsPowerShellCommand
-    ? [
-        { id: "cmd", label: "Command Prompt", command: prepared.windowsCmdCommand },
-        { id: "powershell", label: "PowerShell", command: prepared.windowsPowerShellCommand },
-      ]
-    : [{ id: "terminal", label: "", command: prepared.command }];
+  const isWindows = prepared.scriptPath.toLowerCase().endsWith(".ps1");
   const importParams = new URLSearchParams({
     url: prepared.apiUrl,
     username: draft.credentials.rootUser,
@@ -679,29 +674,20 @@ function ReadyStep({ draft }: { draft: LocalDraft }) {
           <span className="local-wizard__action-number">1</span>
           <div className="local-wizard__action-body">
             <h3>Start the Buckit server</h3>
-            <p className="muted">{commandOptions.length > 1 ? "Choose the terminal you use." : "Run this command in a terminal."}</p>
-            {commandOptions.map((option) => {
-              const copied = copyState === `${option.id}:copied`;
-              const copyFailed = copyState === `${option.id}:error`;
-              return (
-                <div key={option.id}>
-                  {option.label && <p className="muted"><strong>{option.label}</strong></p>}
-                  <div className="local-wizard__command-box">
-                    <pre className="local-wizard__command"><span className="local-wizard__prompt">&gt;</span> {option.command}</pre>
-                    <button
-                      className={"local-wizard__copy-button" + (copied ? " is-copied" : "")}
-                      type="button"
-                      onClick={() => void copyCommand(option.id, option.command)}
-                      aria-label={copied ? `Copied ${option.label || "command"}` : `Copy ${option.label || "command"}`}
-                      title={copied ? "Copied" : copyFailed ? "Copy failed" : "Copy command"}
-                    >
-                      {copied ? <CheckIcon /> : <CopyIcon />}
-                    </button>
-                    {copyFailed && <span className="local-wizard__copy-error">Copy failed</span>}
-                  </div>
-                </div>
-              );
-            })}
+            <p className="muted">{isWindows ? "Run this command in PowerShell (press the Windows key, type PowerShell, then select Windows PowerShell)." : "Run this command in a terminal."}</p>
+            <div className="local-wizard__command-box">
+              <pre className="local-wizard__command"><span className="local-wizard__prompt">&gt;</span> {prepared.command}</pre>
+              <button
+                className={"local-wizard__copy-button" + (copyState === "command:copied" ? " is-copied" : "")}
+                type="button"
+                onClick={() => void copyCommand("command", prepared.command)}
+                aria-label={copyState === "command:copied" ? "Copied command" : "Copy command"}
+                title={copyState === "command:copied" ? "Copied" : copyState === "command:error" ? "Copy failed" : "Copy command"}
+              >
+                {copyState === "command:copied" ? <CheckIcon /> : <CopyIcon />}
+              </button>
+              {copyState === "command:error" && <span className="local-wizard__copy-error">Copy failed</span>}
+            </div>
           </div>
         </section>
 
