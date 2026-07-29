@@ -2,6 +2,26 @@ package deploy
 
 import "testing"
 
+func TestOrderGitHubReleasesByTag(t *testing.T) {
+	releases := []githubRelease{
+		{TagName: "RELEASE.2026-07-29T17-06-42Z"},
+		{TagName: "RELEASE.2026-07-29T17-06-43Z"},
+		{TagName: "RELEASE.2026-07-28T16-43-20Z"},
+	}
+
+	orderGitHubReleasesByTag(releases)
+	want := []string{
+		"RELEASE.2026-07-29T17-06-43Z",
+		"RELEASE.2026-07-29T17-06-42Z",
+		"RELEASE.2026-07-28T16-43-20Z",
+	}
+	for i, tag := range want {
+		if releases[i].TagName != tag {
+			t.Fatalf("release %d = %q, want %q", i, releases[i].TagName, tag)
+		}
+	}
+}
+
 func TestSupportedVersionsImmutable(t *testing.T) {
 	a := SupportedVersions()
 	if a == nil {
