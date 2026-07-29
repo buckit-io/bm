@@ -35,6 +35,41 @@ async function ensurePreflightCanAdvance(page: Page) {
   }
 }
 
+async function saveClusterSshConfig(page: Page, clusterId: string) {
+  const resp = await page.request.put(`/api/v1/clusters/${encodeURIComponent(clusterId)}/ssh`, {
+    data: {
+      ssh: {
+        authMethod: "password",
+        user: sshUser,
+        port: 22,
+        password: sshPassword,
+        sudo: false,
+      },
+      overrides: {},
+    },
+  });
+  expect(resp.status()).toBe(204);
+  await page.reload();
+  await expect(page).toHaveURL(new RegExp(`/clusters/${clusterId}$`));
+  await expect(page.getByTestId("cluster-title")).toContainText(clusterName);
+}
+
+async function expectClusterVersion(page: Page, clusterId: string, version: string) {
+  await expect
+    .poll(
+      async () => {
+        const refresh = await page.request.post(
+          `/api/v1/clusters/${encodeURIComponent(clusterId)}/refresh`,
+        );
+        expect(refresh.status()).toBe(200);
+        const cluster = (await refresh.json()) as { version?: string };
+        return displayedVersion(cluster.version ?? "");
+      },
+      { timeout: 120_000 },
+    )
+    .toBe(displayedVersion(version));
+}
+
 test("deploys a new Buckit cluster", async ({ page }) => {
   await page.goto("/clusters/new");
 
@@ -45,14 +80,15 @@ test("deploys a new Buckit cluster", async ({ page }) => {
   const versionOptions = page.getByTestId("new-cluster-version").locator("option");
   await expect.poll(async () => versionOptions.count(), {
     timeout: 30_000,
-  }).toBeGreaterThanOrEqual(1);
-  const version = await versionOptions.nth(0).getAttribute("value");
-  if (!version) {
-    throw new Error("Expected a Buckit release entry in the version dropdown");
+  }).toBeGreaterThanOrEqual(3);
+  const latestVersion = await versionOptions.nth(0).getAttribute("value");
+  const previousVersion = await versionOptions.nth(1).getAttribute("value");
+  if (!latestVersion || !previousVersion) {
+    throw new Error("Expected at least two Buckit release entries in the version dropdown");
   }
 
   await page.getByTestId("new-cluster-name").fill(clusterName);
-  await page.getByTestId("new-cluster-version").selectOption(version);
+  await page.getByTestId("new-cluster-version").selectOption(previousVersion);
   await page.getByTestId("new-cluster-root-user").fill("buckitadmin");
   await page.getByTestId("new-cluster-root-password").fill("buckitadmin");
   await expect(page.getByTestId("wizard-next")).toBeEnabled({ timeout: 30_000 });
@@ -113,8 +149,25 @@ test("deploys a new Buckit cluster", async ({ page }) => {
 
   await page.getByRole("button", { name: "Go to cluster overview" }).click();
   await expect(page).toHaveURL(/\/clusters\/[^/]+$/);
+  const clusterId = new URL(page.url()).pathname.split("/").pop() ?? clusterName;
   await expect(page.getByTestId("cluster-title")).toContainText(clusterName);
-  await expect(page.getByTestId("cluster-meta")).toContainText(displayedVersion(version));
+  await expect(page.getByTestId("cluster-meta")).toContainText(displayedVersion(previousVersion));
   await expect(page.getByText(hosts[0] ?? "deploy-node1")).toBeVisible();
   await expect(page.getByText(hosts[hosts.length - 1] ?? "deploy-node4")).toBeVisible();
+
+  await saveClusterSshConfig(page, clusterId);
+  await page.getByTestId("cluster-actions-toggle").click();
+  await page.getByTestId("cluster-action-cluster_upgrade_by_systemctl").click();
+  await expect(page.getByTestId("cluster-operation-modal")).toBeVisible();
+  await expect(page.getByTestId("cluster-operation-version")).toHaveValue(
+    latestVersion,
+    { timeout: 30_000 },
+  );
+  await page.getByTestId("cluster-operation-primary").click();
+  await expect(page.getByText("RESULT")).toBeVisible({
+    timeout: 300_000,
+  });
+  await expect(page.getByTestId("cluster-operation-modal")).toContainText(latestVersion);
+  await expect(page.getByTestId("cluster-operation-modal")).toContainText("Succeeded");
+  await expectClusterVersion(page, clusterId, latestVersion);
 });
