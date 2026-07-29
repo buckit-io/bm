@@ -5,6 +5,8 @@ const hosts = (process.env.BM_E2E_DEPLOY_HOSTS ?? "deploy-node1,deploy-node2,dep
   .split(",")
   .map((host) => host.trim())
   .filter(Boolean);
+const sshUser = process.env.BM_E2E_DEPLOY_SSH_USER ?? "root";
+const sshPassword = process.env.BM_E2E_DEPLOY_SSH_PASSWORD ?? "buckitadmin";
 
 test.setTimeout(10 * 60 * 1000);
 
