@@ -10,7 +10,6 @@ import (
 	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/pem"
-	"errors"
 	"io"
 	"math/big"
 	"net"
@@ -572,13 +571,20 @@ func TestPrepareWritesWindowsScriptAndQuotesValues(t *testing.T) {
 	if resp.Command != wantCommand {
 		t.Fatalf("command = %q, want %q", resp.Command, wantCommand)
 	}
-	if !strings.HasSuffix(resp.ScriptPath, "Start-Buckit.ps1") {
-		t.Fatalf("script path = %q, want PowerShell script", resp.ScriptPath)
+	if !strings.HasSuffix(resp.ScriptPath, "Start-Buckit.cmd") {
+		t.Fatalf("script path = %q, want Windows launcher", resp.ScriptPath)
 	}
-	if _, err := os.Stat(filepath.Join(filepath.Dir(resp.ScriptPath), "Start-Buckit.cmd")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("Start-Buckit.cmd should not be written, stat error = %v", err)
+	launcher, err := os.ReadFile(resp.ScriptPath)
+	if err != nil {
+		t.Fatalf("read Windows launcher: %v", err)
 	}
-	script, err := os.ReadFile(resp.ScriptPath)
+	wantLauncher := "@echo off\r\n" +
+		"powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0Start-Buckit.ps1\"\r\n" +
+		"exit /b %ERRORLEVEL%\r\n"
+	if got := string(launcher); got != wantLauncher {
+		t.Fatalf("launcher = %q, want %q", got, wantLauncher)
+	}
+	script, err := os.ReadFile(filepath.Join(filepath.Dir(resp.ScriptPath), "Start-Buckit.ps1"))
 	if err != nil {
 		t.Fatalf("read PowerShell script: %v", err)
 	}
@@ -606,10 +612,11 @@ func TestPrepareWritesWindowsScriptAndQuotesValues(t *testing.T) {
 	}
 }
 
-func TestWindowsPowerShellCommandUsesBarePathWhenSafe(t *testing.T) {
+func TestWindowsPowerShellCommandQuotesCommandFile(t *testing.T) {
 	const script = `C:\Users\KSUN\buckit\local\Start-Buckit.ps1`
-	if got := windowsPowerShellCommand(script); got != script {
-		t.Fatalf("windowsPowerShellCommand() = %q, want %q", got, script)
+	want := `& "` + script + `"`
+	if got := windowsPowerShellCommand(script); got != want {
+		t.Fatalf("windowsPowerShellCommand() = %q, want %q", got, want)
 	}
 }
 

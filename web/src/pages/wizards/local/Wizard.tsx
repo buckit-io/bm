@@ -651,7 +651,7 @@ function ReadyStep({ draft }: { draft: LocalDraft }) {
   const [copyState, setCopyState] = useState<string>("");
   if (!prepared) return null;
   const readyWarnings = (prepared.warnings ?? []).filter((warning) => !isRootOSDriveWarning(warning));
-  const isWindows = prepared.scriptPath.toLowerCase().endsWith(".ps1");
+  const isWindows = prepared.scriptPath.toLowerCase().endsWith(".cmd");
   const importParams = new URLSearchParams({
     url: prepared.apiUrl,
     username: draft.credentials.rootUser,
@@ -678,7 +678,7 @@ function ReadyStep({ draft }: { draft: LocalDraft }) {
           <span className="local-wizard__action-number">1</span>
           <div className="local-wizard__action-body">
             <h3>Start the Buckit server</h3>
-            <p className="muted">{isWindows ? "Run this command in PowerShell (press the Windows key, type PowerShell, then select Windows PowerShell)." : "Run this command in a terminal."}</p>
+            <p className="muted">{isWindows ? "Double-click Start-Buckit.cmd in the local Buckit folder, or run this command in PowerShell (press the Windows key, type PowerShell, then select Windows PowerShell)." : "Run this command in a terminal."}</p>
             <div className="local-wizard__command-box">
               <pre className="local-wizard__command"><span className="local-wizard__prompt">&gt;</span> {prepared.command}</pre>
               <button
