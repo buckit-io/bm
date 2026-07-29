@@ -761,7 +761,23 @@ func commandFor(goos, script string) string {
 }
 
 func windowsPowerShellCommand(script string) string {
+	if isBarePowerShellPath(script) {
+		return script
+	}
 	return `& "` + script + `"`
+}
+
+func isBarePowerShellPath(path string) bool {
+	if path == "" {
+		return false
+	}
+	for _, r := range path {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
+			r == ':' || r == '\\' || r == '/' || r == '.' || r == '_' || r == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 func homeDir(override string) (string, error) {

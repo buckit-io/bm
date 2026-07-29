@@ -612,11 +612,18 @@ func TestPrepareWritesWindowsScriptAndQuotesValues(t *testing.T) {
 	}
 }
 
-func TestWindowsPowerShellCommandQuotesCommandFile(t *testing.T) {
-	const script = `C:\Users\KSUN\buckit\local\Start-Buckit.ps1`
+func TestWindowsPowerShellCommandQuotesPathWithSpaces(t *testing.T) {
+	const script = `C:\Users\KSUN Name\buckit\local\Start-Buckit.cmd`
 	want := `& "` + script + `"`
 	if got := windowsPowerShellCommand(script); got != want {
 		t.Fatalf("windowsPowerShellCommand() = %q, want %q", got, want)
+	}
+}
+
+func TestWindowsPowerShellCommandUsesBareSafePath(t *testing.T) {
+	const script = `C:\Users\KSUN\buckit\local\Start-Buckit.cmd`
+	if got := windowsPowerShellCommand(script); got != script {
+		t.Fatalf("windowsPowerShellCommand() = %q, want %q", got, script)
 	}
 }
 
