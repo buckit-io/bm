@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -363,6 +364,7 @@ func fetchGitHubReleases() ([]domain.BuckitVersion, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
 		return nil, err
 	}
+	orderGitHubReleasesByTag(releases)
 
 	var out []domain.BuckitVersion
 	for i, r := range releases {
@@ -447,6 +449,15 @@ func fetchGitHubReleases() ([]domain.BuckitVersion, error) {
 		out = append(out, v)
 	}
 	return out, nil
+}
+
+// orderGitHubReleasesByTag keeps the catalog in release-tag order rather than
+// the GitHub API's publication-time order. A retry can publish an older tag
+// after a newer one, but it must not make that older tag the latest version.
+func orderGitHubReleasesByTag(releases []githubRelease) {
+	sort.SliceStable(releases, func(i, j int) bool {
+		return releases[i].TagName > releases[j].TagName
+	})
 }
 
 func classifyReleaseAsset(name string) (kind string, osName string, arch string, ok bool) {
