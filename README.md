@@ -218,10 +218,20 @@ Default paths:
 You can override the configuration directory with `--config-dir` or the
 `MC_CONFIG_DIR` environment variable.
 
-## Certificates
+## CLI TLS Certificates for Aliases
 
-`bm` stores certificates and certificate authorities under the configuration
-directory.
+This section applies to the mc-style CLI commands that `bm` delegates to
+`bm-cli`, such as `bm alias`, `bm ls`, and `bm admin`. It does not apply to
+`bm web`, which serves its local UI over loopback HTTP by default.
+
+Aliases for HTTPS endpoints with certificates trusted by the operating system
+(for example, a public CA certificate) need no certificate files in the BM
+configuration directory. For a self-signed or private-CA endpoint, `bm-cli`
+can save the certificate you accept so later connections can verify that
+endpoint.
+
+Accepted certificates and certificate authorities are stored under the
+configuration directory:
 
 Linux, macOS, and other Unix-like systems:
 
@@ -237,8 +247,12 @@ Windows:
 %APPDATA%\bm\certs\CAs\
 ```
 
-When you create a new alias, `bm` can fetch the service certificate, show its
-public key fingerprint, and ask whether to trust it.
+When creating an alias for an untrusted HTTPS endpoint, `bm` displays the
+service certificate's public-key fingerprint and asks whether to trust it. If
+you confirm, it stores the certificate under `certs/CAs/` for subsequent
+connections. Verify the fingerprint through an independent channel before
+accepting it: trust-on-first-use cannot protect the first connection from a
+network attacker.
 
 For test environments only, some commands support `--insecure` to bypass
 certificate verification.
