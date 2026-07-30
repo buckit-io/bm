@@ -220,9 +220,9 @@ You can override the configuration directory with `--config-dir` or the
 
 ## CLI TLS Certificates for Aliases
 
-This section applies to the mc-style CLI commands that `bm` delegates to
-`bm-cli`, such as `bm alias`, `bm ls`, and `bm admin`. It does not apply to
-`bm web`, which serves its local UI over loopback HTTP by default.
+This section applies to BM CLI commands that connect to an alias, such as
+`bm alias`, `bm ls`, and `bm admin`. It does not apply to `bm web`, which
+serves its local UI over loopback HTTP by default.
 
 Aliases for HTTPS endpoints with certificates trusted by the operating system
 (for example, a public CA certificate) need no certificate files in the BM
